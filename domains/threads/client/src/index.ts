@@ -23,6 +23,7 @@ import {
   reconcileLive,
   resolveLeaf,
   ThreadHolds,
+  growBranch,
   Threads,
   THREADS_CONTRACT,
   trackTurn,
@@ -30,7 +31,7 @@ import {
   waitingPrompts,
   written,
 } from "@lemma/threads";
-import type { LiveState, KnownQueue, LogState, PromptAnswer, ThreadDraft } from "@lemma/threads";
+import type { LiveState, KnownQueue, LogState, PromptAnswer, ThreadDraft, WalkedBranch } from "@lemma/threads";
 import { PluginsFacts } from "@lemma/settings";
 import { Client, Notify, Router, Slots, defineWebPlugin } from "@lemma/web";
 import { loadJson, recordOf, save } from "@lemma/web/storage";
@@ -204,7 +205,20 @@ export default defineWebPlugin({
       return session === undefined || unsent(session);
     });
     const leaf = createMemo(() => resolveLeaf(events(), active()?.leaf, active()?.lastSeq));
-    const branch = createMemo(() => branchOf(events(), leaf()));
+    /** The log and leaf the branch was last read from, to go on from as the log grows. */
+    let walked: WalkedBranch | undefined;
+    /**
+     * The branch shown, root to leaf. A log grown at its end along the branch (a turn appending) extends the last one
+     * (`growBranch`): `branchOf` maps the whole log, and this runs on every event appended.
+     */
+    const branch = createMemo(() => {
+      const all = events();
+      const at = leaf();
+      const last = walked;
+      const next = (last === undefined ? undefined : growBranch(last, all, at)) ?? branchOf(all, at);
+      walked = { events: all, leaf: at, branch: next };
+      return next;
+    });
     const busy = createMemo(() => {
       const id = activeId();
       return id !== undefined && running().includes(id);

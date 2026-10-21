@@ -211,24 +211,51 @@ export const seedLive = (state: LiveState, view: AgentView): LiveState => {
  */
 export const reconcileLive = (state: LiveState, events: readonly SessionEvent[]): LiveState => {
   if (state.drafts.length === 0 && state.output.size === 0 && state.printed.size === 0) return state;
-  let next = state;
+  // What the log settles is gathered in one pass and applied at once, and only what is not settled yet is kept on the
+  // way: settling as each event was read made a new set of settled steps per step, which for a log of a hundred
+  // thousand events held the page for seconds, and the log is read again on each event appended.
+  const shown = (id: string) => state.output.has(id) || state.printed.has(id);
+  const steps = new Set<string>();
+  const ended = new Set<string>();
+  const done = new Set<string>();
   const calls = new Map<string, string[]>();
   for (const { data } of events) {
-    if (data.type === "message" && data.message.role === "toolResult") next = dropOutput(next, data.message.toolCallId);
-    else if (data.type === "message" && data.message.role === "assistant") {
-      if (data.turnId !== undefined) {
-        const ids = calls.get(data.turnId) ?? [];
-        for (const part of data.message.content) if (part.type === "toolCall") ids.push(part.id);
-        calls.set(data.turnId, ids);
-      }
-      if (data.stepId !== undefined) next = settleStep(next, data.stepId);
-    } else if (data.type === "attempt") next = settleStep(next, data.stepId);
-    else if (data.type === "turn-end") {
-      next = settleTurn(next, data.turnId);
-      for (const id of calls.get(data.turnId) ?? []) next = dropOutput(next, id);
+    if (data.type === "message" && data.message.role === "toolResult") {
+      if (shown(data.message.toolCallId)) done.add(data.message.toolCallId);
+    } else if (data.type === "message" && data.message.role === "assistant") {
+      if (data.turnId !== undefined)
+        for (const part of data.message.content) {
+          if (part.type !== "toolCall" || !shown(part.id)) continue;
+          const ids = calls.get(data.turnId);
+          if (ids === undefined) calls.set(data.turnId, [part.id]);
+          else ids.push(part.id);
+        }
+      if (data.stepId !== undefined && !state.settled.has(data.stepId)) steps.add(data.stepId);
+    } else if (data.type === "attempt") {
+      if (!state.settled.has(data.stepId)) steps.add(data.stepId);
+    } else if (data.type === "turn-end") {
+      ended.add(data.turnId);
+      for (const id of calls.get(data.turnId) ?? []) done.add(id);
     }
   }
-  return next;
+  // Every logged step is settled, and so is each step of an ended turn that has a draft (no draft's step is settled).
+  const closing = state.drafts.filter((draft) => steps.has(draft.stepId) || ended.has(draft.turnId));
+  const newly = new Set([...steps, ...closing.map((draft) => draft.stepId)]);
+  const dropped = [...done];
+  if (closing.length === 0 && newly.size === 0 && dropped.length === 0) return state;
+  const without = <V>(map: ReadonlyMap<string, V>) => {
+    if (!dropped.some((id) => map.has(id))) return map;
+    const next = new Map(map);
+    for (const id of dropped) next.delete(id);
+    return next;
+  };
+  return {
+    ...state,
+    drafts: closing.length === 0 ? state.drafts : state.drafts.filter((draft) => !closing.includes(draft)),
+    settled: newly.size === 0 ? state.settled : new Set([...state.settled, ...newly]),
+    output: without(state.output),
+    printed: without(state.printed),
+  };
 };
 
 /** A view of the running turn has been asked for: deltas and output from now on are held until it arrives (`joinLive`). */

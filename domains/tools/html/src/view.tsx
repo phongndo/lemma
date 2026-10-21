@@ -9,10 +9,15 @@ import type { Pages } from "./pages.tsx";
 /** Room the buttons take beside a page, their gap to it included. */
 const BESIDE = 48;
 
-/** The nearest box around `element` that clips what sticks out sideways (the chat's scroller), or none but the window. */
-const clipOf = (element: HTMLElement): HTMLElement | undefined => {
-  for (let at = element.parentElement; at !== null; at = at.parentElement) if (getComputedStyle(at).overflowX !== "visible") return at;
-  return undefined;
+/** Whether a box clips what sticks out of it sideways: it scrolls or hides overflow, or contains its paint (a turn the chat skips drawing while out of view does). */
+const clips = (style: CSSStyleDeclaration) =>
+  style.overflowX !== "visible" || style.contentVisibility === "auto" || style.contentVisibility === "hidden" || /paint|content|strict/.test(style.contain);
+
+/** The boxes around `element` that clip what sticks out sideways (its turn, the chat's scroller), besides the window. */
+const clipsOf = (element: HTMLElement): HTMLElement[] => {
+  const found: HTMLElement[] = [];
+  for (let at = element.parentElement; at !== null; at = at.parentElement) if (clips(getComputedStyle(at))) found.push(at);
+  return found;
 };
 
 /**
@@ -28,15 +33,15 @@ function DrawnPageFigure(props: { call: string; page: RenderedPage; pages: Pages
   const [beside, setBeside] = createSignal(false);
   onMount(() => {
     onCleanup(props.pages.draw(drawn));
-    const clip = clipOf(figure);
+    const clipping = clipsOf(figure);
     const fit = () => {
-      const right = clip === undefined ? innerWidth : clip.getBoundingClientRect().left + clip.clientLeft + clip.clientWidth;
+      const right = Math.min(innerWidth, ...clipping.map((box) => box.getBoundingClientRect().left + box.clientLeft + box.clientWidth));
       setBeside(right - figure.getBoundingClientRect().right >= BESIDE);
     };
     // The chat's box resizing (the window, the pane opening) moves the room beside the page.
     const watch = new ResizeObserver(fit);
     watch.observe(figure);
-    if (clip !== undefined) watch.observe(clip);
+    for (const box of clipping) watch.observe(box);
     onCleanup(() => watch.disconnect());
   });
   const reveal = (top: number) => {

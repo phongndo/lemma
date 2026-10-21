@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { createProjector, pendingToolCalls, promptBases, promptMarks } from "../src/transcript.ts";
 import type { AssistantItem } from "../src/transcript.ts";
 import { assistant, branch, toolResult, transcriptOf, usage, user } from "../src/testing.ts";
+import type { EventData } from "@lemma/sessions";
 
 const call = (id: string) => ({ type: "toolCall" as const, id, name: "bash", arguments: { command: "ls" } });
 
@@ -228,6 +229,84 @@ describe("createProjector", () => {
     // Stable again once nothing changes.
     const again = project([...events, { seq: 8, id: "e8", parent: "e7", at: 9000, data: toolResult("c2", "out") }]);
     expect(again.turns[1]).toBe(b);
+  });
+
+  it("projects a branch carried on through events appended as it would project it whole, keeping what is unchanged", () => {
+    // mulberry32: the same cases each run.
+    let seed = 11;
+    const pick = (n: number) => {
+      seed = (seed + 0x6d2b79f5) | 0;
+      let t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
+      t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+      return ((t ^ (t >>> 14)) >>> 0) % n;
+    };
+    // A turn's id is its own (turn-start's): another event may name a turn not started yet, or none known.
+    let turns = 0;
+    const turnId = () => `t${pick(turns + 1)}`;
+    const stepId = () => `s${pick(4)}`;
+    const callId = () => `c${pick(5)}`;
+    // Logs as agents write them, and as they should not: steers, retries, results before or long after their calls,
+    // a result twice, turns ended late or twice, events outside any turn.
+    const anyEvent = (): EventData => {
+      switch (pick(13)) {
+        case 0:
+        case 1:
+          return { type: "turn-start", turnId: `t${turns++}` };
+        case 2:
+          return user("hi", pick(3) === 0 ? undefined : turnId());
+        case 3:
+          return { type: "step-start", turnId: turnId(), stepId: stepId() };
+        case 4:
+        case 5:
+          return {
+            type: "message",
+            turnId: turnId(),
+            stepId: stepId(),
+            message: assistant(
+              pick(2) === 0 ? [{ type: "text", text: "a" }, call(callId())] : [{ type: "thinking", thinking: "t" }, call(callId()), call(callId())],
+            ),
+          };
+        case 6:
+        case 7:
+          return toolResult(callId(), "out", { isError: pick(2) === 0, turnId: turnId(), stepId: stepId() });
+        case 8:
+          return { type: "turn-end", turnId: turnId(), reason: (["done", "cancelled", "error"] as const)[pick(3)]! };
+        case 9:
+          return {
+            type: "attempt",
+            turnId: turnId(),
+            stepId: stepId(),
+            message: assistant([{ type: "text", text: "x" }]),
+            timing: { startedAt: 0, endedAt: 1 },
+          };
+        case 10:
+          return { type: "compaction", summary: "s", firstKeptId: "e1", tokensBefore: 10, source: "c" };
+        case 11:
+          return { type: "context", source: "mail", content: [{ type: "text", text: "1 new email" }] };
+        default:
+          return { type: "title", title: `title ${pick(3)}` };
+      }
+    };
+    const shape = (transcript: ReturnType<ReturnType<typeof createProjector>>) => JSON.parse(JSON.stringify(transcript));
+    for (let round = 0; round < 300; round++) {
+      turns = 0;
+      const events = branch(...Array.from({ length: 1 + pick(30) }, anyEvent));
+      const project = createProjector();
+      let shown: ReturnType<typeof project> | undefined;
+      for (let end = pick(3); end <= events.length; end += 1 + pick(3)) {
+        const next = project(events.slice(0, end));
+        expect(shape(next), JSON.stringify(events.slice(0, end).map((event) => event.data))).toEqual(shape(createProjector()(events.slice(0, end))));
+        // A turn that did not change is the same object, so a view keyed by it keeps its DOM. (Not when turns share a
+        // key, as two do when a turn is started with an id a prompt before it already named: the cache is by key.)
+        const keys = next.turns.map((turn) => turn.key);
+        if (shown !== undefined && new Set(keys).size === keys.length)
+          next.turns.forEach((turn, at) => {
+            const before = shown!.turns[at];
+            if (before !== undefined && JSON.stringify(before) === JSON.stringify(turn)) expect(turn).toBe(before);
+          });
+        shown = next;
+      }
+    }
   });
 });
 
