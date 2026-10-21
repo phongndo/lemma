@@ -493,6 +493,11 @@ export function runTurn(services: TurnServices, settings: TurnSettings, input: T
     // The turn follows the leaf just read, answered or not: a checkout meanwhile cannot move it onto unanswered calls.
     state.lastId = branch.at(-1)?.id;
     keep(branch, current?.request);
+    // A kept branch is one a turn closed, answering every call it made (`close`): only one read back can leave some.
+    if (current !== undefined) {
+      if (yield* Verify) assert(unansweredCalls(branch) === undefined, `session ${sessionId} kept a branch with tool calls unanswered`);
+      return;
+    }
     const open = unansweredCalls(branch);
     if (open === undefined || open.event.data.type !== "message") return;
     const { turnId: callTurn, stepId: callStep } = open.event.data;
