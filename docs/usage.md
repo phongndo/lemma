@@ -1,5 +1,15 @@
 # Using Lemma
 
+With a release [installed](installation.md):
+
+```sh
+lemma serve                        # start the host for this machine and open the web app
+lemma status                       # query the running host; `lemma --help` lists commands
+```
+
+From a checkout, where the desktop app runs too, on the checkout's own home,
+`~/.lemma-dev` ([development](development.md)):
+
 ```sh
 nix develop -c pnpm start          # build the web app, start the host, print its URL
 nix develop -c pnpm desktop        # the same app in a desktop window, with a host of its own

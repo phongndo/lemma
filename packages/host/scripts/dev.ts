@@ -18,6 +18,10 @@ import { resolvePaths } from "../src/paths.ts";
  * off resumes. The web app hot-reloads, through Vite's dev server, which
  * proxies `/rpc` and `/api` to the host. Quitting the window leaves the rest
  * running, and `pnpm dev:desktop` opens it again. Ctrl+C stops everything.
+ *
+ * It runs on the checkout's own home (the root package.json's scripts default
+ * `LEMMA_HOME` to `~/.lemma-dev`) and port, so an installed Lemma runs beside
+ * it, its sessions and settings untouched.
  */
 
 const root = fileURLToPath(new URL("../../..", import.meta.url));
@@ -31,6 +35,11 @@ const project = process.env.INIT_CWD ?? process.cwd();
 const { home } = resolvePaths({ env: process.env, cwd: project });
 /** The address `pnpm dev:desktop` loads by default. */
 const WEB_PORT = 5173;
+/**
+ * The host's: not the 7433 an installed Lemma's host listens on, and the same across the restarts `--watch` makes, as
+ * the dev server proxies to it.
+ */
+const HOST_PORT = 7434;
 const STARTUP_TIMEOUT_MS = 30_000;
 
 const say = (message: string) => console.log(`lemma dev: ${message}`);
@@ -50,6 +59,10 @@ if (already !== undefined) {
 }
 if (!(await free(WEB_PORT))) {
   say(`port ${WEB_PORT} is in use, by another \`pnpm dev\` or \`pnpm dev:web\`? \`lsof -iTCP:${WEB_PORT} -sTCP:LISTEN\` names it.`);
+  process.exit(1);
+}
+if (!(await free(HOST_PORT))) {
+  say(`port ${HOST_PORT}, the host's, is in use, by a \`pnpm dev\` on another home? \`lsof -iTCP:${HOST_PORT} -sTCP:LISTEN\` names it.`);
   process.exit(1);
 }
 
@@ -90,7 +103,15 @@ const once = (command: string, args: readonly string[]) =>
 run(
   "host",
   process.execPath,
-  ["--watch", "--watch-preserve-output", "--conditions=lemma-source", fileURLToPath(new URL("../src/main.ts", import.meta.url)), "--no-open"],
+  [
+    "--watch",
+    "--watch-preserve-output",
+    "--conditions=lemma-source",
+    fileURLToPath(new URL("../src/main.ts", import.meta.url)),
+    "--no-open",
+    "--port",
+    String(HOST_PORT),
+  ],
   {
     cwd: project,
     env: { ...process.env, INIT_CWD: project },

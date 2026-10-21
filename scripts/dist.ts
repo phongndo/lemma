@@ -1,0 +1,160 @@
+import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
+import { existsSync } from "node:fs";
+import { chmod, copyFile, cp, mkdir, mkdtemp, readdir, readFile, realpath, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { dirname, join, relative, sep } from "node:path";
+import { fileURLToPath } from "node:url";
+import { parseArgs } from "node:util";
+import { hostTarget, isTarget, nodeVersion, packageName, targets, version } from "./dist-config.ts";
+import type { Target } from "./dist-config.ts";
+
+/*
+ * Builds release archives into `dist/`: `lemma-v<version>-<target>.tar.gz` and its `.sha256` for each target, which
+ * runs without a checkout, Nix, or Node.js installed (docs/installation.md):
+ *
+ *   bin/lemma              the command (scripts/lemma.sh), which runs the CLI on the runtime below
+ *   runtime/bin/node       the official Node.js build dist-config.ts pins, by version and checksum
+ *   apps/, packages/, …    the workspace, laid out as in the checkout: the `lemma` command's packages and what they
+ *                          read beside their sources (a profile's files), the web app's build, and the docs and examples
+ *   node_modules/          their production dependencies, installed from the lockfile for the target
+ *
+ * The workspace keeps its layout because Lemma runs its TypeScript sources, which Node strips of their types only
+ * outside `node_modules`, and because the host finds the web app and each bundled plugin by its path in it.
+ *
+ *   pnpm dist                                       this machine's archive, at the checkout's version
+ *   pnpm dist --version 0.2.7 --target all          every target's, as the nightly workflow builds them
+ *
+ * One machine builds every target's: the sources and builds are the same for each, and pnpm installs another
+ * platform's prebuilt packages (fff's file search) when told the platform. Nothing compiles at install
+ * (`--ignore-scripts`), so a dependency that needs to fails each platform's smoke test (dist-check.ts).
+ */
+
+const { values } = parseArgs({
+  options: { version: { type: "string", default: version }, target: { type: "string", multiple: true } },
+});
+const release = values.version;
+if (!/^\d+\.\d+\.\d+$/.test(release)) throw new Error(`Not a release version: ${release}`);
+const chosen: readonly Target[] =
+  values.target === undefined
+    ? [hostTarget()]
+    : values.target.flatMap((target) => {
+        if (target === "all") return Object.keys(targets) as Target[];
+        if (!isTarget(target)) throw new Error(`No target ${target}: one of ${Object.keys(targets).join(", ")}, or all`);
+        return [target];
+      });
+
+const root = fileURLToPath(new URL("..", import.meta.url));
+const output = join(root, "dist");
+const temporary = await mkdtemp(join(tmpdir(), "lemma-dist-"));
+
+const env = { ...process.env, CI: "true" };
+const run = (command: string, args: readonly string[], cwd = root): void => {
+  execFileSync(command, args, { cwd, stdio: ["ignore", "inherit", "inherit"], env });
+};
+const read = (command: string, args: readonly string[]): string => execFileSync(command, args, { cwd: root, encoding: "utf8", env });
+
+interface Project {
+  readonly path: string;
+}
+const projects = (args: readonly string[]): Project[] => JSON.parse(read("pnpm", [...args, "ls", "--depth", "-1", "--json"])) as Project[];
+
+/** Copies `paths` (relative to the checkout) into `stage`. */
+const copy = async (stage: string, paths: readonly string[]) => {
+  for (const path of paths) {
+    await mkdir(dirname(join(stage, path)), { recursive: true });
+    await cp(join(root, path), join(stage, path), { recursive: true });
+  }
+};
+
+/**
+ * The files under `paths` git would commit, tests left out: what a release carries of the source, not whatever else
+ * lies in the checkout (builds, a home's files, an editor's).
+ */
+const tracked = (paths: readonly string[]): string[] =>
+  read("git", ["ls-files", "-z", "--cached", "--others", "--exclude-standard", "--", ...paths])
+    .split("\0")
+    .filter((path) => path !== "" && !path.split("/").includes("tests") && existsSync(join(root, path)));
+
+/** Fails on a symlink that leaves the stage: a release resolves entirely inside its archive, never into a checkout or pnpm's store. */
+const checkLinks = async (stage: string, dir: string, inside: string): Promise<void> => {
+  for (const entry of await readdir(dir, { withFileTypes: true })) {
+    const path = join(dir, entry.name);
+    if (entry.isSymbolicLink()) {
+      const resolved = await realpath(path).catch(() => undefined);
+      if (resolved === undefined || !resolved.startsWith(inside + sep)) throw new Error(`The release links outside itself: ${relative(stage, path)}`);
+    } else if (entry.isDirectory()) await checkLinks(stage, path, inside);
+  }
+};
+
+/** The platform pnpm installs a target's optional packages for: their `os`, `cpu`, and on Linux `libc` (glibc). */
+const platformFlags = (target: Target): string[] => {
+  const [os, cpu] = target.split("-") as [string, string];
+  return [`--os=${os}`, `--cpu=${cpu}`, ...(os === "linux" ? ["--libc=glibc"] : [])];
+};
+
+try {
+  // The libraries' declarations (an editor's types for a plugin file), and the page the host serves.
+  run("pnpm", ["build"]);
+  run("pnpm", ["--filter", "@lemma/web-app", "build"]);
+
+  // Every project's manifest, so the frozen lockfile matches the workspace; the sources of the command's production
+  // closure only, and the builds its packages export.
+  const command = projects(["--filter-prod", "@lemma/cli-app..."]).map((project) => relative(root, project.path));
+  const manifests = projects(["--recursive"]).map((project) => relative(root, join(project.path, "package.json")));
+  const sources = tracked([
+    "package.json",
+    "pnpm-workspace.yaml",
+    "pnpm-lock.yaml",
+    "patches",
+    "LICENSE",
+    "README.md",
+    "docs",
+    "examples",
+    ...manifests,
+    ...command,
+  ]);
+  const builds = ["apps/web/dist"];
+  for (const path of command) {
+    const manifest = await readFile(join(root, path, "package.json"), "utf8");
+    if (manifest.includes('"./dist/')) builds.push(join(path, "dist"));
+  }
+  await mkdir(output, { recursive: true });
+
+  for (const target of chosen) {
+    const name = packageName(release, target);
+    const stage = join(temporary, name);
+    await copy(stage, [...sources, ...builds]);
+    run("pnpm", ["--filter-prod", "@lemma/cli-app...", "install", "--prod", "--frozen-lockfile", "--ignore-scripts", ...platformFlags(target)], stage);
+
+    const nodeName = `node-v${nodeVersion}-${target}`;
+    const response = await fetch(`https://nodejs.org/dist/v${nodeVersion}/${nodeName}.tar.gz`);
+    if (!response.ok) throw new Error(`Downloading Node.js ${nodeVersion} failed: HTTP ${response.status}`);
+    const archive = Buffer.from(await response.arrayBuffer());
+    if (createHash("sha256").update(archive).digest("hex") !== targets[target]) throw new Error(`${nodeName}.tar.gz does not match its pinned checksum`);
+    await writeFile(join(temporary, `${nodeName}.tar.gz`), archive);
+    run("tar", ["-xzf", join(temporary, `${nodeName}.tar.gz`), "-C", temporary, `${nodeName}/bin/node`, `${nodeName}/LICENSE`]);
+    await mkdir(join(stage, "runtime/bin"), { recursive: true });
+    await copyFile(join(temporary, nodeName, "bin/node"), join(stage, "runtime/bin/node"));
+    await copyFile(join(temporary, nodeName, "LICENSE"), join(stage, "runtime/LICENSE"));
+
+    await mkdir(join(stage, "bin"));
+    await copyFile(join(root, "scripts/lemma.sh"), join(stage, "bin/lemma"));
+    await chmod(join(stage, "bin/lemma"), 0o755);
+    // The release's version, which `lemma --version` prints, in place of the checkout's.
+    const cli = join(stage, "apps/cli/package.json");
+    await writeFile(cli, `${JSON.stringify({ ...JSON.parse(await readFile(cli, "utf8")), version: release }, null, 2)}\n`);
+    await writeFile(join(stage, "VERSION"), `${release}\n`);
+    await checkLinks(stage, stage, await realpath(stage));
+
+    const file = join(output, `${name}.tar.gz`);
+    run("tar", ["-czf", file, "-C", temporary, name]);
+    const checksum = createHash("sha256")
+      .update(await readFile(file))
+      .digest("hex");
+    await writeFile(`${file}.sha256`, `${checksum}  ${name}.tar.gz\n`);
+    console.log(`Built ${relative(root, file)}`);
+  }
+} finally {
+  await rm(temporary, { recursive: true, force: true });
+}

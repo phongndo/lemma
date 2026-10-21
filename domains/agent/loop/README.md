@@ -29,19 +29,19 @@ Effect.gen(function* () {
 
 ## Config
 
-| Key             | Default                                       | Meaning                                                                                              |
-| --------------- | --------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
-| `defaultModel`  | first of `Llm.models({ available: true })`    | `<provider>/<model>` for turns that name none.                                                       |
-| `systemPrompt`  | see [Base prompt](#base-prompt)               | Replaces the base section; the environment section is still added.                                   |
-| `maxSteps`      | `200`                                         | Model calls per turn before it ends with `max-steps`; retries (below) take none.                     |
-| `cli`           | set by `packages/host` to this checkout's CLI | Shell command for the `lemma` CLI, named in the environment section so the agent can inspect itself. |
-| `retries`       | `10`                                          | Failed model calls asked again in a row before the turn ends in `error` (see [Retries](#retries)).   |
-| `retryDelay`    | `2`                                           | Seconds before the first retry; each later one waits twice as long.                                  |
-| `maxRetryDelay` | `60`                                          | Seconds the wait between retries grows to, at most.                                                  |
-| `stopGrace`     | `5`                                           | Seconds (at most 20) a stopping agent lets running calls finish (see [Stopping](#stopping)).         |
-| `parallelTools` | `8`                                           | Calls of one response that run at once, when their tools may run together (`parallel: "safe"`).      |
-| `keepCancelled` | `true`                                        | What the model wrote before the user stopped its reply stays in what it sees next (see below).       |
-| `maxRunning`    | `16`                                          | Turns running at once, across sessions; another waits for a slot before its first event.             |
+| Key             | Default                                     | Meaning                                                                                              |
+| --------------- | ------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
+| `defaultModel`  | first of `Llm.models({ available: true })`  | `<provider>/<model>` for turns that name none.                                                       |
+| `systemPrompt`  | see [Base prompt](#base-prompt)             | Replaces the base section; the environment section is still added.                                   |
+| `maxSteps`      | `200`                                       | Model calls per turn before it ends with `max-steps`; retries (below) take none.                     |
+| `cli`           | set by `packages/host` to the CLI beside it | Shell command for the `lemma` CLI, named in the environment section so the agent can inspect itself. |
+| `retries`       | `10`                                        | Failed model calls asked again in a row before the turn ends in `error` (see [Retries](#retries)).   |
+| `retryDelay`    | `2`                                         | Seconds before the first retry; each later one waits twice as long.                                  |
+| `maxRetryDelay` | `60`                                        | Seconds the wait between retries grows to, at most.                                                  |
+| `stopGrace`     | `5`                                         | Seconds (at most 20) a stopping agent lets running calls finish (see [Stopping](#stopping)).         |
+| `parallelTools` | `8`                                         | Calls of one response that run at once, when their tools may run together (`parallel: "safe"`).      |
+| `keepCancelled` | `true`                                      | What the model wrote before the user stopped its reply stays in what it sees next (see below).       |
+| `maxRunning`    | `16`                                        | Turns running at once, across sessions; another waits for a slot before its first event.             |
 
 ## Base prompt
 
