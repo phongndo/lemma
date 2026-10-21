@@ -459,6 +459,9 @@ importers:
       '@lemma/tools-codemode':
         specifier: workspace:*
         version: link:../../domains/tools/codemode
+      '@lemma/tools-delegate':
+        specifier: workspace:*
+        version: link:../../domains/tools/delegate
       '@lemma/tools-edit':
         specifier: workspace:*
         version: link:../../domains/tools/edit
@@ -3145,6 +3148,55 @@ importers:
         specifier: 5.0.5
         version: 5.0.5(@types/node@24.19.2)(vite@8.3.4(@types/node@24.19.2)(esbuild@0.28.2)(jiti@2.7.0))
 
+  domains/tools/delegate:
+    dependencies:
+      '@lemma/agent':
+        specifier: workspace:*
+        version: link:../../agent/contract
+      '@lemma/contracts':
+        specifier: workspace:*
+        version: link:../../../packages/contracts
+      '@lemma/core':
+        specifier: workspace:*
+        version: link:../../../packages/core
+      '@lemma/llm':
+        specifier: workspace:*
+        version: link:../../llm/contract
+      '@lemma/look':
+        specifier: workspace:*
+        version: link:../../look/contract
+      '@lemma/sessions':
+        specifier: workspace:*
+        version: link:../../sessions/contract
+      '@lemma/threads':
+        specifier: workspace:*
+        version: link:../../threads/contract
+      '@lemma/tools':
+        specifier: workspace:*
+        version: link:../contract
+      '@lemma/web':
+        specifier: workspace:*
+        version: link:../../../packages/web
+      effect:
+        specifier: 4.0.5
+        version: 4.0.5
+      solid-js:
+        specifier: 1.9.17
+        version: 1.9.17
+    devDependencies:
+      '@lemma/tools-registry':
+        specifier: workspace:*
+        version: link:../registry
+      '@types/node':
+        specifier: 24.19.2
+        version: 24.19.2
+      tsrs:
+        specifier: 0.18.0-ts7.1.0-dev.20260929
+        version: 0.18.0-ts7.1.0-dev.20260929
+      vitest:
+        specifier: 5.0.5
+        version: 5.0.5(@types/node@24.19.2)(vite@8.3.4(@types/node@24.19.2)(esbuild@0.28.2)(jiti@2.7.0))
+
   domains/tools/edit:
     dependencies:
       '@lemma/core':
@@ -4420,6 +4472,9 @@ importers:
       '@lemma/tools-codemode':
         specifier: workspace:*
         version: link:../../domains/tools/codemode
+      '@lemma/tools-delegate':
+        specifier: workspace:*
+        version: link:../../domains/tools/delegate
       '@lemma/tools-edit':
         specifier: workspace:*
         version: link:../../domains/tools/edit

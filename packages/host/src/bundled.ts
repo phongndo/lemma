@@ -29,6 +29,7 @@ import sessionsFiles from "@lemma/sessions-files";
 import toolsAsk from "@lemma/tools-ask";
 import toolsBash from "@lemma/tools-bash";
 import toolsCodemode from "@lemma/tools-codemode";
+import toolsDelegate from "@lemma/tools-delegate";
 import toolsEdit from "@lemma/tools-edit";
 import toolsHtml from "@lemma/tools-html";
 import toolsLemma from "@lemma/tools-lemma";
@@ -78,6 +79,7 @@ export const bundled: readonly Plugin[] = [
   browserTools,
   toolsHtml,
   toolsLemma,
+  toolsDelegate,
   mcpServers,
   sessionsFiles,
   agentLoop,
@@ -165,6 +167,7 @@ export const bundledWeb: readonly string[] = [
   "tools.ask",
   "tools.bash",
   "tools.codemode",
+  "tools.delegate",
   "tools.edit",
   "tools.html",
   "tools.patch",

@@ -5,11 +5,9 @@ import { Channels, Interaction } from "@lemma/contracts";
 import type { Channel } from "@lemma/contracts";
 import { ToolNamespaces, Tools } from "@lemma/tools";
 import { answering, channelTool, NAMESPACE } from "./channels.ts";
-import { delegateTool } from "./delegate.ts";
 import { DEFAULT_CONFIRM, EVERY_READ, termsOf, toolName } from "./policy.ts";
 
 export { DEFAULT_CONFIRM, EVERY_READ, NEVER, termsOf, toolName } from "./policy.ts";
-export { depthOf, DelegateInput, DelegateOutput } from "./delegate.ts";
 
 const ids = (defaults: readonly string[]) => Schema.Array(Schema.String).pipe(Schema.withDecodingDefaultType(Effect.sync(() => [...defaults])));
 const count = (fallback: number) =>
@@ -25,20 +23,6 @@ const Config = Schema.Struct({
     title: "Channels that ask first",
     description: "Channel ids offered as tools whose every call asks you first, showing what it sends: by default those that change something.",
   }),
-  maxDelegations: count(4).annotate({
-    title: "Delegations at once",
-    description: "How many lemma_delegate sessions run at once at each depth; more wait for one to end.",
-  }),
-  maxDepth: Schema.Number.check(Schema.isInt(), Schema.isGreaterThanOrEqualTo(0))
-    .pipe(Schema.withDecodingDefaultType(Effect.sync(() => 2)))
-    .annotate({
-      title: "Delegation depth",
-      description: "How deep delegations go: a delegated session this many levels down cannot delegate. 0 turns delegation off.",
-    }),
-  confirmDelegation: Schema.Boolean.pipe(Schema.withDecodingDefaultType(Effect.sync(() => false))).annotate({
-    title: "Ask before delegating",
-    description: "Ask you before each lemma_delegate starts a session.",
-  }),
   maxOutputChars: count(20_000).annotate({
     title: "Output kept (characters)",
     description: "Text characters of a result the model reads when it calls one directly; scripts get the whole result.",
@@ -53,14 +37,12 @@ const INSTRUCTIONS = `Lemma itself, through the channels its plugins serve clien
 - Failures across sessions: \`for (const s of (await tools.lemma_sessions_list({})).slice(0, 20)) failed.push(...(await tools.lemma_sessions_records({ sessionId: s.id, filter: "is:error" })).records)\`, then count them by \`tool\` or \`name\`. Each read loads that session's whole log into the host for a while, so read the sessions the question needs (the recent ones, a directory's, \`lemma_sessions_search\`'s matches), not every one.
 - What the model was sent: \`await tools.lemma_sessions_request({ sessionId, request: "last" })\` (or its number, or \`"2.1"\` for turn 2's first step): each system section and tool with the plugin that contributed it, and each plugin's share (\`plugins\`); \`rebuilt: true\` adds the exact request. How a session kept the prompt cache: \`await tools.lemma_sessions_cache({ sessionId })\`.
 - The host and its plugins: \`await tools.lemma_devtools_host_info({})\` (where it runs, its plugin set); \`const plugins = await tools.lemma_devtools_host_plugins({})\`, every plugin on or off with its \`state\`, \`fault\`, \`problem\`, \`haltedBy\`, and \`config\`; those not running as enabled: \`plugins.filter((p) => p.enabled && p.state !== "active")\`. What a plugin shows of its state: \`await tools.lemma_devtools_host_inspectors({})\`, then \`await tools.lemma_devtools_host_inspect({ id })\`.
-- Delegate tasks in parallel, each to a new session that sees only its prompt:
-  \`const results = await Promise.all(tasks.map((prompt) => tools.lemma_delegate({ prompt })))\`, each \`{ sessionId, ended, answer, error? }\`.
 - Judge many sessions cheaply: read their titles or answers, then ask a classifier (\`models.classify\`) about each, and return only the summary.`;
 
 /**
  * Lemma's own channels as tools scripts call, in the `lemma` namespace: those that declare they only read, and those the
- * config allows, kept in step with the channels plugins serve as they come and go; and `lemma_delegate`, a task handed
- * to a new session. Writing channels ask the person first (`Interaction`); credential channels are never offered.
+ * config allows, kept in step with the channels plugins serve as they come and go. Writing channels ask the person
+ * first (`Interaction`); credential channels are never offered.
  */
 export default definePlugin({
   id: "tools.lemma",
@@ -75,17 +57,9 @@ export default definePlugin({
 
     yield* owner.add(ToolNamespaces, {
       name: NAMESPACE,
-      description:
-        "Lemma itself: its sessions and what happened in them, agent, plugins, commands, skills, models, and workspace, as the app's own channels; and tasks delegated to new sessions",
+      description: "Lemma itself: its sessions and what happened in them, agent, plugins, commands, skills, models, and workspace, as the app's own channels",
       instructions: INSTRUCTIONS,
     });
-    if (config.maxDepth > 0) {
-      yield* owner.add(
-        Tools,
-        delegateTool({ registries, interaction, maxDelegations: config.maxDelegations, maxDepth: config.maxDepth, confirm: config.confirmDelegation, budget }),
-      );
-    }
-
     /** Channels already said to have no JSON form: each is warned of once, not at every change to the channels. */
     const unoffered = new WeakSet<Channel>();
     /** The tools added, by name, with the channel each was made from and how it is offered. */
