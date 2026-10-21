@@ -25,6 +25,7 @@ describe("resolvePaths", () => {
     const paths = resolvePaths({ env: { HOME: "/home/me" }, cwd: "/work/app" });
     expect(paths).toEqual({
       home: "/home/me/.lemma",
+      root: "/home/me/.lemma",
       userConfig: "/home/me/.lemma/config.jsonc",
       projectConfig: "/work/app/.lemma/config.jsonc",
       cwd: "/work/app",
@@ -36,6 +37,19 @@ describe("resolvePaths", () => {
     expect(paths.home).toBe("/var/lemma");
     expect(paths.userConfig).toBe("/var/lemma/config.jsonc");
     expect(paths.projectConfig).toBe("/work/app/.lemma/config.jsonc");
+  });
+
+  test("LEMMA_PROFILE names a profile, whose home is under the root's profiles", () => {
+    const paths = resolvePaths({ env: { HOME: "/home/me", LEMMA_PROFILE: "desk" }, cwd: "/work/app" });
+    expect(paths).toMatchObject({ home: "/home/me/.lemma/profiles/desk", root: "/home/me/.lemma", profile: "desk" });
+    expect(paths.userConfig).toBe("/home/me/.lemma/profiles/desk/config.jsonc");
+    // The default is the root's own.
+    for (const LEMMA_PROFILE of ["default", "", " "]) {
+      const own = resolvePaths({ env: { HOME: "/home/me", LEMMA_PROFILE }, cwd: "/work/app" });
+      expect(own.home).toBe("/home/me/.lemma");
+      expect(own.profile).toBeUndefined();
+    }
+    expect(() => resolvePaths({ env: { HOME: "/home/me", LEMMA_PROFILE: "../escape" }, cwd: "/work/app" })).toThrow(/no profile name/);
   });
 });
 

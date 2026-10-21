@@ -22,6 +22,7 @@ import llmCli from "@lemma/llm-cli";
 import llmCommands from "@lemma/llm-commands";
 import llmPiAi from "@lemma/llm-pi-ai";
 import mcpServers from "@lemma/mcp-servers";
+import profilesSwitcher from "@lemma/profiles-switcher";
 import releaseUpdates from "@lemma/release-updates";
 import sessionsCli from "@lemma/sessions-cli";
 import sessionsFiles from "@lemma/sessions-files";
@@ -93,6 +94,7 @@ export const bundled: readonly Plugin[] = [
   commandsHost,
   devtoolsTrace,
   devtoolsHost,
+  profilesSwitcher,
   releaseUpdates,
   // The lemma command's: the commands and checks plugins add, then each domain's.
   cliRegistry,
@@ -148,6 +150,7 @@ export const bundledWeb: readonly string[] = [
   "look.highlight",
   "look.kit",
   "mcp.servers",
+  "profiles.switcher",
   "release.updates",
   "settings.page",
   "settings.plugins",
@@ -184,5 +187,7 @@ export const bundledWeb: readonly string[] = [
 export const appDefaults: Readonly<Record<string, Readonly<Record<string, unknown>>>> = {
   "transport.server": { staticDir: webDist },
   "agent.loop": { cli: cliCommand },
+  // How it starts another profile's host: this checkout's `lemma serve --detach`.
+  "profiles.switcher": { cli: cliCommand },
   "release.updates": { cli: cliCommand },
 };

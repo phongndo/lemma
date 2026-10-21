@@ -8,6 +8,7 @@
     ".": "./src/index.ts",
     "./discovery": "./src/discovery.ts",
     "./fs": "./src/fs.ts",
+    "./profiles": "./src/profiles.ts",
     "./testing": "./src/testing.ts"
   },
   "scripts": {

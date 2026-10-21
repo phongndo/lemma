@@ -131,7 +131,13 @@ const coreOf = (extra: readonly Plugin[] = [], configs: Record<string, unknown> 
     configs,
     provide: {
       provides: [Paths],
-      layer: Layer.succeed(Paths, { home, userConfig: path.join(home, "config.jsonc"), projectConfig: path.join(home, "project.jsonc"), cwd: home }),
+      layer: Layer.succeed(Paths, {
+        home,
+        root: home,
+        userConfig: path.join(home, "config.jsonc"),
+        projectConfig: path.join(home, "project.jsonc"),
+        cwd: home,
+      }),
     },
   });
 

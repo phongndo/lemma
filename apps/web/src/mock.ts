@@ -12,6 +12,8 @@ import type { ReleaseStatus } from "@lemma/release";
 import { compositionHistory } from "@lemma/composition";
 import { FileChannels, WorkspaceChannels } from "@lemma/workspace";
 import { SkillChannels } from "@lemma/skills";
+import { ProfileChannels } from "@lemma/profiles";
+import type { ProfileInfo } from "@lemma/profiles";
 import { fuzzy } from "@lemma/web/match";
 import { createIntegrationsMock } from "./mock-integrations.ts";
 import type {
@@ -561,6 +563,7 @@ export const createMockHost = (): Host => {
     "mcp.servers": { provides: ["lemma/Mcp"], requires: ["lemma/Paths"] },
     "context.compaction": { requires: ["lemma/Sessions", "lemma/Llm"] },
     "agent.modes": { requires: ["lemma/Paths"], contributes: [{ name: "lemma/agent.sections", items: 1, keys: ["profile"] }] },
+    "profiles.switcher": { requires: ["lemma/Paths"] },
     "context.project": { requires: ["lemma/Paths"], contributes: [{ name: "lemma/agent.sections", items: 1, keys: ["project-context"] }] },
     "workspace.local": { provides: ["lemma/Workspace"], requires: ["lemma/Paths"] },
     "workspace.search-fff": { contributes: [{ name: "lemma/file-searchers", items: 1, keys: ["workspace.search-fff"] }] },
@@ -1579,7 +1582,28 @@ export const createMockHost = (): Host => {
 
   /** What the bundled plugins serve, as they serve it (`serveSessions`, `serveAgent`, `serveLlm`, `serveWorkspace`, `serveFiles`, `serveCommands`). */
   const integrations = createIntegrationsMock();
+  let profiles: readonly ProfileInfo[] = [
+    { name: "default", default: true, current: true, running: true, port: 7433, avatar: { kind: "pattern", seed: "default" } },
+  ];
   const served: Served[] = [
+    // This machine's profiles: the default alone, as for anyone who has made none, until one is made here.
+    serveCall("profiles.switcher", ProfileChannels.list, async () => profiles),
+    serveCall("profiles.switcher", ProfileChannels.create, async ({ name }) => {
+      if (profiles.some((profile) => profile.name === name)) throw new HostError({ code: "Exists", message: `A profile "${name}" is there already` });
+      const made: ProfileInfo = { name, default: false, current: false, running: false, port: 7433 + profiles.length, avatar: { kind: "pattern", seed: name } };
+      profiles = [...profiles, made];
+      return made;
+    }),
+    serveCall("profiles.switcher", ProfileChannels.setAvatar, async ({ name, avatar }) => {
+      const profile = profiles.find((candidate) => candidate.name === name);
+      if (profile === undefined) throw new HostError({ code: "NotFound", subject: name, message: `No profile "${name}"` });
+      const changed: ProfileInfo = { ...profile, avatar: avatar.kind === "default" ? { kind: "pattern", seed: name } : avatar };
+      profiles = profiles.map((candidate) => (candidate.name === name ? changed : candidate));
+      return changed;
+    }),
+    serveCall("profiles.switcher", ProfileChannels.open, async ({ name }) => {
+      throw new HostError({ code: "NotStarted", subject: name, message: `The mock host starts no host for the profile "${name}"` });
+    }),
     // The bundled modes, as `agent.modes` lists them for any directory.
     serveCall("agent.modes", ModeChannels.list, async () => ({
       modes: [

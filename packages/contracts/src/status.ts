@@ -134,6 +134,8 @@ export const HostInfo = Schema.Struct({
   version: Schema.String,
   cwd: Schema.String,
   home: Schema.String,
+  /** The profile it runs for (`Paths.profile`); absent for the default. */
+  profile: Schema.optional(Schema.String),
   composition: CompositionInfo,
   /** What the host provides itself, by capability key (`HostControl.runtime`): a plugin requiring one needs no plugin for it. */
   runtime: Schema.Array(Schema.String),
@@ -156,6 +158,7 @@ export const runtimeInfo = (
   Effect.map(control.composition, (composition) => ({
     cwd: paths.cwd,
     home: paths.home,
+    ...(paths.profile === undefined ? {} : { profile: paths.profile }),
     composition,
     runtime: control.runtime,
     pid: control.process.pid,

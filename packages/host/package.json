@@ -45,6 +45,8 @@
     "@lemma/llm-pi-ai": "workspace:*",
     "@lemma/mcp": "workspace:*",
     "@lemma/mcp-servers": "workspace:*",
+    "@lemma/profiles": "workspace:*",
+    "@lemma/profiles-switcher": "workspace:*",
     "@lemma/release": "workspace:*",
     "@lemma/release-updates": "workspace:*",
     "@lemma/sessions": "workspace:*",

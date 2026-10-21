@@ -1,0 +1,166 @@
+/*
+ * A profile's pattern is drawn in one of these hues (`pattern.ts`), on `--profile-pattern-bg`, per theme: change one
+ * from a UI stylesheet (`--profile-hue-3: …`).
+ */
+:root {
+  --profile-hue-0: #1a85d4;
+  --profile-hue-1: #17a5af;
+  --profile-hue-2: #199f43;
+  --profile-hue-3: #c99a0c;
+  --profile-hue-4: #d47628;
+  --profile-hue-5: #d52c36;
+  --profile-hue-6: #d32a61;
+  --profile-hue-7: #693acf;
+  --profile-pattern-bg: #ececef;
+}
+
+:root[data-theme="dark"] {
+  --profile-hue-0: #69b1ff;
+  --profile-hue-1: #64d1db;
+  --profile-hue-2: #5ecc71;
+  --profile-hue-3: #ffd452;
+  --profile-hue-4: #ffa359;
+  --profile-hue-5: #ff6762;
+  --profile-hue-6: #ff678d;
+  --profile-hue-7: #9d6afb;
+  --profile-pattern-bg: #2a2a2e;
+}
+
+.profiles-hue-0 {
+  color: var(--profile-hue-0);
+}
+.profiles-hue-1 {
+  color: var(--profile-hue-1);
+}
+.profiles-hue-2 {
+  color: var(--profile-hue-2);
+}
+.profiles-hue-3 {
+  color: var(--profile-hue-3);
+}
+.profiles-hue-4 {
+  color: var(--profile-hue-4);
+}
+.profiles-hue-5 {
+  color: var(--profile-hue-5);
+}
+.profiles-hue-6 {
+  color: var(--profile-hue-6);
+}
+.profiles-hue-7 {
+  color: var(--profile-hue-7);
+}
+
+/* A profile's avatar, in a circle as a browser draws one: its picture, or its pattern. What tells one window from another at a glance. */
+.profiles-avatar {
+  display: inline-block;
+  flex: none;
+  width: 20px;
+  height: 20px;
+  overflow: hidden;
+  border-radius: 50%;
+  background: var(--profile-pattern-bg);
+}
+
+.profiles-avatar-large {
+  width: 32px;
+  height: 32px;
+}
+
+.profiles-avatar > img,
+.profiles-avatar > svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+/* The switcher at the sidebar's foot, an icon button: the avatar of the profile this page is, its menu the others. */
+.profiles-trigger {
+  padding: 0;
+}
+
+.profiles-trigger[aria-expanded="true"] {
+  background: var(--bg-hover);
+}
+
+.profiles-menu {
+  min-width: 200px;
+}
+
+.profiles-item {
+  gap: 8px;
+}
+
+/* The name takes the row, so the running dot and the check sit at its end. */
+.profiles-item .menu-label {
+  flex: 1;
+}
+
+.profiles-menu a.menu-item {
+  text-decoration: none;
+  color: var(--text-2);
+}
+
+/* A profile whose host runs. */
+.profiles-running {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--ok);
+}
+
+.profiles-intro {
+  margin: 0;
+  max-width: 60ch;
+}
+
+.profiles-new,
+.profiles-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+/* A profile's avatar in its settings row, which opens its picture's choices. */
+.profiles-picture {
+  display: inline-grid;
+  place-items: center;
+  padding: 2px;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  cursor: pointer;
+}
+
+.profiles-picture:hover,
+.profiles-picture[aria-expanded="true"] {
+  background: var(--bg-hover);
+}
+
+.profiles-picture-menu {
+  width: 196px;
+}
+
+/* Patterns made afresh each time the choices open: one picked becomes the profile's. */
+.profiles-patterns {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 4px;
+  padding: 4px;
+}
+
+.profiles-pattern-choice {
+  display: grid;
+  place-items: center;
+  padding: 4px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  cursor: pointer;
+}
+
+.profiles-pattern-choice:hover,
+.profiles-pattern-choice:focus-visible {
+  background: var(--bg-hover);
+}

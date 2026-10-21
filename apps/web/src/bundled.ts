@@ -23,6 +23,7 @@ import keymap from "@lemma/actions-keymap";
 import keysPage from "@lemma/actions-keys-page";
 import kit from "@lemma/look-kit";
 import mcp from "@lemma/mcp-servers/web";
+import profiles from "@lemma/profiles-switcher/web";
 import skills from "@lemma/skills-files/web";
 import modelPicker from "@lemma/llm-model-picker";
 import modes from "@lemma/agent-modes/web";
@@ -116,6 +117,7 @@ export const bundled: readonly Plugin[] = [
   projectsPage,
   addProject,
   release,
+  profiles,
   devtools,
   trace,
   interactionDialog,

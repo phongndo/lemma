@@ -11,10 +11,12 @@ const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 /** Lines of `src` per runtime package, at most. */
 const BUDGET: Readonly<Record<string, number>> = {
   "packages/core": 5_600,
-  "packages/contracts": 2_600,
-  // Raised from 2,800 for renamed plugins: a row under a former id moves to the plugin's as it is written, the host's
-  // own, beneath any plugin.
-  "packages/host": 2_810,
+  // Raised from 2,600 for profiles: which home a host runs for, and the port it keeps, are decided before any plugin
+  // runs (`@lemma/contracts/profiles`, `Paths.root` and `Paths.profile`), so they cannot be a plugin's.
+  "packages/contracts": 2_670,
+  // Raised from 2,800 for profiles (a host refuses a profile never made, and keeps its port) and renamed plugins (a row
+  // under a former id moves to the plugin's as it is written): both are the host's own, before or beneath any plugin.
+  "packages/host": 2_850,
   "packages/composition": 850,
   "packages/web": 2_000,
   "packages/client": 800,

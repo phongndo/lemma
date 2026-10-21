@@ -187,6 +187,7 @@ const RUNTIME_CONTRACTS = [
   "inspectors.ts",
   "interaction.ts",
   "kernel.ts",
+  "profiles.ts",
   "rpc.ts",
   "shell.ts",
   "status.ts",
