@@ -147,7 +147,7 @@ costs re-reading the files.
   writer laid out otherwise, and the file's last line, the one a power loss can
   leave torn. Reading a head costs a few times less than parsing a short line, and
   a long one (a tool's output) no more: a host whose index is gone lists 500
-  sessions (3.7 GB) in 0.7 to 1.1 s rather than 5.4 s. Sessions
+  sessions (3.7 GB) in 0.7 to 1.1 s. Sessions
   are indexed when created, read, unloaded, and when the plugin stops, those last
   two from memory, so a restarted host reads only what changed since. Sessions
   this process has opened are served from memory. A file that cannot be read is
@@ -176,7 +176,7 @@ costs re-reading the files.
   listing does, and only the prompts and replies whose line holds every word
   sought parsed and decoded (a word with a character JSON escapes, or a sigma,
   has every one parsed). A search that matches nothing in 500 sessions (3.7 GB)
-  takes 1.4 s rather than 9.6 s. It stops where opening stops, but for a line
+  takes about 1.4 s. It stops where opening stops, but for a line
   that is JSON yet no event, which only opening checks; a session known to be
   damaged is read as opening reads it.
 - **Empty sessions** nothing has gone into for `emptyAfter` seconds since they
