@@ -29,9 +29,8 @@ describe("against a running host", () => {
     expect(status.info.runtime).toEqual(["lemma/Paths", "lemma/HostControl", "lemma/Interaction", "lemma/Trace", "lemma/api@4"]);
     expect(status.plugins.map((plugin: { id: string }) => plugin.id)).toContain("agent.loop");
     expect(status.plugins.map((plugin: { id: string }) => plugin.id)).not.toContain("interaction");
-    // Every plugin a fresh install turns on is running; an opt-in one is listed, off until a row turns it on.
+    // Every plugin a fresh install turns on is running.
     expect(status.plugins.filter((plugin: { enabled: boolean }) => plugin.enabled).every((plugin: { state: string }) => plugin.state === "active")).toBe(true);
-    expect(status.plugins.find((plugin: { id: string }) => plugin.id === "context.prune")).toMatchObject({ enabled: false, state: "disabled" });
     // Where it runs, and who started it: this test, by hand.
     const { url } = JSON.parse(await readFile(join(home, "transport.json"), "utf8")) as { url: string };
     expect(status).toMatchObject({ environment: "local", source: "local", url, pid: lemma.host.pid, inProgress: [] });

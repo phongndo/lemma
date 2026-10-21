@@ -16,7 +16,6 @@
     "@lemma/agent": "workspace:*",
     "@lemma/agent-loop": "workspace:*",
     "@lemma/context-compaction": "workspace:*",
-    "@lemma/context-prune": "workspace:*",
     "@lemma/contracts": "workspace:*",
     "@lemma/core": "workspace:*",
     "@lemma/llm": "workspace:*",
