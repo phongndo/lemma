@@ -9,7 +9,7 @@
     "./limits": "./src/limits.ts"
   },
   "scripts": {
-    "start": "node --conditions=lemma-source src/start.mjs",
+    "start": "node --conditions=lemma-source --max-semi-space-size=16 src/start.mjs",
     "check": "tsrs --noEmit",
     "test": "vitest run"
   },
