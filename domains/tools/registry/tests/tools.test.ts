@@ -614,5 +614,10 @@ describe("execute", () => {
     expect(published[0]!.chunk.length).toBe(64 * 1024);
     expect(published[0]!.chunk.endsWith("end")).toBe(true);
     expect(published[0]!.offset).toBe(70_003 - 64 * 1024);
+    // Many chunks: the last 64 KiB of them all, the next batch's offset after everything printed.
+    const chunks = Array.from({ length: 30 }, (_, i) => String.fromCharCode(65 + (i % 26)).repeat(5_000));
+    for (const chunk of chunks) batcher.update(chunk);
+    batcher.flush();
+    expect(published[1]).toEqual({ chunk: chunks.join("").slice(-64 * 1024), offset: 70_003 + 150_000 - 64 * 1024 });
   });
 });
