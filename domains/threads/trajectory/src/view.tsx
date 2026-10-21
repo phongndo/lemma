@@ -17,9 +17,9 @@ import { createToolbar } from "./toolbar.tsx";
  * DeepSeek Harness's trajectory: a filter toolbar, a zoomable three-lane
  * overview, a sortable table with a waterfall column, a details panel with
  * tabs, a context menu, and a status bar. Everything is projected from the
- * session log (`trajectory` → `ledger`), as it grows: what an event appended
- * leaves alone keeps its records, and so its rows. One per tab: its filter,
- * selection, and scroll are that tab's.
+ * session log (`trajectory` → `ledger`), as it grows while the view is drawn:
+ * what an event appended leaves alone keeps its records, and so its rows. One
+ * per tab: its filter, selection, and scroll are that tab's.
  */
 export function createTrajectory(deps: TrajectoryDeps): () => JSX.Element {
   const view = createView(deps);
@@ -30,10 +30,11 @@ export function createTrajectory(deps: TrajectoryDeps): () => JSX.Element {
   const { Details } = createDetails(view);
   /** The thread it last showed: its state is that thread's. */
   let shownFor: string | undefined;
-  const projectTrajectory = createTrajectoryProjector();
-  const ledger = createLedgerProjector();
 
   function Trajectory(): JSX.Element {
+    // The view's own while it is drawn, so what they hold of a branch goes with it, as a long thread's may be large.
+    const projectTrajectory = createTrajectoryProjector();
+    const ledger = createLedgerProjector();
     const records = createMemo(() => ledger(projectTrajectory(deps.threads.branch())));
     // Running bars grow while a turn runs.
     const now = createNow(500, deps.threads.busy);
