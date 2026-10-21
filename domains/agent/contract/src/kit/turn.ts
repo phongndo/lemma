@@ -159,9 +159,12 @@ function promptUpdate(
   if (changed.length === 0 && !toolsChanged) return undefined;
   return { sections: changed, ...(toolsChanged ? { unavailable } : {}) };
 }
-/** A session's branch as a turn left it, with the request state at its end (`requestState(events)`), for the next turn. */
+/**
+ * A session's branch as a turn left it, with the request state at its end (`requestState(events)`), for the next turn:
+ * its `events` belong to whoever holds it, and the turn that takes it appends to them as it goes.
+ */
 export interface KeptBranch {
-  readonly events: readonly SessionEvent[];
+  readonly events: SessionEvent[];
   readonly request: RequestState;
 }
 
@@ -230,10 +233,10 @@ interface TurnInput {
   /** Runs a wait (before a failed call is asked again) during which the turn holds no slot, then waits for one. */
   readonly idle: <A, E, R>(wait: Effect.Effect<A, E, R>) => Effect.Effect<A, E, R>;
   /**
-   * The session's branch as the last turn left it, which a new turn starts from rather than read it again when the
-   * session's leaf is still its end; and where the turn leaves its own when it ends.
+   * The session's branch as the last turn left it, which a new turn takes, and starts from rather than read it again
+   * when the session's leaf is still its end; and where the turn leaves its own when it ends.
    */
-  readonly kept?: { readonly branch: () => KeptBranch | undefined; readonly keep: (kept: KeptBranch) => void };
+  readonly kept?: { readonly take: () => KeptBranch | undefined; readonly keep: (kept: KeptBranch) => void };
   /**
    * The turn ended so, but closing it in the log failed (a full disk): it is left open there, `TurnEnded` unpublished,
    * for the agent to close as it ended when the session is next taken up (`TurnResume.closing`).
@@ -486,18 +489,21 @@ export function runTurn(services: TurnServices, settings: TurnSettings, input: T
   const closeBranch = Effect.gen(function* () {
     // The branch the last turn left, if the session's leaf has not moved since (no checkout, no other append): no
     // reading it all back.
-    const kept = input.kept?.branch();
+    const kept = input.kept?.take();
     const leaf = kept === undefined ? undefined : (yield* sessions.get(sessionId).pipe(Effect.mapError(sessionError))).leaf;
-    const current = kept !== undefined && leaf !== undefined && kept.events.at(-1)?.id === leaf ? kept : undefined;
-    const branch = current?.events ?? (yield* sessions.branch(sessionId).pipe(Effect.mapError(sessionError)));
-    // The turn follows the leaf just read, answered or not: a checkout meanwhile cannot move it onto unanswered calls.
-    state.lastId = branch.at(-1)?.id;
-    keep(branch, current?.request);
-    // A kept branch is one a turn closed, answering every call it made (`close`): only one read back can leave some.
-    if (current !== undefined) {
-      if (yield* Verify) assert(unansweredCalls(branch) === undefined, `session ${sessionId} kept a branch with tool calls unanswered`);
+    if (kept !== undefined && leaf !== undefined && kept.events.at(-1)?.id === leaf) {
+      // Taken, so the turn's own: it goes on appending to it, copying nothing.
+      state.lastId = leaf;
+      state.branch = kept.events;
+      state.request = kept.request;
+      // A kept branch is one a turn closed, answering every call it made (`close`): only one read back can leave some.
+      if (yield* Verify) assert(unansweredCalls(kept.events) === undefined, `session ${sessionId} kept a branch with tool calls unanswered`);
       return;
     }
+    const branch = yield* sessions.branch(sessionId).pipe(Effect.mapError(sessionError));
+    // The turn follows the leaf just read, answered or not: a checkout meanwhile cannot move it onto unanswered calls.
+    state.lastId = branch.at(-1)?.id;
+    keep(branch);
     const open = unansweredCalls(branch);
     if (open === undefined || open.event.data.type !== "message") return;
     const { turnId: callTurn, stepId: callStep } = open.event.data;
@@ -514,10 +520,10 @@ export function runTurn(services: TurnServices, settings: TurnSettings, input: T
   /** The model a turn that runs steps asks: it has one (see `TurnInput.model`). */
   const asked = Effect.suspend(() => (input.model === undefined ? Effect.die(new Error(`Turn ${turnId} has no model to ask`)) : Effect.succeed(input.model)));
 
-  /** `branch`, read from the store or kept, as the turn's branch from here on (`state.branch`), with its request state. */
-  const keep = (branch: readonly SessionEvent[], request: RequestState = requestState(branch)) => {
+  /** `branch`, read from the store, as the turn's branch from here on (`state.branch`). */
+  const keep = (branch: readonly SessionEvent[]) => {
     state.branch = [...branch];
-    state.request = request;
+    state.request = requestState(branch);
   };
   /** The turn's branch, ending at `lastId`: kept, or read from the store when it is not. */
   const branchNow: Effect.Effect<SessionEvent[], AgentError> = Effect.suspend(() =>

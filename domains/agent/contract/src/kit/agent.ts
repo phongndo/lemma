@@ -322,32 +322,32 @@ export const makeAgent = (deps: AgentDeps, owner: PluginSetup<AgentConfig>, opti
 
     const requests = makeRequestIndex(sessions);
     /**
-     * Each session's branch as its last turn left it, the most recently used last (`BRANCHES_KEPT`), and whether a turn
-     * has used it since the last sweep (`BRANCH_IDLE_MS`).
+     * Each session's branch as its last turn left it, until the next takes it, the most recently kept last
+     * (`BRANCHES_KEPT`), and whether it was kept since the last sweep (`BRANCH_IDLE_MS`).
      */
-    const branches = new Map<string, { readonly kept: KeptBranch; used: boolean }>();
+    const branches = new Map<string, { readonly kept: KeptBranch; fresh: boolean }>();
     const kept = (sessionId: string) => ({
-      branch: () => {
+      take: () => {
         const entry = branches.get(sessionId);
-        if (entry !== undefined) entry.used = true;
+        branches.delete(sessionId);
         return entry?.kept;
       },
       keep: (branch: KeptBranch) => {
         branches.delete(sessionId);
-        branches.set(sessionId, { kept: branch, used: true });
+        branches.set(sessionId, { kept: branch, fresh: true });
         for (const oldest of branches.keys()) {
           if (branches.size <= BRANCHES_KEPT) break;
           branches.delete(oldest);
         }
       },
     });
-    // A branch no turn used since the last sweep goes: one unused for between half of `BRANCH_IDLE_MS` and all of it.
+    // A branch kept before the last sweep, and not taken since, goes: one unused for between half of `BRANCH_IDLE_MS` and all of it.
     yield* owner.background(
       "forget idle branches",
       Effect.repeat(
         Effect.sync(() => {
           for (const [sessionId, entry] of branches) {
-            if (entry.used) entry.used = false;
+            if (entry.fresh) entry.fresh = false;
             else branches.delete(sessionId);
           }
         }),
