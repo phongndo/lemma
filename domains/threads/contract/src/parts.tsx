@@ -159,6 +159,8 @@ export interface SidebarRowProps {
   readonly pin?: (() => void) | undefined;
   /** When it was archived here, which an archived one's age counts from; absent when not known (its last use then). */
   readonly archivedAt?: number | undefined;
+  /** The keys that go to it (`⌘1`), while all but their last are held down (`Action.onHold`): shown then, in place of its state. */
+  readonly shortcut?: string | undefined;
 }
 
 /**

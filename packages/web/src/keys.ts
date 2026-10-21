@@ -109,6 +109,18 @@ export const matchesKeys = (binding: string, event: KeyEvent, mac = isMac): bool
   return shift && event.shiftKey && SYMBOLS[event.code] === key;
 };
 
+/**
+ * Whether `event` holds down all of `binding` but its key: the modifiers it names, and no others, so that its key alone
+ * would finish it (Ctrl alone, off macOS, for `mod+1`). A binding without a modifier is never held. `mac` as in
+ * `matchesKeys`.
+ */
+export const holdsKeys = (binding: string, event: KeyEvent, mac = isMac): boolean => {
+  const { mod, shift, alt } = parse(binding);
+  if (!mod && !shift && !alt) return false;
+  if (modHeld(event, mac) !== mod || event.shiftKey !== shift || event.altKey !== alt) return false;
+  return mod || !(event.ctrlKey || event.metaKey);
+};
+
 /** A binding with no modifier types into a text field, so it waits until focus leaves one. */
 export const bindsTyping = (binding: string): boolean => !parse(binding).mod;
 

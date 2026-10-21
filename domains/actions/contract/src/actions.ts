@@ -34,6 +34,13 @@ export interface Action {
    */
   readonly input?: () => { readonly title: string; readonly placeholder?: string };
   readonly run: (value?: string) => void;
+  /**
+   * Hears when all of its keys but the last have been held down a moment, so that the last would run it: the binding
+   * then (`mod+1` while ⌘ is held alone), and undefined once they are let go or another key is pressed with them that
+   * runs nothing. What it acts on can show its keys meanwhile, as the sidebar's threads show `⌘1`. A throw is its
+   * plugin's fault: the action leaves the slot.
+   */
+  readonly onHold?: (binding: string | undefined) => void;
 }
 
 export const Actions = defineSlot<Action>("actions");
