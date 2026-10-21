@@ -1,7 +1,8 @@
 import { Cause, Duration, Effect, Exit } from "effect";
 import type { Scope } from "effect";
-import { closest, columns, GLOBAL_FLAGS, inputJsonSchema, parseInput, renderGlobalFlags, renderHelp, usageLine } from "@lemma/cli";
+import { CliChannels, closest, columns, GLOBAL_FLAGS, inputJsonSchema, parseInput, renderGlobalFlags, renderHelp, usageLine } from "@lemma/cli";
 import type { CliCommandInfo, CommandSpec } from "@lemma/cli";
+import { callChannel } from "@lemma/client";
 import { readEnvironments } from "@lemma/contracts/discovery";
 import packageJson from "../package.json" with { type: "json" };
 import { hostCommands } from "./commands/host.ts";
@@ -10,7 +11,7 @@ import { setupCommands } from "./commands/setup.ts";
 import { CliError, ExitCode, usage } from "./command.ts";
 import type { Builtin, Connection, Failure, Globals, Io, Output, QuestionPolicy } from "./command.ts";
 import { connect, homeOf, otherProtocol, toCliError } from "./connect.ts";
-import { groupHelp, hostedCommand, leadingWords, listHosted, match } from "./hosted.ts";
+import { groupHelp, hostedCommand, leadingWords, match } from "./hosted.ts";
 
 export { ExitCode } from "./command.ts";
 
@@ -132,9 +133,9 @@ const hostedSoon = (io: Io, globals: Globals): Effect.Effect<{ readonly name: st
   Effect.scoped(
     Effect.gen(function* () {
       const connection = yield* connect(io, globals);
-      const host = yield* connection.host({ answers: false });
-      const commands = yield* listHosted(host);
-      return commands === undefined ? undefined : { name: connection.target.name, commands };
+      // One call, so over HTTP: no WebSocket to open, subscribe, and probe first. Nothing serving them lists none, as no host does.
+      const commands = yield* callChannel(connection.rpc, CliChannels.commands, undefined);
+      return { name: connection.target.name, commands };
     }),
   ).pipe(
     Effect.timeoutOrElse({ duration: Duration.millis(1_500), orElse: () => Effect.succeed(undefined) }),

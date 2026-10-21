@@ -59,7 +59,8 @@ plugin shadows one.
   Ctrl+C cancels it on the host. A command whose plugin stopped or reloaded
   while it ran fails `Withdrawn`.
 - **Calls and streams.** A command of the runtime's that makes a call or two
-  does so over HTTP; one that watches the host (`events`, `channels open`, and
+  does so over HTTP, as help and completion do to list the plugins' commands;
+  one that watches the host (`events`, `channels open`, and
   every plugin's command) holds `@lemma/client`'s reconnecting WebSocket, as the
   web app does, saying it is the `cli` (`Host.Clients`). While the host is still
   starting, a command fails `Unavailable` naming what it called (exit 3).
