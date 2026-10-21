@@ -1,0 +1,460 @@
+/* A quiet list, as a browser's history is: one toolbar row, then the groups; what acts on a row shows when it is wanted. */
+.archived-page {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  width: 100%;
+  padding-bottom: 64px;
+}
+
+/* The search, or the selection, stays in reach under the page's head while the list scrolls. */
+.archived-toolbar {
+  position: sticky;
+  top: var(--head-height);
+  z-index: 1;
+  margin-top: -16px;
+  padding: 16px 0 4px;
+  background: var(--bg);
+}
+
+.archived-count {
+  flex: none;
+  margin-right: 4px;
+  color: var(--text-3);
+  font-size: calc(12px * var(--text-scale));
+  font-variant-numeric: tabular-nums;
+}
+
+.archived-toolbar .icon-button {
+  width: 28px;
+  height: 28px;
+  color: var(--text-3);
+}
+
+.archived-toolbar .icon-button:hover {
+  color: var(--text);
+}
+
+.archived-toolbar .icon-button .icon {
+  width: 15px;
+  height: 15px;
+}
+
+/* The project filter: an icon, and the project's name once one is chosen. */
+.archived-toolbar .archived-filter.active {
+  display: inline-flex;
+  width: auto;
+  max-width: 200px;
+  gap: 6px;
+  padding: 0 8px;
+  background: var(--bg-hover);
+  color: var(--text);
+}
+
+.archived-filter-label {
+  min-width: 0;
+  overflow: hidden;
+  font-size: calc(12.5px * var(--text-scale));
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.archived-grouping {
+  display: flex;
+  gap: 1px;
+}
+
+.archived-toolbar .archived-grouping [aria-pressed="true"] {
+  background: var(--bg-active);
+  color: var(--text);
+}
+
+/* While threads are selected, the search's row holds them too, beside it: how many (and how many it hides), and what to
+   do with them, tinted as a mode. */
+.archived-selection {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  height: 32px;
+  padding: 0 2px 0 1px;
+  border-radius: var(--radius-sm);
+  background: var(--accent-soft);
+}
+
+.archived-chosen {
+  margin: 0 6px 0 2px;
+  font-size: calc(12.5px * var(--text-scale));
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.archived-hidden {
+  margin-right: 6px;
+  color: var(--text-3);
+  font-size: calc(12px * var(--text-scale));
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.archived-toolbar .archived-bar-delete:hover {
+  background: var(--err-soft);
+  color: var(--err);
+}
+
+/* A checkbox: a box drawn from tokens, filled in the accent when checked or mixed. */
+.archived-check {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-xs);
+  background: transparent;
+  color: var(--accent-fg);
+  cursor: pointer;
+}
+
+.archived-box {
+  display: grid;
+  place-items: center;
+  width: 15px;
+  height: 15px;
+  border: 1.5px solid var(--text-3);
+  border-radius: var(--radius-2xs);
+}
+
+.archived-check:hover .archived-box {
+  border-color: var(--text-2);
+}
+
+.archived-check:is([aria-checked="true"], [aria-checked="mixed"]) .archived-box {
+  border-color: var(--accent);
+  background: var(--accent);
+}
+
+.archived-box .icon {
+  width: 11px;
+  height: 11px;
+}
+
+.archived-dash {
+  width: 7px;
+  height: 1.5px;
+  background: currentColor;
+}
+
+/* A row's and a heading's checkbox keep their place but show only when wanted: under the pointer, with the keyboard
+   on them, checked, or while anything is selected. */
+.archived-list .archived-check {
+  opacity: 0;
+}
+
+.archived-selection .archived-check {
+  width: 24px;
+  height: 24px;
+}
+
+.archived-list.selecting .archived-check,
+.archived-row:is(:hover, .selected, :has(:focus-visible)) .archived-check,
+.archived-group-title:is(:hover, :has(:focus-visible)) .archived-check {
+  opacity: 1;
+}
+
+.archived-list {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.archived-group {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.archived-group-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0 0 2px;
+  color: var(--text-3);
+  font-size: calc(12.5px * var(--text-scale));
+  font-weight: 500;
+}
+
+.archived-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+/* No lines between rows: a soft fill under the pointer, and the accent's when selected. */
+.archived-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 42px;
+  padding: 6px 10px 6px 0;
+  border-radius: var(--radius-sm);
+}
+
+.archived-row {
+  scroll-margin: calc(var(--head-height) + 64px) 0 16px;
+}
+
+.archived-row:is(:hover, :has(:focus-visible)) {
+  background: var(--bg-hover);
+}
+
+.archived-row.selected {
+  background: var(--accent-soft);
+}
+
+.archived-text {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.archived-line {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.archived-agent {
+  flex: none;
+  display: inline-grid;
+  place-items: center;
+  color: var(--text-3);
+}
+
+.archived-agent .icon {
+  width: 13px;
+  height: 13px;
+}
+
+/* The title is a link to the thread: quiet until the pointer is on it. */
+.archived-title {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text);
+  font-size: calc(13.5px * var(--text-scale));
+  text-decoration: none;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.archived-title:hover {
+  text-decoration: underline;
+  text-decoration-color: var(--text-3);
+  text-underline-offset: 3px;
+}
+
+.archived-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  column-gap: 10px;
+  min-width: 0;
+  color: var(--text-3);
+  font-size: calc(12px * var(--text-scale));
+}
+
+.archived-meta:empty {
+  display: none;
+}
+
+/* A row's project narrows the page to that project's threads, as a history's "more from this site". */
+.archived-project-link {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+
+.archived-project-link:hover {
+  color: var(--text-2);
+}
+
+.archived-branch {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+}
+
+.archived-branch .icon {
+  width: 11px;
+  height: 11px;
+}
+
+/* A worktree removed on archiving reads fainter: unarchiving makes it again. */
+.archived-branch.gone {
+  opacity: 0.6;
+}
+
+/* At a row's end: when it was last used, and under the pointer or the keyboard, what to do with it. */
+.archived-side {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  min-width: 64px;
+}
+
+.archived-time {
+  color: var(--text-3);
+  font-size: calc(12px * var(--text-scale));
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.archived-state {
+  display: inline-grid;
+  place-items: center;
+  color: var(--text-2);
+}
+
+.archived-state.waiting {
+  color: var(--warn);
+}
+
+.archived-state .icon {
+  width: 14px;
+  height: 14px;
+}
+
+.archived-actions {
+  display: none;
+  align-items: center;
+  gap: 2px;
+}
+
+.archived-actions .icon-button {
+  width: 26px;
+  height: 26px;
+  color: var(--text-3);
+}
+
+.archived-actions .icon-button:hover {
+  color: var(--text);
+}
+
+.archived-actions .icon {
+  width: 14px;
+  height: 14px;
+}
+
+/* Keyboard focus in a row shows them too, so Tab reaches them; a click's focus does not, so they leave with the pointer. */
+.archived-row:is(:hover, :has(:focus-visible)) .archived-actions,
+.archived-actions.armed {
+  display: flex;
+}
+
+.archived-row:is(:hover, :has(:focus-visible)) .archived-time,
+.archived-row:has(.archived-actions.armed) .archived-time {
+  display: none;
+}
+
+/* Without a pointer to hover, they always show. */
+@media (hover: none) {
+  .archived-list .archived-check {
+    opacity: 1;
+  }
+
+  .archived-actions {
+    display: flex;
+  }
+
+  .archived-time {
+    display: none;
+  }
+}
+
+/* Delete is a quiet icon until armed, when it says what a second click does. */
+.archived-delete {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  min-width: 26px;
+  height: 26px;
+  padding: 0 6px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-3);
+  font-size: calc(12px * var(--text-scale));
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.archived-delete .icon {
+  width: 14px;
+  height: 14px;
+}
+
+.archived-delete:hover:not([aria-disabled="true"]),
+.archived-delete.armed {
+  background: var(--err-soft);
+  color: var(--err);
+}
+
+.archived-delete[aria-disabled="true"] {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.archived-none {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 10px;
+  padding-left: 32px;
+}
+
+.archived-empty {
+  max-width: 440px;
+  margin: 48px auto 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  text-align: center;
+  color: var(--text-2);
+}
+
+.archived-empty > .icon {
+  width: 22px;
+  height: 22px;
+}
+
+.archived-empty h2 {
+  margin: 0;
+  font-size: calc(15px * var(--text-scale));
+  color: var(--text);
+}
+
+.archived-empty p {
+  margin: 0;
+}
+
+.archived-delete-running {
+  color: var(--warn);
+}
+
+@media (max-width: 820px) {
+  .archived-toolbar {
+    margin-top: -12px;
+    padding-top: 12px;
+  }
+}

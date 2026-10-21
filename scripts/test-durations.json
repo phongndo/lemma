@@ -92,6 +92,7 @@
   "domains/settings/page/tests/settings.test.ts": 0,
   "domains/settings/plugins/tests/plugins.test.ts": 0,
   "domains/skills/files/tests/skills.test.ts": 0,
+  "domains/threads/archived/tests/archived.test.ts": 0,
   "domains/threads/browser/tests/address.test.ts": 0,
   "domains/threads/browser/tests/keys.test.ts": 0,
   "domains/threads/composer/tests/command.test.ts": 0,

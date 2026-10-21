@@ -3,6 +3,7 @@ import addProject from "@lemma/workspace-add-project";
 import agentLoop from "@lemma/agent-loop/web";
 import appearance from "@lemma/look-appearance";
 import appearancePage from "@lemma/look-appearance-page";
+import archivedPage from "@lemma/threads-archived";
 import browser from "@lemma/threads-browser";
 import chat from "@lemma/threads-transcript";
 import commands from "@lemma/commands-client";
@@ -117,6 +118,7 @@ export const bundled: readonly Plugin[] = [
   keysPage,
   appearancePage,
   projectsPage,
+  archivedPage,
   addProject,
   release,
   profiles,
