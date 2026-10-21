@@ -1,6 +1,6 @@
 // Copied from pi (MIT, https://github.com/earendil-works/pi at 2ec55d8): packages/coding-agent/src/core/tools/edit-diff.ts
 // (matching and applying edits; its diff rendering is left out, as the tool's diff is `@lemma/tools/diff`'s) and
-// `splitBom` from packages/coding-agent/src/utils/text.ts. Changed only where Lemma's compiler settings ask.
+// `splitBom` from packages/coding-agent/src/utils/text.ts. Changed only where Lemma's compiler settings ask, and where marked "Lemma's change".
 
 export function splitBom(content: string): { bom: string; text: string } {
   return content.startsWith("﻿") ? { bom: "﻿", text: content.slice(1) } : { bom: "", text: content };
@@ -193,7 +193,7 @@ export interface AppliedEditsResult {
  * fuzzy-normalized version of the content (trailing whitespace stripped,
  * Unicode quotes/dashes normalized to ASCII).
  */
-export function fuzzyFindText(content: string, oldText: string): FuzzyMatchResult {
+export function fuzzyFindText(content: string, oldText: string, normalize: (text: string) => string = normalizeForFuzzyMatch): FuzzyMatchResult {
   // Try exact match first
   const exactIndex = content.indexOf(oldText);
   if (exactIndex !== -1) {
@@ -207,7 +207,7 @@ export function fuzzyFindText(content: string, oldText: string): FuzzyMatchResul
   }
 
   // Try fuzzy match - work entirely in normalized space
-  const fuzzyContent = normalizeForFuzzyMatch(content);
+  const fuzzyContent = normalize(content);
   const fuzzyOldText = normalizeForFuzzyMatch(oldText);
   const fuzzyIndex = fuzzyContent.indexOf(fuzzyOldText);
 
@@ -233,8 +233,8 @@ export function fuzzyFindText(content: string, oldText: string): FuzzyMatchResul
   };
 }
 
-function countOccurrences(content: string, oldText: string): number {
-  const fuzzyContent = normalizeForFuzzyMatch(content);
+function countOccurrences(content: string, oldText: string, normalize: (text: string) => string): number {
+  const fuzzyContent = normalize(content);
   const fuzzyOldText = normalizeForFuzzyMatch(oldText);
   return fuzzyContent.split(fuzzyOldText).length - 1;
 }
@@ -281,6 +281,15 @@ function getNoChangeError(path: string, totalEdits: number): Error {
  * blocks keep their original bytes.
  */
 export function applyEditsToNormalizedContent(normalizedContent: string, edits: Edit[], path: string): AppliedEditsResult {
+  // Lemma's change: the file is normalized once a call (and its normalized form once more), not once an edit.
+  const memo: [string, string][] = [];
+  const normalize = (text: string): string => {
+    const known = memo.find(([input]) => input === text);
+    if (known !== undefined) return known[1];
+    const output = normalizeForFuzzyMatch(text);
+    if (memo.push([text, output]) > 2) memo.shift();
+    return output;
+  };
   const normalizedEdits = edits.map((edit) => ({
     oldText: normalizeToLF(edit.oldText),
     newText: normalizeToLF(edit.newText),
@@ -292,19 +301,19 @@ export function applyEditsToNormalizedContent(normalizedContent: string, edits: 
     }
   }
 
-  const initialMatches = normalizedEdits.map((edit) => fuzzyFindText(normalizedContent, edit.oldText));
+  const initialMatches = normalizedEdits.map((edit) => fuzzyFindText(normalizedContent, edit.oldText, normalize));
   const usedFuzzyMatch = initialMatches.some((match) => match.usedFuzzyMatch);
-  const replacementBaseContent = usedFuzzyMatch ? normalizeForFuzzyMatch(normalizedContent) : normalizedContent;
+  const replacementBaseContent = usedFuzzyMatch ? normalize(normalizedContent) : normalizedContent;
 
   const matchedEdits: MatchedEdit[] = [];
   for (let i = 0; i < normalizedEdits.length; i++) {
     const edit = normalizedEdits[i]!;
-    const matchResult = fuzzyFindText(replacementBaseContent, edit.oldText);
+    const matchResult = fuzzyFindText(replacementBaseContent, edit.oldText, normalize);
     if (!matchResult.found) {
       throw getNotFoundError(path, i, normalizedEdits.length);
     }
 
-    const occurrences = countOccurrences(replacementBaseContent, edit.oldText);
+    const occurrences = countOccurrences(replacementBaseContent, edit.oldText, normalize);
     if (occurrences > 1) {
       throw getDuplicateError(path, i, normalizedEdits.length, occurrences);
     }
