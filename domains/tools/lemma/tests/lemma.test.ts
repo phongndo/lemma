@@ -5,16 +5,11 @@ import { definePlugin, makeCore, Registries } from "@lemma/core";
 import type { Plugin } from "@lemma/core";
 import { Channels, HostError, Interaction, InteractionError, optionalPayload, serveChannel } from "@lemma/contracts";
 import type { Channel } from "@lemma/contracts";
-import { AgentChannels, AgentError } from "@lemma/agent";
-import type { PromptOutcome } from "@lemma/agent";
-import { emptyUsage } from "@lemma/llm";
-import { SessionChannels, SessionError } from "@lemma/sessions";
-import type { EventData, SessionEvent, SessionInfo } from "@lemma/sessions";
 import { ToolInvocation, ToolNamespaces, ToolRunner, Tools } from "@lemma/tools";
-import type { ToolContribution, ToolResult } from "@lemma/tools";
+import type { ToolContribution } from "@lemma/tools";
 import { textOf } from "@lemma/tools/testing";
 import tools from "@lemma/tools-registry";
-import lemma, { depthOf } from "../src/index.ts";
+import lemma from "../src/index.ts";
 import { failure } from "../src/channels.ts";
 
 /** Adds a channel while the core runs, returning its removal: a plugin coming and going. */
@@ -118,7 +113,6 @@ describe("channels as tools", () => {
     expect(tool.output).toMatchObject({ type: "array" });
     expect(seen.listed.map((candidate) => candidate.spec.name)).not.toContain("lemma_llm_login");
     expect(seen.listed.map((candidate) => candidate.spec.name)).not.toContain("lemma_ticker_price");
-    expect(seen.listed.map((candidate) => candidate.spec.name)).toContain("lemma_delegate");
     expect(seen.after.map((candidate) => candidate.spec.name)).not.toContain("lemma_sessions_list");
     expect(seen.namespaces).toEqual(["lemma"]);
   });
@@ -311,222 +305,5 @@ describe("a stream as a tool", () => {
       }).pipe(Effect.provide(TestClock.layer())),
     );
     expect(result.structured).toEqual({ elements: [7], ended: false, timedOut: true });
-  });
-});
-
-describe("delegation", () => {
-  /** A fake agent and sessions store: a prompt makes a turn that answers with what the prompt asks for, or hangs on "hang". */
-  const fakes = (state: {
-    requests: string[];
-    cancelled: string[];
-    titles: Record<string, string>;
-    logs: Map<string, SessionEvent[]>;
-    deleted?: string[];
-    busy?: number;
-    release?: Deferred.Deferred<void>;
-  }) => {
-    const info = (sessionId: string): SessionInfo => {
-      const log = state.logs.get(sessionId) ?? [];
-      return { id: sessionId, cwd: "/work", createdAt: 0, updatedAt: 0, lastSeq: log.length, ...(log.length === 0 ? {} : { leaf: log.at(-1)!.id }) };
-    };
-    const append = (sessionId: string, data: EventData) => {
-      const log = state.logs.get(sessionId)!;
-      log.push({ seq: log.length + 1, id: `${sessionId}-${log.length + 1}`, parent: log.at(-1)?.id ?? null, at: log.length, data });
-    };
-    let made = 0;
-    return definePlugin({
-      id: "fakes",
-      requires: { runner: ToolRunner },
-      setup: function* ({ runner }, owner) {
-        const channels: Channel[] = [
-          serveChannel(SessionChannels.create, () => {
-            const id = `d${++made}`;
-            state.logs.set(id, []);
-            return info(id);
-          }),
-          serveChannel(SessionChannels.setTitle, ({ sessionId, title }) => {
-            state.titles[sessionId] = title;
-            return info(sessionId);
-          }),
-          serveChannel(SessionChannels.get, ({ sessionId }) =>
-            state.logs.has(sessionId) ? info(sessionId) : Effect.fail(new HostError({ code: "NotFound", subject: sessionId, message: "No such session" })),
-          ),
-          // As the sessions store fails it in the host: its own error, not the transport's.
-          serveChannel(SessionChannels.events, ({ sessionId }) =>
-            state.logs.has(sessionId)
-              ? (state.logs.get(sessionId) ?? [])
-              : Effect.fail(new SessionError({ sessionId, reason: "NotFound", message: `Session ${sessionId} does not exist` })),
-          ),
-          // Busy at first, as the store is while the agent settles a refused prompt.
-          serveChannel(SessionChannels.delete, ({ sessionId }) => {
-            if (state.busy !== undefined && state.busy > 0) {
-              state.busy--;
-              return Effect.fail(new SessionError({ sessionId, reason: "Busy", message: "This session is in use" }));
-            }
-            state.logs.delete(sessionId);
-            state.deleted?.push(sessionId);
-            return Effect.void;
-          }),
-          serveChannel(AgentChannels.cancel, ({ sessionId }) => void state.cancelled.push(sessionId)),
-          serveChannel(AgentChannels.prompt, ({ sessionId, content, requestId }) =>
-            Effect.gen(function* (): Effect.fn.Return<PromptOutcome, AgentError> {
-              const text = content[0]?.type === "text" ? content[0].text : "";
-              // Refused before it is placed, as the agent refuses a prompt for a model it does not know.
-              if (text === "refuse") return yield* new AgentError({ sessionId, reason: "NoModel", message: "Unknown model: mock/nope" });
-              state.requests.push(requestId);
-              const turnId = `t-${sessionId}`;
-              append(sessionId, { type: "turn-start", turnId });
-              append(sessionId, { type: "message", turnId, requestId, message: { role: "user", content: [...content], timestamp: 0 } });
-              if (text === "hang") yield* Effect.never;
-              if (text === "wait") yield* Deferred.await(state.release!);
-              // The delegate delegates in turn, as its own turn's tool call would, and answers once that ends.
-              const inner = text.startsWith("delegate: ")
-                ? yield* runner
-                    .execute(
-                      new ToolInvocation({ sessionId, toolCallId: `in-${sessionId}`, name: "lemma_delegate", input: { prompt: text.slice(10) }, cwd: "/work" }),
-                      new AbortController().signal,
-                    )
-                    .pipe(Effect.orDie)
-                : undefined;
-              append(sessionId, { type: "step-start", turnId, stepId: "p1" });
-              const message = {
-                role: "assistant" as const,
-                content: [{ type: "text" as const, text: inner === undefined ? `did: ${text}` : `did: ${(inner.structured as { answer: string }).answer}` }],
-                api: "x",
-                provider: "p",
-                model: "m",
-                usage: emptyUsage,
-                stopReason: "stop" as const,
-                timestamp: 0,
-              };
-              append(sessionId, { type: "message", turnId, stepId: "p1", message });
-              append(sessionId, { type: "step-end", turnId, stepId: "p1" });
-              append(sessionId, { type: "turn-end", turnId, reason: "done" });
-              return { kind: "placed" };
-            }),
-          ),
-        ];
-        for (const channel of channels) yield* owner.add(Channels, channel);
-      },
-    });
-  };
-  const fresh = () => ({ requests: [] as string[], cancelled: [] as string[], titles: {} as Record<string, string>, logs: new Map<string, SessionEvent[]>() });
-
-  it("starts a session with the prompt, waits for its turn, and resolves to its answer", async () => {
-    const state = fresh();
-    const result = await withCore({ plugins: [fakes(state)] }, call("lemma_delegate", { prompt: "Sum the numbers\nin data.csv" }));
-    expect(result.isError).toBeUndefined();
-    expect(result.structured).toEqual({ sessionId: "d1", ended: "done", answer: "did: Sum the numbers\nin data.csv" });
-    expect(state.titles).toEqual({ d1: "Sum the numbers" });
-    expect(state.requests[0]).toMatch(/^tools\.lemma\/delegate\/1\//);
-  });
-
-  it("is at the top for a caller the sessions store does not know", async () => {
-    const state = fresh();
-    const result = await withCore({ plugins: [fakes(state)] }, call("lemma_delegate", { prompt: "from a script" }, "unknown-caller"));
-    expect(result.structured).toMatchObject({ sessionId: "d1", ended: "done" });
-    expect(state.requests[0]).toMatch(/^tools\.lemma\/delegate\/1\//);
-  });
-
-  it("leaves no session behind when the agent refuses the prompt", async () => {
-    const state = { ...fresh(), deleted: [] as string[], busy: 2 };
-    const result = await withCore({ plugins: [fakes(state)] }, call("lemma_delegate", { prompt: "refuse" }));
-    expect(result.isError).toBe(true);
-    expect(textOf(result)).toBe('No session was started: "agent.prompt" failed (NoModel): Unknown model: mock/nope.');
-    expect(state.deleted).toEqual(["d1"]);
-    expect(state.logs.size).toBe(0);
-  });
-
-  it("refuses a cwd that is not a directory, before making a session", async () => {
-    const state = fresh();
-    const result = await withCore({ plugins: [fakes(state)] }, call("lemma_delegate", { prompt: "go", cwd: "/definitely/not/here" }));
-    expect(result.isError).toBe(true);
-    expect(textOf(result)).toBe("No session was started: /definitely/not/here is not a directory on this host.");
-    expect(state.logs.size).toBe(0);
-  });
-
-  it("counts depth from the caller's log, and refuses past the deepest", async () => {
-    const state = fresh();
-    state.logs.set("deep", []);
-    const result = await withCore(
-      { plugins: [fakes(state)] },
-      Effect.gen(function* () {
-        const outer = yield* call("lemma_delegate", { prompt: "go deeper" });
-        const sessionId = (outer.structured as { sessionId: string }).sessionId;
-        // The delegate delegates in turn: one level further down.
-        const inner = yield* call("lemma_delegate", { prompt: "and deeper" }, sessionId);
-        const innerId = (inner.structured as { sessionId: string }).sessionId;
-        return { inner, refused: yield* call("lemma_delegate", { prompt: "too deep" }, innerId) };
-      }),
-    );
-    expect(state.requests.map((id) => id.split("/")[2])).toEqual(["1", "2"]);
-    expect(depthOf(state.logs.get("d2")!)).toBe(2);
-    expect(result.refused.isError).toBe(true);
-    expect(textOf(result.refused)).toContain("2 levels deep");
-  });
-
-  it("cancels the turn when it takes longer than timeoutMs", async () => {
-    const state = fresh();
-    const result = await withCore(
-      { plugins: [fakes(state)] },
-      Effect.gen(function* () {
-        const fiber = yield* Effect.forkChild(call("lemma_delegate", { prompt: "hang", timeoutMs: 5_000 }));
-        while (fiber.pollUnsafe() === undefined) {
-          yield* TestClock.adjust("5 seconds");
-          yield* Effect.yieldNow;
-        }
-        return yield* Fiber.join(fiber);
-      }).pipe(Effect.provide(TestClock.layer())),
-    );
-    expect(result.isError).toBe(true);
-    expect(result.structured).toMatchObject({ sessionId: "d1", ended: "timeout" });
-    expect(state.cancelled).toEqual(["d1"]);
-  });
-
-  it("cancels the turn when the call is cancelled", async () => {
-    const state = fresh();
-    const controller = new AbortController();
-    await withCore(
-      { plugins: [fakes(state)] },
-      Effect.gen(function* () {
-        const fiber = yield* Effect.forkChild(Effect.exit(call("lemma_delegate", { prompt: "hang" }, "s", controller.signal)));
-        // Aborted once the turn has its prompt.
-        while (state.requests.length === 0) yield* Effect.yieldNow;
-        controller.abort();
-        yield* Fiber.join(fiber);
-      }),
-    );
-    expect(state.cancelled).toEqual(["d1"]);
-  });
-
-  it("runs at most maxDelegations at once; the rest wait for one to end", async () => {
-    const state = { ...fresh(), release: Effect.runSync(Deferred.make<void>()) };
-    const results = await withCore(
-      { plugins: [fakes(state)], config: { maxDelegations: 1 } },
-      Effect.gen(function* () {
-        const first = yield* Effect.forkChild(call("lemma_delegate", { prompt: "wait" }));
-        while (state.requests.length === 0) yield* Effect.yieldNow;
-        const second = yield* Effect.forkChild(call("lemma_delegate", { prompt: "quick" }));
-        for (let i = 0; i < 50; i++) yield* Effect.yieldNow;
-        // The second has not started a session while the first runs.
-        const startedMeanwhile = state.logs.size;
-        yield* Deferred.succeed(state.release, undefined);
-        const done: ToolResult[] = [yield* Fiber.join(first), yield* Fiber.join(second)];
-        return { startedMeanwhile, done };
-      }),
-    );
-    expect(results.startedMeanwhile).toBe(1);
-    expect(results.done.map((result) => (result.structured as { answer: string }).answer)).toEqual(["did: wait", "did: quick"]);
-  });
-
-  it("counts each depth's delegations apart, so a delegate waiting on its own does not hold up theirs", async () => {
-    const state = fresh();
-    const results = await withCore(
-      { plugins: [fakes(state)], config: { maxDelegations: 1 } },
-      Effect.all([call("lemma_delegate", { prompt: "delegate: one" }), call("lemma_delegate", { prompt: "delegate: two" })], { concurrency: "unbounded" }).pipe(
-        Effect.timeout("4 seconds"),
-      ),
-    );
-    expect(results.map((result) => (result.structured as { answer: string }).answer)).toEqual(["did: did: one", "did: did: two"]);
   });
 });

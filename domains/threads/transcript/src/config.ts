@@ -1,5 +1,5 @@
 import { Effect, Schema } from "effect";
-import type { ThreadsService, ToolView } from "@lemma/threads";
+import type { ContextView, ThreadsService, ToolView } from "@lemma/threads";
 import type { RouterService } from "@lemma/web";
 
 /** The chat's settings. */
@@ -37,4 +37,6 @@ export interface Chat {
   readonly now: () => number;
   /** How calls to a tool show, when its plugin says (`ToolViews`). */
   readonly toolView: (name: string) => ToolView | undefined;
+  /** How a plugin's `context` events show (`ContextViews`), by the plugin's id. */
+  readonly contextView: (source: string) => ContextView | undefined;
 }

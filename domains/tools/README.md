@@ -11,19 +11,20 @@ in place. Output too long for a result goes to a temp file only the user can
 read, which the host keeps while it is written and then among its newest 100
 while it runs (`outputFile`).
 
-| Plugin                                     | Halves     | What it does                                                                                                                                                 |
-| ------------------------------------------ | ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| [`tools.registry`](registry/README.md)     | host       | Lists and runs the tools: provides `ToolRunner`, checking each call with the guards                                                                          |
-| [`tools.read`](read/README.md)             | host + web | The `read` tool, and how its calls show                                                                                                                      |
-| [`tools.write`](write/README.md)           | host + web | The `write` tool, and how its calls show                                                                                                                     |
-| [`tools.edit`](edit/README.md)             | host + web | The `edit` tool, and how its calls show                                                                                                                      |
-| [`tools.patch`](patch/README.md)           | host + web | The `apply_patch` tool: Codex's patches, and how its calls show                                                                                              |
-| [`tools.bash`](bash/README.md)             | host + web | The `bash` tool, and how its calls show                                                                                                                      |
-| [`tools.codemode`](codemode/README.md)     | host + web | The `codemode` tool: JavaScript in a sandbox that calls the other tools and classifier and image models, resumed after a restart; its calls live in the chat |
-| [`tools.search-fff`](search-fff/README.md) | host + web | The `grep` and `find` tools, searching with fff, and how their calls show                                                                                    |
-| [`tools.ask`](ask/README.md)               | host + web | The `ask_user` tool: questions for the user, answered above the composer                                                                                     |
-| [`tools.html`](html/README.md)             | host + web | The `html_render` tool: a page the model made, shown to the person in the chat outside the fold                                                              |
-| [`tools.lemma`](lemma/README.md)           | host       | Lemma's own channels as tools scripts call (the `lemma` namespace), writes asking first, and `lemma_delegate`: a task handed to a new session                |
+| Plugin                                     | Halves     | What it does                                                                                                                                                   |
+| ------------------------------------------ | ---------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [`tools.registry`](registry/README.md)     | host       | Lists and runs the tools: provides `ToolRunner`, checking each call with the guards                                                                            |
+| [`tools.read`](read/README.md)             | host + web | The `read` tool, and how its calls show                                                                                                                        |
+| [`tools.write`](write/README.md)           | host + web | The `write` tool, and how its calls show                                                                                                                       |
+| [`tools.edit`](edit/README.md)             | host + web | The `edit` tool, and how its calls show                                                                                                                        |
+| [`tools.patch`](patch/README.md)           | host + web | The `apply_patch` tool: Codex's patches, and how its calls show                                                                                                |
+| [`tools.bash`](bash/README.md)             | host + web | The `bash` tool, and how its calls show                                                                                                                        |
+| [`tools.codemode`](codemode/README.md)     | host + web | The `codemode` tool: JavaScript in a sandbox that calls the other tools and classifier and image models, resumed after a restart; its calls live in the chat   |
+| [`tools.search-fff`](search-fff/README.md) | host + web | The `grep` and `find` tools, searching with fff, and how their calls show                                                                                      |
+| [`tools.ask`](ask/README.md)               | host + web | The `ask_user` tool: questions for the user, answered above the composer                                                                                       |
+| [`tools.html`](html/README.md)             | host + web | The `html_render` tool: a page the model made, shown to the person in the chat outside the fold                                                                |
+| [`tools.lemma`](lemma/README.md)           | host       | Lemma's own channels as tools scripts call (the `lemma` namespace), writes asking first                                                                        |
+| [`tools.delegate`](delegate/README.md)     | host + web | The `delegate` tool: a task handed to an agent, a thread of its own, waited on or in the background; and how agents show (the chat, the lineage, the composer) |
 
 A plugin replacing `tools.registry` runs `toolsConformance` from `@lemma/tools/testing`: the tests `tools.registry` passes, against the contract alone.
 

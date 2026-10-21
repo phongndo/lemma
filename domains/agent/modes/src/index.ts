@@ -189,11 +189,12 @@ export default definePlugin({
       serveChannel(ModeChannels.list, ({ cwd }) =>
         Effect.map(load(cwd ?? paths.cwd), (modes) => ({
           modes: [...modes.values()]
-            .map(({ name, description, model, thinking, source }) => ({
+            .map(({ name, description, model, thinking, use, source }) => ({
               name,
               ...(description === undefined ? {} : { description }),
               ...(model === undefined ? {} : { model }),
               ...(thinking === undefined ? {} : { thinking }),
+              ...(use === undefined ? {} : { use }),
               source,
             }))
             .sort((a, b) => a.name.localeCompare(b.name)),

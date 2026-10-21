@@ -7,7 +7,7 @@ import { Events, makeCore } from "@lemma/core";
 import { Notice } from "@lemma/contracts";
 import type { PluginInfo } from "@lemma/contracts";
 import { hostControlPlugin } from "@lemma/contracts/testing";
-import { Agent } from "@lemma/agent";
+import { Agent, offeredFor } from "@lemma/agent";
 import { Sessions } from "@lemma/sessions";
 import agent from "@lemma/agent-loop";
 import sessions from "@lemma/sessions-files";
@@ -47,6 +47,19 @@ describe("a mode file", () => {
     expect(parseMode("plain", "Just a prompt.", "project")).toEqual({ name: "plain", prompt: "Just a prompt.", source: "project" });
   });
 
+  it("says where it is offered: threads, agents, or both, as when it names neither", () => {
+    const use = (line: string) => parseMode("p", `---\n${line}\n---\nBody`, "user").use;
+    expect(use("use: agent")).toEqual(["agent"]);
+    expect(use("use: [thread, agent]")).toEqual(["thread", "agent"]);
+    expect(use("use: agent, agent")).toEqual(["agent"]);
+    // Words it does not know leave it everywhere, as no field does.
+    expect(use("use: robots")).toBeUndefined();
+    expect(use("description: d")).toBeUndefined();
+    expect(offeredFor({ use: ["agent"] }, "thread")).toBe(false);
+    expect(offeredFor({ use: ["agent"] }, "agent")).toBe(true);
+    expect(offeredFor({}, "thread")).toBe(true);
+  });
+
   it("keeps what its patterns allow, the last match deciding", () => {
     expect(keeps(undefined, "bash")).toBe(true);
     expect(keeps(["read", "write"], "bash")).toBe(false);
@@ -71,12 +84,17 @@ describe("a mode file", () => {
 });
 
 describe("the bundled modes", () => {
-  it("are work, the default, and creator, each described", async () => {
+  it("are work, the default, creator for threads, and explore for agents, each described", async () => {
     const dir = fileURLToPath(new URL("../modes", import.meta.url));
     const files = (await fs.readdir(dir)).sort();
-    expect(files).toEqual(["creator.md", "work.md"]);
-    for (const file of files) expect(parseMode(file, await fs.readFile(path.join(dir, file), "utf8"), "bundled").description).toBeDefined();
+    expect(files).toEqual(["creator.md", "explore.md", "work.md"]);
+    const read = async (file: string) => parseMode(file.slice(0, -3), await fs.readFile(path.join(dir, file), "utf8"), "bundled");
+    for (const file of files) expect((await read(file)).description).toBeDefined();
     expect(Schema.decodeUnknownSync(Config)({}).default).toBe("work");
+    expect((await read("work.md")).use).toBeUndefined();
+    expect((await read("creator.md")).use).toEqual(["thread"]);
+    // An explorer reads and searches, and hands no task on.
+    expect(await read("explore.md")).toMatchObject({ use: ["agent"], tools: ["read", "grep", "find", "bash"] });
   });
 });
 

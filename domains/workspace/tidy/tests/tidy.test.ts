@@ -111,115 +111,129 @@ describe("makeTidy", () => {
   });
 });
 
+/**
+ * Each makes and removes worktrees with git, a process at a time, and waits up to 10 s for each step: well under a
+ * second on a laptop, but past vitest's 5 s on a loaded macOS runner.
+ */
+const PLUGIN_TIMEOUT = 60_000;
+
 describe("the plugin", () => {
-  it("removes a worktree when its last thread is archived or deleted, after a turn there ends, and restores it when one is unarchived", async () => {
-    const root = await repo();
-    const home = path.join(dir, "home");
-    await fs.mkdir(home);
-    let running: readonly string[] = [];
-    const agent = definePlugin({ id: "agent", provides: [Agent], layer: Layer.succeed(Agent, { running: Effect.sync(() => running) } as never) });
-    await Effect.runPromise(
-      Effect.scoped(
-        Effect.gen(function* () {
-          const core = yield* makeCore([pathsPlugin(home), sessionsFiles, workspaceLocal, agent, tidy], {
-            configs: { "workspace.local": { worktrees: path.join(dir, "trees") } },
-          });
-          const workspace = yield* core.run(Workspace);
-          const sessions = yield* core.run(Sessions);
-          const until = (what: string, done: () => Promise<boolean>) =>
-            Effect.promise(() =>
+  it(
+    "removes a worktree when its last thread is archived or deleted, after a turn there ends, and restores it when one is unarchived",
+    async () => {
+      const root = await repo();
+      const home = path.join(dir, "home");
+      await fs.mkdir(home);
+      let running: readonly string[] = [];
+      const agent = definePlugin({ id: "agent", provides: [Agent], layer: Layer.succeed(Agent, { running: Effect.sync(() => running) } as never) });
+      await Effect.runPromise(
+        Effect.scoped(
+          Effect.gen(function* () {
+            const core = yield* makeCore([pathsPlugin(home), sessionsFiles, workspaceLocal, agent, tidy], {
+              configs: { "workspace.local": { worktrees: path.join(dir, "trees") } },
+            });
+            const workspace = yield* core.run(Workspace);
+            const sessions = yield* core.run(Sessions);
+            const until = (what: string, done: () => Promise<boolean>) =>
+              Effect.promise(() =>
+                vi.waitFor(
+                  async () => {
+                    if (!(await done())) throw new Error(`waiting until ${what}`);
+                  },
+                  { timeout: 10_000, interval: 20 },
+                ),
+              );
+
+            const first = yield* workspace.createWorktree(root, { branch: "first" });
+            const second = yield* workspace.createWorktree(root, { branch: "second" });
+            const a = yield* sessions.create({ cwd: first.path });
+            const b = yield* sessions.create({ cwd: first.path });
+            const c = yield* sessions.create({ cwd: second.path });
+
+            // Archived, the last thread in it: gone, its branch kept. Unarchived: made again.
+            yield* sessions.mark(c.id, { archived: true });
+            yield* until("the second worktree is removed", async () => !(await exists(second.path)));
+            expect(sh(root, "branch", "--list", "second")).toContain("second");
+            yield* sessions.mark(c.id, { archived: false });
+            yield* until("the second worktree is made again", () => exists(second.path));
+
+            // One thread of two archived, and the other's turn running when it is archived too: kept until the turn ends.
+            const events = yield* core.run(Events);
+            const turn = (sessionId: string, phase: "start" | "end") =>
+              phase === "start"
+                ? events.publish(TurnStarted, { sessionId, turnId: "t", requestIds: [] })
+                : events.publish(TurnEnded, { sessionId, turnId: "t", usage: {} as never, reason: "done" as never });
+            yield* sessions.mark(a.id, { archived: true });
+            running = [b.id];
+            yield* turn(b.id, "start");
+            yield* sessions.mark(b.id, { archived: true });
+            // A later job, done in order, shows those two were: the first worktree is still there.
+            yield* sessions.mark(c.id, { archived: true });
+            yield* until("the second worktree is removed again", async () => !(await exists(second.path)));
+            expect(yield* Effect.promise(() => exists(first.path))).toBe(true);
+            running = [];
+            yield* turn(b.id, "end");
+            yield* until("the first worktree is removed once the turn ends", async () => !(await exists(first.path)));
+
+            // Made again to work in an archived thread, it is not removed when that thread's turn ends: only archiving does.
+            yield* workspace.restoreWorktree(first.path);
+            yield* turn(a.id, "start");
+            yield* turn(a.id, "end");
+            yield* sessions.mark(c.id, { archived: false });
+            yield* until("the second worktree is made again, after", () => exists(second.path));
+            expect(yield* Effect.promise(() => exists(first.path))).toBe(true);
+            yield* sessions.mark(c.id, { archived: true });
+            yield* until("the second worktree is removed again, after", async () => !(await exists(second.path)));
+
+            // Deleting the last thread of a worktree removes it too.
+            yield* sessions.mark(c.id, { archived: false });
+            yield* until("the second worktree is made again", () => exists(second.path));
+            yield* sessions.remove(c.id);
+            yield* until("the second worktree is removed with its last thread", async () => !(await exists(second.path)));
+          }),
+        ),
+      );
+    },
+    PLUGIN_TIMEOUT,
+  );
+
+  it(
+    "with removeOnArchive off, keeps worktrees whose threads are archived, and still makes one again on unarchiving",
+    async () => {
+      const root = await repo();
+      const home = path.join(dir, "home");
+      await fs.mkdir(home);
+      const agent = definePlugin({ id: "agent", provides: [Agent], layer: Layer.succeed(Agent, { running: Effect.succeed([]) } as never) });
+      await Effect.runPromise(
+        Effect.scoped(
+          Effect.gen(function* () {
+            const core = yield* makeCore([pathsPlugin(home), sessionsFiles, workspaceLocal, agent, tidy], {
+              configs: { "workspace.local": { worktrees: path.join(dir, "trees") }, "workspace.tidy": { removeOnArchive: false } },
+            });
+            const workspace = yield* core.run(Workspace);
+            const sessions = yield* core.run(Sessions);
+            const kept = yield* workspace.createWorktree(root, { branch: "kept" });
+            const gone = yield* workspace.createWorktree(root, { branch: "gone" });
+            const a = yield* sessions.create({ cwd: kept.path });
+            const b = yield* sessions.create({ cwd: gone.path });
+            yield* sessions.mark(b.id, { archived: true });
+            yield* workspace.removeWorktree(gone.path);
+            yield* sessions.mark(a.id, { archived: true });
+            // Unarchiving, done in order after that archiving, shows it was heard and left the worktree alone.
+            yield* sessions.mark(b.id, { archived: false });
+            yield* Effect.promise(() =>
               vi.waitFor(
                 async () => {
-                  if (!(await done())) throw new Error(`waiting until ${what}`);
+                  if (!(await exists(gone.path))) throw new Error("waiting until the removed worktree is made again");
                 },
                 { timeout: 10_000, interval: 20 },
               ),
             );
-
-          const first = yield* workspace.createWorktree(root, { branch: "first" });
-          const second = yield* workspace.createWorktree(root, { branch: "second" });
-          const a = yield* sessions.create({ cwd: first.path });
-          const b = yield* sessions.create({ cwd: first.path });
-          const c = yield* sessions.create({ cwd: second.path });
-
-          // Archived, the last thread in it: gone, its branch kept. Unarchived: made again.
-          yield* sessions.mark(c.id, { archived: true });
-          yield* until("the second worktree is removed", async () => !(await exists(second.path)));
-          expect(sh(root, "branch", "--list", "second")).toContain("second");
-          yield* sessions.mark(c.id, { archived: false });
-          yield* until("the second worktree is made again", () => exists(second.path));
-
-          // One thread of two archived, and the other's turn running when it is archived too: kept until the turn ends.
-          const events = yield* core.run(Events);
-          const turn = (sessionId: string, phase: "start" | "end") =>
-            phase === "start"
-              ? events.publish(TurnStarted, { sessionId, turnId: "t", requestIds: [] })
-              : events.publish(TurnEnded, { sessionId, turnId: "t", usage: {} as never, reason: "done" as never });
-          yield* sessions.mark(a.id, { archived: true });
-          running = [b.id];
-          yield* turn(b.id, "start");
-          yield* sessions.mark(b.id, { archived: true });
-          // A later job, done in order, shows those two were: the first worktree is still there.
-          yield* sessions.mark(c.id, { archived: true });
-          yield* until("the second worktree is removed again", async () => !(await exists(second.path)));
-          expect(yield* Effect.promise(() => exists(first.path))).toBe(true);
-          running = [];
-          yield* turn(b.id, "end");
-          yield* until("the first worktree is removed once the turn ends", async () => !(await exists(first.path)));
-
-          // Made again to work in an archived thread, it is not removed when that thread's turn ends: only archiving does.
-          yield* workspace.restoreWorktree(first.path);
-          yield* turn(a.id, "start");
-          yield* turn(a.id, "end");
-          yield* sessions.mark(c.id, { archived: false });
-          yield* until("the second worktree is made again, after", () => exists(second.path));
-          expect(yield* Effect.promise(() => exists(first.path))).toBe(true);
-          yield* sessions.mark(c.id, { archived: true });
-          yield* until("the second worktree is removed again, after", async () => !(await exists(second.path)));
-
-          // Deleting the last thread of a worktree removes it too.
-          yield* sessions.mark(c.id, { archived: false });
-          yield* until("the second worktree is made again", () => exists(second.path));
-          yield* sessions.remove(c.id);
-          yield* until("the second worktree is removed with its last thread", async () => !(await exists(second.path)));
-        }),
-      ),
-    );
-  });
-
-  it("with removeOnArchive off, keeps worktrees whose threads are archived, and still makes one again on unarchiving", async () => {
-    const root = await repo();
-    const home = path.join(dir, "home");
-    await fs.mkdir(home);
-    const agent = definePlugin({ id: "agent", provides: [Agent], layer: Layer.succeed(Agent, { running: Effect.succeed([]) } as never) });
-    await Effect.runPromise(
-      Effect.scoped(
-        Effect.gen(function* () {
-          const core = yield* makeCore([pathsPlugin(home), sessionsFiles, workspaceLocal, agent, tidy], {
-            configs: { "workspace.local": { worktrees: path.join(dir, "trees") }, "workspace.tidy": { removeOnArchive: false } },
-          });
-          const workspace = yield* core.run(Workspace);
-          const sessions = yield* core.run(Sessions);
-          const kept = yield* workspace.createWorktree(root, { branch: "kept" });
-          const gone = yield* workspace.createWorktree(root, { branch: "gone" });
-          const a = yield* sessions.create({ cwd: kept.path });
-          const b = yield* sessions.create({ cwd: gone.path });
-          yield* sessions.mark(b.id, { archived: true });
-          yield* workspace.removeWorktree(gone.path);
-          yield* sessions.mark(a.id, { archived: true });
-          // Unarchiving, done in order after that archiving, shows it was heard and left the worktree alone.
-          yield* sessions.mark(b.id, { archived: false });
-          yield* Effect.promise(() =>
-            vi.waitFor(
-              async () => {
-                if (!(await exists(gone.path))) throw new Error("waiting until the removed worktree is made again");
-              },
-              { timeout: 10_000, interval: 20 },
-            ),
-          );
-          expect(yield* Effect.promise(() => exists(kept.path))).toBe(true);
-        }),
-      ),
-    );
-  });
+            expect(yield* Effect.promise(() => exists(kept.path))).toBe(true);
+          }),
+        ),
+      );
+    },
+    PLUGIN_TIMEOUT,
+  );
 });

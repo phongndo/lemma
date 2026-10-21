@@ -13,10 +13,10 @@ A plugin replacing `sessions.files` runs `sessionsConformance` from `@lemma/sess
 
 What the contract offers in each of the [five shapes](../../docs/plugins.md#the-five-shapes):
 
-| Shape     | What the contract offers                                                                                                                          |
-| --------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Add       | Events: a `context` event tells the model something where it happened (an email, a reading); a `custom` one keeps a plugin's own data, unseen     |
-| Intercept | `SessionRemoveHook`: a session about to be deleted; `SessionCheckoutHook`: a session's leaf about to move                                         |
-| Observe   | `SessionAppended`, `SessionChanged`, `SessionCheckedOut`, `SessionRemoved`                                                                        |
-| Call      | `Sessions`: create, append, read a branch, check out, move an empty one, fork a branch into a new session, search; clients call `SessionChannels` |
-| Serve     | `Sessions`, with `serveSessions`: a plugin providing it replaces `sessions.files`                                                                 |
+| Shape     | What the contract offers                                                                                                                                                                                                                                                     |
+| --------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Add       | Events: a `context` event tells the model something where it happened (an email, a reading); a `custom` one keeps a plugin's own data, unseen                                                                                                                                |
+| Intercept | `SessionRemoveHook`: a session about to be deleted; `SessionCheckoutHook`: a session's leaf about to move                                                                                                                                                                    |
+| Observe   | `SessionAppended`, `SessionChanged`, `SessionCheckedOut`, `SessionRemoved`                                                                                                                                                                                                   |
+| Call      | `Sessions`: create, append, read a branch, check out, move an empty one, fork a branch into a new session, search; clients call `SessionChannels`. A session made as an agent of another names it (`SessionInfo.parent`, fixed when it is made: `create` and `fork` take it) |
+| Serve     | `Sessions`, with `serveSessions`: a plugin providing it replaces `sessions.files`                                                                                                                                                                                            |

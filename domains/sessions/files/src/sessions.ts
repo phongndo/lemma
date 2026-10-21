@@ -379,7 +379,8 @@ export const make = ({
         const createdAt = yield* Clock.currentTimeMillis;
         let id = randomId(ids, SESSION_ID_BYTES);
         while (entries.has(id)) id = randomId(ids, SESSION_ID_BYTES);
-        const header: Header = { type: "session", version: FORMAT_VERSION, id, cwd, createdAt };
+        const parent = options?.parent;
+        const header: Header = { type: "session", version: FORMAT_VERSION, id, cwd, createdAt, ...(parent === undefined ? {} : { parent }) };
         const file = sessionFile(root, cwd, createdAt, id);
         const line = encodeLine(header);
         const bytes = Buffer.byteLength(line);
@@ -610,7 +611,7 @@ export const make = ({
      * `Sessions.fork`: the branch ending at `eventId`, written whole into a new file at once (a temporary file, synced,
      * then linked into place), so a crash leaves the new session complete or absent, never part of it.
      */
-    const fork: Service["fork"] = (sessionId, eventId) =>
+    const fork: Service["fork"] = (sessionId, eventId, options) =>
       Effect.gen(function* () {
         const source = yield* opened(sessionId);
         if (!source.byId.has(eventId)) return yield* notFound(sessionId, `Event ${eventId} is not in session ${sessionId}`);
@@ -619,7 +620,8 @@ export const make = ({
         const createdAt = yield* Clock.currentTimeMillis;
         let id = randomId(ids, SESSION_ID_BYTES);
         while (entries.has(id)) id = randomId(ids, SESSION_ID_BYTES);
-        const header: Header = { type: "session", version: FORMAT_VERSION, id, cwd, createdAt };
+        const parent = options?.parent;
+        const header: Header = { type: "session", version: FORMAT_VERSION, id, cwd, createdAt, ...(parent === undefined ? {} : { parent }) };
         const file = sessionFile(root, cwd, createdAt, id);
         const text = [header, ...branch].map(encodeLine).join("");
         const written = yield* Effect.tryPromise({

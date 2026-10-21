@@ -39,6 +39,7 @@ import threadView from "@lemma/threads-view";
 import ask from "@lemma/tools-ask/web";
 import bash from "@lemma/tools-bash/web";
 import codemode from "@lemma/tools-codemode/web";
+import delegate from "@lemma/tools-delegate/web";
 import edit from "@lemma/tools-edit/web";
 import html from "@lemma/tools-html/web";
 import patch from "@lemma/tools-patch/web";
@@ -91,6 +92,7 @@ export const bundled: readonly Plugin[] = [
   patch,
   bash,
   codemode,
+  delegate,
   search,
   ask,
   html,

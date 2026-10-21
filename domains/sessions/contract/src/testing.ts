@@ -111,6 +111,24 @@ export function sessionsConformance(name: string, compose: (deletions: Deletions
         }),
       ));
 
+    test("a session made as an agent of another keeps its parent, whether created or forked; a plain fork has none", () =>
+      run((store) =>
+        Effect.gen(function* () {
+          const { id: parent } = yield* store.create({ cwd: "/work/a" });
+          const first = yield* store.append(parent, note("one"));
+          const agent = yield* store.create({ cwd: "/work/a", parent: { sessionId: parent, toolCallId: "call-1" } });
+          expect(agent.parent).toEqual({ sessionId: parent, toolCallId: "call-1" });
+          expect((yield* store.get(agent.id)).parent).toEqual({ sessionId: parent, toolCallId: "call-1" });
+          expect((yield* store.list()).find((info) => info.id === agent.id)?.parent).toEqual({ sessionId: parent, toolCallId: "call-1" });
+          const forked = yield* store.fork(parent, first.id, { parent: { sessionId: parent, toolCallId: "call-2/0" } });
+          expect(forked.parent).toEqual({ sessionId: parent, toolCallId: "call-2/0" });
+          expect((yield* store.get(forked.id)).parent).toEqual({ sessionId: parent, toolCallId: "call-2/0" });
+          // An agent's own fork is not an agent of its parent: the parent is what the fork names.
+          expect((yield* store.fork(agent.id, (yield* store.append(agent.id, note("two"))).id)).parent).toBeUndefined();
+          expect((yield* store.get(parent)).parent).toBeUndefined();
+        }),
+      ));
+
     test("a title event names the session", () =>
       run((store) =>
         Effect.gen(function* () {

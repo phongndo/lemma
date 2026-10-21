@@ -1,4 +1,5 @@
 import { MODES_PLUGIN, MODES_PLUGIN_FORMERLY } from "@lemma/agent";
+import type { ModeUse } from "@lemma/agent";
 import type { SessionEvent } from "@lemma/sessions";
 
 /**
@@ -11,12 +12,15 @@ import type { SessionEvent } from "@lemma/sessions";
  *   thinking: low
  *   tools: read, write, edit
  *   sections: "*", "!project-context"
+ *   use: thread, agent
  *   ---
  *   You help the user write. …
  *
  * `tools` and `sections` are lists of names, globs with `*`, or exclusions starting with `!`, applied in order: the
  * last that matches decides, and a name nothing matches is left out once anything is listed. Absent, everything
- * stays. Pure, so it is tested without a host, and shared with the web half (which names, describes, and picks).
+ * stays. `use` says where it is offered: `thread` (a new thread's mode), `agent` (an agent's a thread hands a task to),
+ * or both, as when absent. Pure, so it is tested without a host, and shared with the web half (which names,
+ * describes, and picks).
  */
 
 export interface Mode {
@@ -28,6 +32,8 @@ export interface Mode {
   readonly thinking?: string;
   readonly tools?: readonly string[];
   readonly sections?: readonly string[];
+  /** Where it is offered (`ModeUse`): absent, everywhere. */
+  readonly use?: readonly ModeUse[];
   /** Its body: a section of the system prompt; empty adds none. */
   readonly prompt: string;
   /** Where it was found: `bundled`, `user` (`~/.lemma/modes`), or `project` (`.lemma/modes` in the session's directory). */
@@ -72,6 +78,9 @@ export const parseMode = (name: string, text: string, source: Mode["source"]): M
   const thinking = text_("thinking");
   const tools = list("tools");
   const sections = list("sections");
+  // Words it does not know are left out; a list of none of them offers it nowhere new, so everywhere, as when absent.
+  const uses = list("use")?.filter((word): word is ModeUse => word === "thread" || word === "agent");
+  const use = uses === undefined || uses.length === 0 ? undefined : [...new Set(uses)];
   return {
     name,
     ...(description === undefined ? {} : { description }),
@@ -79,6 +88,7 @@ export const parseMode = (name: string, text: string, source: Mode["source"]): M
     ...(thinking === undefined ? {} : { thinking }),
     ...(tools === undefined ? {} : { tools }),
     ...(sections === undefined ? {} : { sections }),
+    ...(use === undefined ? {} : { use }),
     prompt: (block === null ? source_ : source_.slice(block[0].length)).trim(),
     source,
   };

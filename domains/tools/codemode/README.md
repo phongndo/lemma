@@ -91,7 +91,9 @@ codemode call's own output (`✓ bash 12ms {"command":"ls"}`), and the result's
   `display` tool (`html_render`); the call's result keeps what each such call
   showed (`details.displays`: its result and its input's `title`, not the rest
   of its input, which would hold a page twice), and the web half draws each as
-  that tool's own view does, where the reader sees it. The result is logged and
-  loaded by every client reading the thread, so a script shows at most 20
-  pages, 10 MiB together; a call past that shows nothing and rejects, saying
-  why.
+  that tool's own view does, where the reader sees it; a failed call too, when
+  its result still holds something for its view (an agent that failed). The
+  result is logged and loaded by every client reading the thread, so a script
+  shows at most 20 pages, 10 MiB together; a call past that shows nothing, but
+  answers as its tool did, since it may have done more than show (an agent's
+  work), and the result names it as not shown.

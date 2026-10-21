@@ -1,0 +1,40 @@
+{
+  "name": "@lemma/tools-delegate",
+  "version": "0.1.0",
+  "private": true,
+  "description": "The `delegate` tool: a task handed to an agent, a thread of its own working for this one; and how agents show in the chat, the thread card's lineage, and above the composer",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./web": "./src/web.tsx"
+  },
+  "scripts": {
+    "check": "tsrs --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@lemma/agent": "workspace:*",
+    "@lemma/contracts": "workspace:*",
+    "@lemma/core": "workspace:*",
+    "@lemma/llm": "workspace:*",
+    "@lemma/look": "workspace:*",
+    "@lemma/sessions": "workspace:*",
+    "@lemma/threads": "workspace:*",
+    "@lemma/tools": "workspace:*",
+    "@lemma/web": "workspace:*",
+    "effect": "4.0.5",
+    "solid-js": "1.9.17"
+  },
+  "devDependencies": {
+    "@lemma/agent-loop": "workspace:*",
+    "@lemma/sessions-files": "workspace:*",
+    "@lemma/tools-registry": "workspace:*",
+    "@types/node": "24.19.2",
+    "tsrs": "0.18.0-ts7.1.0-dev.20260929",
+    "vitest": "5.0.5"
+  },
+  "lemma": {
+    "host": "./src/index.ts",
+    "web": "./src/web.tsx"
+  }
+}

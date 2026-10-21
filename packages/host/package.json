@@ -58,6 +58,7 @@
     "@lemma/tools-ask": "workspace:*",
     "@lemma/tools-bash": "workspace:*",
     "@lemma/tools-codemode": "workspace:*",
+    "@lemma/tools-delegate": "workspace:*",
     "@lemma/tools-edit": "workspace:*",
     "@lemma/tools-html": "workspace:*",
     "@lemma/tools-lemma": "workspace:*",

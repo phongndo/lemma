@@ -129,14 +129,43 @@ export const workEntries = (items: readonly Item[], actionOf: ActionOf, least = 
 /** A tool call in a turn's work. */
 export type ToolBlock = Extract<Block, { kind: "tool" }>;
 
+/** Whether a tool's calls show the reader something outside the fold (its view's `display`), and while they run too (`live`). */
+export type Shows = (name: string) => { readonly live: boolean } | undefined;
+
 /**
  * The calls among a fold's `items` that show the reader something outside it (their view's `display`, which `shows`
- * tells), in order: those with a result, as a display is drawn for a call that has one. A failed attempt's calls never
- * ran, so they show nothing.
+ * tells), in order: those with a result, as a display is drawn for a call that has one, and those still running of a
+ * view drawn live. A failed attempt's calls never ran, so they show nothing.
  */
-export const displayedCalls = (items: readonly Item[], shows: (name: string) => boolean): ToolBlock[] =>
+export const displayedCalls = (items: readonly Item[], shows: Shows): ToolBlock[] =>
   items.flatMap((item) =>
     item.kind === "assistant"
-      ? item.blocks.filter((block): block is ToolBlock => block.kind === "tool" && block.result !== undefined && shows(block.call.name))
+      ? item.blocks.filter((block): block is ToolBlock => {
+          if (block.kind !== "tool") return false;
+          const view = shows(block.call.name);
+          return view !== undefined && (block.result !== undefined || view.live);
+        })
       : [],
   );
+
+/** A fold's displays as drawn: each call's own, or a run of one tool's calls as one (its view's `displays`). */
+export type DisplayEntry =
+  | { readonly kind: "one"; readonly key: string; readonly block: ToolBlock }
+  | { readonly kind: "many"; readonly key: string; readonly name: string; readonly blocks: readonly ToolBlock[] };
+
+/** `blocks` as drawn: two or more calls of a tool in a row as one entry when `grouped` says its view draws them so. */
+export const displayEntries = (blocks: readonly ToolBlock[], grouped: (name: string) => boolean): DisplayEntry[] => {
+  const entries: DisplayEntry[] = [];
+  for (let at = 0; at < blocks.length;) {
+    const block = blocks[at]!;
+    let end = at + 1;
+    if (grouped(block.call.name)) while (end < blocks.length && blocks[end]!.call.name === block.call.name) end++;
+    entries.push(
+      end - at > 1
+        ? { kind: "many", key: `many:${block.call.id}`, name: block.call.name, blocks: blocks.slice(at, end) }
+        : { kind: "one", key: block.call.id, block },
+    );
+    at = end;
+  }
+  return entries;
+};

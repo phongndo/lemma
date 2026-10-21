@@ -1,3 +1,4 @@
+import { IdenticonAvatar } from "./components/avatar.tsx";
 import { ConfigForm } from "./components/config-form.tsx";
 import { CopyButton } from "./components/copy-button.tsx";
 import { Dialog } from "./components/dialog.tsx";
@@ -11,6 +12,7 @@ import { SearchField } from "./components/search-field.tsx";
 import { Toggle } from "./components/toggle.tsx";
 import { ProviderLogoPart } from "@lemma/llm/web";
 import {
+  AvatarPart,
   ConfigFormPart,
   CopyButtonPart,
   DialogPart,
@@ -29,7 +31,7 @@ import styles from "./kit.css?inline";
 
 /**
  * The shared parts every view draws with: markdown, dialogs, menus, toggles,
- * copy buttons, setting rows, the config form, provider logos, icons, and file icons. The only plugin
+ * copy buttons, setting rows, the config form, provider logos, icons, file icons, and agents' avatars. The only plugin
  * that imports rendering components; everything else draws these parts, so
  * replacing one here (or adding one of its own from any plugin, as its items
  * are in the phase `default`) changes it everywhere.
@@ -53,5 +55,6 @@ export default defineWebPlugin({
     add(ProviderLogoPart, ProviderLogo);
     add(IconPart, DefaultIcon);
     add(FileIconPart, PlainFileIcon);
+    add(AvatarPart, IdenticonAvatar);
   },
 });
