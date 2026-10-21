@@ -93,10 +93,11 @@ export class EventBus implements Context.Service.Shape<typeof Events> {
           const environment = own.capture(context);
           const subscription = yield* this.subscribe(entry, owner, options, scope);
           owned.add(entry);
+          const span = { attributes: { ...attributes(identity), "event.name": event.name } };
           const consume = Queue.take(subscription.queue).pipe(
             Effect.flatMap((payload) =>
               Effect.suspend(() => observer(payload as P)).pipe(
-                Effect.withSpan("core.observe", { attributes: { ...attributes(identity), "event.name": event.name } }, { captureStackTrace: false }),
+                Effect.withSpan("core.observe", span, { captureStackTrace: false }),
                 Effect.catchCause((cause) =>
                   Cause.hasInterruptsOnly(cause)
                     ? Effect.failCause(cause)
@@ -136,19 +137,24 @@ export class EventBus implements Context.Service.Shape<typeof Events> {
       if (this.closed) return Effect.void;
       const entry = this.entries.get(event.name);
       if (!entry || entry.token !== event || entry.subscriptions.length === 0) return Effect.void;
-      const subscriptions = entry.subscriptions;
-      // Sliding and dropping offers never wait; only "suspend" subscriptions need their own fiber.
+      // Offered in place: a queue with room takes it, and a sliding or dropping one never waits. Only a full "suspend"
+      // queue does, each on a fiber of its own, until it has room or its observer goes.
+      let full: Subscription[] | undefined;
+      for (const subscription of entry.subscriptions) {
+        if (subscription.done || Queue.offerUnsafe(subscription.queue, payload) || !subscription.suspend) continue;
+        (full ??= []).push(subscription);
+      }
+      if (full === undefined) return Effect.void;
       return Effect.forEach(
-        subscriptions,
+        full,
         (subscription) =>
           Effect.suspend(() => {
             if (subscription.done) return Effect.void;
-            const offer = Queue.offer(subscription.queue, payload);
-            return (subscription.suspend ? Effect.race(offer, Deferred.await(subscription.closed)) : offer).pipe(
+            return Effect.race(Queue.offer(subscription.queue, payload), Deferred.await(subscription.closed)).pipe(
               Effect.catchCause((cause) => (subscription.done ? Effect.void : Effect.failCause(cause))),
             );
           }),
-        { concurrency: subscriptions.some((subscription) => subscription.suspend) ? "unbounded" : 1, discard: true },
+        { concurrency: "unbounded", discard: true },
       );
     });
 
