@@ -718,6 +718,9 @@ export function runTurn(services: TurnServices, settings: TurnSettings, input: T
         Effect.as(undefined),
         Effect.catch((error) => Effect.succeed(error.message)),
       );
+      // Observers hear the end of the reply before the turn goes on to log it: a provider's last delta and its `done`
+      // often come together, and the observers of both would otherwise wait for the answer's logging, then its tools.
+      yield* Effect.yieldNow;
       const timing = { startedAt, ...(firstTokenAt === undefined ? {} : { firstTokenAt }), endedAt: yield* Clock.currentTimeMillis };
       const answer = {
         ...(answered?.response === undefined ? {} : { response: answered.response }),
