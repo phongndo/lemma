@@ -12,7 +12,7 @@ import type { ConfigUpdate } from "./config.ts";
 import { deferral as deferralOf } from "./deferral.ts";
 import type { PathsService } from "./paths.ts";
 import type { HostControlHandle } from "./runtime.ts";
-import type { CodeOwner } from "./stall.ts";
+import type { CodeOwner } from "./stall-owners.ts";
 import { userPluginsDir } from "./web.ts";
 
 /*
