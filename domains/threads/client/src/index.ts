@@ -4,14 +4,13 @@ import { HostError } from "@lemma/contracts";
 import { AgentChannels } from "@lemma/agent";
 import { branchOf, SessionChannels, NewThreadRoute, ThreadRoute } from "@lemma/sessions";
 import { isRoute } from "@lemma/router";
-import type { AgentActivity, AgentView, PromptContent, QueuedPrompt, TurnOptions } from "@lemma/agent";
+import type { AgentActivity, PromptContent, QueuedPrompt, TurnOptions } from "@lemma/agent";
 import type { SessionEvent, SessionInfo, SessionMarks, SessionsChange } from "@lemma/sessions";
 import {
   appendLog,
   appendOutput,
   applyDelta,
   applySessionsChange,
-  beginJoin,
   emptyLive,
   endTurn,
   isBlank,
@@ -324,49 +323,41 @@ export default defineWebPlugin({
     });
 
     /**
-     * What the agent has of the open thread beyond its log (a turn running
-     * since before this page saw it: its output so far; and the queue), so a
-     * thread opened or reconnected midway shows it all. The numbered deltas
-     * that follow continue from it: they are held while it is on its way and
-     * replayed over it. Fetched beside the log, it may be older than the log
-     * that arrived first, so it is checked against the log as it stands. Only
-     * the latest view asked for is applied.
+     * The open thread's model and tool output (`agent.output`). It opens, and
+     * opens again after a reconnect, with what the agent has of the thread
+     * beyond its log (a turn running since before this page saw it: its output
+     * so far; and the queue), so a thread opened or reconnected midway shows it
+     * all, and the numbered deltas that follow go on from it. That may be older
+     * than the log that arrived first, so it is checked against the log as it
+     * stands.
      */
-    let joins = 0;
-    const joinTurn = (sessionId: string) => {
-      const join = ++joins;
-      // What arrived before asking is older than the view: it applies as usual. What arrives from now is held.
-      flushDeltas();
-      updateLive(beginJoin);
-      const done = (view: AgentView | undefined) =>
-        batch(() => {
-          if (joins !== join) return;
-          flushDeltas();
-          updateLive((state) => joinLive(state, view, untrack(events)));
-          if (view !== undefined) reportQueue({ queue: view.queue, revision: view.queueRevision });
-        });
-      return client.channel.call(AgentChannels.view, { sessionId }).then(done, () => done(undefined));
-    };
-
-    plugin.onCleanup(
-      client.follow(AgentChannels.activity, undefined, (activity) => {
-        if (activity.type === "delta" || activity.type === "tool-output") {
-          if (activity.sessionId !== activeId()) return;
-          deltas.push(activity);
+    const followOutput = (sessionId: string) =>
+      client.follow(AgentChannels.output, { sessionId }, (element) => {
+        if (element.type !== "subscribed") {
+          deltas.push(element);
           if (deltas.length >= QUEUE_LIMIT) flushDeltas();
           else frame ??= requestAnimationFrame(flushDeltas);
           return;
         }
-        // Everything else sees the deltas that came before it.
+        const { view } = element;
+        batch(() => {
+          // What streamed before it is older: it applies first.
+          flushDeltas();
+          updateLive((state) => joinLive(state, view, untrack(events)));
+          if (view !== undefined) reportQueue({ queue: view.queue, revision: view.queueRevision });
+        });
+      });
+
+    // Every thread's turns and queue; only the open thread's output, on a stream of its own (`followOutput`).
+    plugin.onCleanup(
+      client.follow(AgentChannels.activity, { output: false }, (activity) => {
+        // What the open thread streamed before it comes first.
         flushDeltas();
         switch (activity.type) {
-          case "subscribed": {
-            // Heard from now on; what came before is the turns running now, and what the agent has of the open thread.
+          case "subscribed":
+            // Heard from now on; what came before is the turns running now.
             setRunning(activity.running);
-            const id = activeId();
-            if (id !== undefined) void joinTurn(id);
             return;
-          }
           case "turn-started":
             setRunning(trackTurn({ running: running(), ended: endedTurns }, activity).running);
             return;
@@ -384,18 +375,22 @@ export default defineWebPlugin({
       }),
     );
 
-    /** The open thread's `sessions.log`. */
+    /** The open thread's `sessions.log`, and its `agent.output`. */
     let stopLog: (() => void) | undefined;
-    plugin.onCleanup(() => stopLog?.());
+    let stopOutput: (() => void) | undefined;
+    plugin.onCleanup(() => {
+      stopLog?.();
+      stopOutput?.();
+    });
     /** Settles once the active thread's log has first loaded. */
     let opened: Promise<void> = Promise.resolve();
     /** Follows the log of the thread the address names, and what the agent has of it, in place of the last one's. */
     const open = (sessionId: string | undefined) => {
       stopLog?.();
-      stopLog = undefined;
-      // What streamed, and what the agent was asked for, belong to the thread left.
+      stopOutput?.();
+      stopLog = stopOutput = undefined;
+      // What streamed belongs to the thread left.
       deltas = [];
-      joins++;
       batch(() => {
         setEvents([]);
         setLog({ loaded: sessionId === undefined });
@@ -461,7 +456,7 @@ export default defineWebPlugin({
       preloaded.delete(sessionId);
       if (fresh(warm)) warm!.events.then(follow, () => follow([]));
       else follow([]);
-      void joinTurn(sessionId);
+      stopOutput = followOutput(sessionId);
     };
     createEffect(on(activeId, open));
 

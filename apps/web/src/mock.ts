@@ -1718,9 +1718,17 @@ export const createMockHost = (): Host => {
       return true;
     }),
     serveCall("agent.loop", AgentChannels.view, async ({ sessionId }) => view(sessionId)),
-    serveStream("agent.loop", AgentChannels.activity, (_, send) => {
+    serveStream("agent.loop", AgentChannels.activity, (payload, send) => {
       send({ type: "subscribed", running: [...running] });
-      return activity.subscribe(send);
+      return activity.subscribe((element) => {
+        if (payload?.output !== false || (element.type !== "delta" && element.type !== "tool-output")) send(element);
+      });
+    }),
+    serveStream("agent.loop", AgentChannels.output, ({ sessionId }, send) => {
+      send({ type: "subscribed", view: view(sessionId) });
+      return activity.subscribe((element) => {
+        if ((element.type === "delta" || element.type === "tool-output") && element.sessionId === sessionId) send(element);
+      });
     }),
 
     serveCall("llm.pi-ai", LlmChannels.providers, async () => providers.slice()),
