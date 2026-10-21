@@ -9,7 +9,7 @@ import type { SessionInfo, SessionMarks } from "@lemma/sessions";
 import { withKeys } from "@lemma/web/keys";
 import { loadJson, recordOf, save } from "@lemma/web/storage";
 import { dragEdge } from "@lemma/web/drag";
-import { ActionIds, Actions, shownKeys } from "@lemma/actions";
+import { ActionIds, Actions, shownKeysOf } from "@lemma/actions";
 import { sessionTitle, ThreadActions, Threads, ThreadWaits, SidebarRowPart, SidebarRow, waitingOn } from "@lemma/threads";
 import { ActionMenu, Layout, SidebarActions, SidebarFooter, SidebarRegion } from "@lemma/frame";
 import type { LayoutService } from "@lemma/frame";
@@ -570,10 +570,7 @@ function SortableThreads(props: {
 
 function Sidebar(props: { deps: Deps; onPick: () => void }) {
   const { threads, slots, webPlugins, layout } = props.deps;
-  const keysOf = (id: string) => {
-    const action = slots.get(Actions, id);
-    return action === undefined ? undefined : shownKeys(action, webPlugins.list());
-  };
+  const keysOf = (id: string) => shownKeysOf(slots, webPlugins.list(), id);
   const row = rowOf(props.deps, props.onPick);
   const [archivedOpen, setArchivedOpen] = createSignal(loadJson(ARCHIVED_OPEN_KEY, false, (value): value is boolean => typeof value === "boolean"));
   const toggleArchived = () => {
@@ -959,10 +956,7 @@ export default defineWebPlugin({
     });
 
     // Its head's buttons, across from the toggle: search, in the palette's thread search, and a new thread.
-    const keysOf = (id: string) => {
-      const action = slots.get(Actions, id);
-      return action === undefined ? undefined : shownKeys(action, webPlugins.list());
-    };
+    const keysOf = (id: string) => shownKeysOf(slots, webPlugins.list(), id);
     const newThread = plugin.action("start a new thread", () => threads.newThread());
     slots.add(SidebarActions, {
       id: "sidebar.search",

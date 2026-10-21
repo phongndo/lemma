@@ -1,5 +1,19 @@
 import { describe, expect, test } from "vitest";
-import { EMPTY, freshId, moved, onlyTab, pruned, readPanes, toggled, withPane, withTab, withoutRightOf, withoutTab, withoutTabs } from "../src/pane.ts";
+import {
+  EMPTY,
+  freshId,
+  moved,
+  onlyTab,
+  pruned,
+  readPanes,
+  shareOf,
+  toggled,
+  withPane,
+  withTab,
+  withoutRightOf,
+  withoutTab,
+  withoutTabs,
+} from "../src/pane.ts";
 import type { PaneState, Tab } from "../src/pane.ts";
 
 const tab = (id: string, view = id.split("-")[0]!): Tab => ({ id, view });
@@ -84,11 +98,36 @@ describe("moving a tab", () => {
 });
 
 describe("toggling", () => {
-  test("opens at the tab last shown, else the first, else empty; closing leaves the page to the chat", () => {
+  test("opens at the tab last shown, else the first; closing leaves the page to the chat", () => {
     expect(toggled({ open: false, tabs: [tab("trace-a"), tab("browser-b")], active: "browser-b" })).toMatchObject({ open: true, active: "browser-b" });
     expect(toggled({ open: false, tabs: [tab("trace-a")] })).toMatchObject({ open: true, active: "trace-a" });
-    expect(toggled(EMPTY)).toMatchObject({ open: true, active: undefined });
     expect(toggled({ ...open("trace-a"), maximized: true })).toMatchObject({ open: false, maximized: undefined });
+  });
+
+  test("never opens a pane with no tab to show", () => {
+    expect(toggled(EMPTY)).toEqual(EMPTY);
+    expect(toggled({ open: false, tabs: [tab("todo-x")] }, (each) => each.view !== "todo")).toMatchObject({ open: false });
+  });
+});
+
+describe("its width", () => {
+  const least = { pane: 280, chat: 360 };
+
+  test("is its share of the page", () => {
+    expect(shareOf(500, 1000, least)).toBe(0.5);
+  });
+
+  test("leaves the chat its least, and keeps its own", () => {
+    expect(shareOf(900, 1000, least)).toBe(0.64);
+    expect(shareOf(100, 1000, least)).toBe(0.28);
+  });
+
+  test("keeps its own least when the page is too narrow for both", () => {
+    expect(shareOf(400, 500, least)).toBe(0.56);
+  });
+
+  test("is none for a page with no width", () => {
+    expect(shareOf(400, 0, least)).toBeUndefined();
   });
 });
 
