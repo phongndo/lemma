@@ -1,7 +1,7 @@
 import type { ConfigField, ConfigValues } from "@lemma/contracts";
 import { definePart, partView } from "@lemma/web";
 import type { JSX } from "solid-js";
-import { ConfigFormFallback, IconFallback, SearchFieldFallback, SegmentedFallback, ToggleFallback } from "./fallbacks.tsx";
+import { ConfigFormFallback, IconFallback, PopoverFallback, SearchFieldFallback, SegmentedFallback, ToggleFallback } from "./fallbacks.tsx";
 
 /*
  * Parts: the pieces plugins draw with, and the pieces of the big views. Each
@@ -60,7 +60,7 @@ export interface PopoverProps {
 }
 
 /** A button that opens a menu of `menuitem`/`option` elements; an item whose `aria-keyshortcuts` is a letter is picked by that letter. */
-export const PopoverPart = definePart<PopoverProps>("popover");
+export const PopoverPart = definePart<PopoverProps>("popover", PopoverFallback);
 
 export interface SearchFieldProps {
   readonly value: string;
