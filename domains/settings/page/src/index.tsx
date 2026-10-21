@@ -1,16 +1,16 @@
 import { For, Show, createEffect, createMemo, createSignal, on, onCleanup, onMount, untrack } from "solid-js";
-import { withKeys } from "@lemma/web/keys";
+import { formatKeys, withKeys } from "@lemma/web/keys";
 import { shownKeysOf, Actions } from "@lemma/actions";
 import { filterGroups } from "./settings.ts";
 import type { EntryGroup } from "./settings.ts";
 import { Layout, SidebarFooter, SidebarRegion } from "@lemma/frame";
 import { NewThreadRoute } from "@lemma/sessions";
-import { SectionIds, Settings, SETTINGS_CONTRACT, SettingsGroups, SettingsRoute, SettingsSections } from "@lemma/settings";
+import { SectionIds, Settings, SETTINGS_CONTRACT, SettingsGroups, SettingsMenu, SettingsRoute, SettingsSections } from "@lemma/settings";
 import { PromptCommands } from "@lemma/threads";
 import { Pages, Router, Slots, WebPlugins, defineWebPlugin, Contained } from "@lemma/web";
 import type { SettingsEntry, SettingsSection } from "@lemma/settings";
 import type { SlotItem, SlotsService } from "@lemma/web";
-import { ArrowLeftIcon, GearIcon, SearchIcon, SidebarIcon, SlidersIcon, XIcon } from "@lemma/look";
+import { ArrowLeftIcon, GearIcon, Popover, SearchIcon, SidebarIcon, SlidersIcon, XIcon } from "@lemma/look";
 import styles from "./settings.css?inline";
 
 type Section = SlotItem<SettingsSection>;
@@ -296,29 +296,88 @@ export default defineWebPlugin({
       run: () => open("general"),
     });
     // The sidebar's foot: the way to settings, marked with how many need attention, and opening at the first that does.
+    // While a plugin adds to its menu (`SettingsMenu`), it opens that menu instead, with Settings last.
     const attention = () => {
       const found = slots.list(SettingsSections).find((candidate) => candidate.badge?.() !== undefined);
       return found === undefined ? undefined : { id: found.id, title: found.title, badge: found.badge!()! };
     };
     const openKeys = () => shownKeysOf(slots, webPlugins.list(), "settings.open");
+    const toggle = () => {
+      if (section() !== undefined) open(undefined);
+      else open(attention()?.id ?? SectionIds.general);
+    };
+    const menu = () => slots.list(SettingsMenu).filter((item) => item.when?.() ?? true);
+    const face = () => menu().find((item) => item.face !== undefined);
+    const name = () => (face() === undefined ? "Settings" : `${face()!.face!.label()} · Settings`);
+    const named = (name: string) => (attention() === undefined ? name : `${name} · ${attention()!.title}: ${attention()!.badge}`);
+    const Badge = () => <Show when={attention()}>{(shown) => <span class="count-badge">{Number.parseInt(shown().badge, 10) || "!"}</span>}</Show>;
     slots.add(SidebarFooter, {
       id: "settings",
       component: (props) => (
-        <button
-          class="icon-button with-badge"
-          classList={{ active: section() !== undefined }}
-          aria-label="Settings"
-          aria-pressed={section() !== undefined}
-          data-tip={withKeys(attention() === undefined ? "Settings" : `Settings · ${attention()!.title}: ${attention()!.badge}`, openKeys())}
-          onClick={() => {
-            if (section() !== undefined) open(undefined);
-            else open(attention()?.id ?? SectionIds.general);
-            props.onPick();
-          }}
+        <Show
+          when={menu().length > 0}
+          fallback={
+            <button
+              class="icon-button with-badge"
+              classList={{ active: section() !== undefined }}
+              aria-label="Settings"
+              aria-pressed={section() !== undefined}
+              data-tip={withKeys(named("Settings"), openKeys())}
+              onClick={() => {
+                toggle();
+                props.onPick();
+              }}
+            >
+              <GearIcon />
+              <Badge />
+            </button>
+          }
         >
-          <GearIcon />
-          <Show when={attention()}>{(shown) => <span class="count-badge">{Number.parseInt(shown().badge, 10) || "!"}</span>}</Show>
-        </button>
+          <Popover
+            label={name()}
+            tip={named(name())}
+            triggerClass={`icon-button with-badge settings-trigger${section() === undefined ? "" : " active"}`}
+            menuClass="settings-menu"
+            placement="top-start"
+            trigger={
+              <>
+                <Show when={face()} keyed fallback={<GearIcon />}>
+                  {(item) => <Contained slot={SettingsMenu} item={item} component={item.face!.icon} />}
+                </Show>
+                <Badge />
+              </>
+            }
+          >
+            {(close) => (
+              <>
+                <For each={menu()}>
+                  {(item, index) => (
+                    <>
+                      <Show when={index() > 0}>
+                        <div class="menu-sep" role="separator" />
+                      </Show>
+                      <Contained slot={SettingsMenu} item={item} component={item.component} props={{ close }} />
+                    </>
+                  )}
+                </For>
+                <div class="menu-sep" role="separator" />
+                <button
+                  class="menu-item"
+                  role="menuitem"
+                  onClick={() => {
+                    close();
+                    toggle();
+                    props.onPick();
+                  }}
+                >
+                  <GearIcon />
+                  <span class="menu-label">Settings</span>
+                  <Show when={openKeys()}>{(keys) => <span class="menu-hint">{formatKeys(keys())}</span>}</Show>
+                </button>
+              </>
+            )}
+          </Popover>
+        </Show>
       ),
     });
     slots.add(PromptCommands, {

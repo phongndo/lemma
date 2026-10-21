@@ -44,6 +44,25 @@ export interface SettingsSection {
 
 export const SettingsSections = defineSlot<SettingsSection>("settings.sections");
 
+/**
+ * What the settings button at the sidebar's foot offers beside settings: the profiles to switch to, a check for
+ * updates. While no item shows, the button opens settings; while one does, it opens a menu of their rows, each
+ * item's between separators, in order, with Settings last.
+ */
+export interface SettingsMenuItem {
+  /** Shown while this returns true; always when absent. Reactive. */
+  readonly when?: Accessor<boolean>;
+  /**
+   * What the button shows instead of the gear while this item shows, and what it calls itself before "Settings" (a
+   * profile's avatar, and its name). The first item showing that has one gives it.
+   */
+  readonly face?: { readonly icon: Component; readonly label: Accessor<string> };
+  /** Its rows of the menu: `menu-item`s (role `menuitem` or `menuitemradio`), which call `close` when picked. */
+  readonly component: Component<{ readonly close: () => void }>;
+}
+
+export const SettingsMenu = defineSlot<SettingsMenuItem>("settings.menu");
+
 export interface SettingsEntry {
   /** Everything a search should match. */
   readonly text: string;
