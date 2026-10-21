@@ -19,7 +19,7 @@ Use:
 - a plugin's README for its contract and rationale when changing that plugin;
 - [the web app's AGENTS.md](apps/web/AGENTS.md) when changing the web app;
 - [Configuration](docs/configuration.md) for config files, turning plugins on and off, and project trust; and
-- [Development](docs/development.md) for the dev shell, checks, and git hooks.
+- [Development](docs/development.md) for the dev shell, checks, git hooks, and releases.
 
 ## Design
 

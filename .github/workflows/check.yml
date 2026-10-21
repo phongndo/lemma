@@ -111,6 +111,22 @@ jobs:
           path: ${{ runner.temp }}/metrics
           retention-days: 90
 
+  # The release archive for Linux on x64, installed and run outside the checkout (scripts/dist-check.ts), so a change
+  # that breaks a release fails here rather than in the nightly; the archive is kept a week, to try a change with.
+  dist:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: ./.github/actions/dev-shell
+      - run: nix develop -c pnpm dist
+      - run: nix develop -c pnpm dist:check
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: lemma-linux-x64
+          path: dist/
+          retention-days: 7
+
   # The web app's replaceability, checked on its real composition in Chromium (apps/web/AGENTS.md); in two shares, as
   # its lanes keep a runner's cores busy.
   ui:
@@ -140,7 +156,7 @@ jobs:
   # split, or renamed without changing the rule. A skipped required job would count as passing; this one never skips.
   passed:
     if: always()
-    needs: [check, test, macos, packages, ui]
+    needs: [check, test, macos, packages, dist, ui]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:

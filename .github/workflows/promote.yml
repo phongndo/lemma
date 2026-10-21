@@ -1,0 +1,52 @@
+name: Promote
+
+# Makes a nightly the stable release (docs/development.md#releases): the release the installer's default channel
+# installs, as GitHub's latest. Nothing is built: stable users get the files nightly users ran. Its notes are rewritten
+# to cover everything since the stable release before it.
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "The nightly to promote, as 0.2.7; the newest when empty"
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: promote
+  cancel-in-progress: false
+
+jobs:
+  promote:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+      - shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          if [[ -n "$VERSION" ]]; then
+            tag="v${VERSION#v}"
+          else
+            tag=$(gh release list --exclude-drafts --limit 1 --json tagName --jq '.[0].tagName // empty')
+            [[ -n "$tag" ]] || { echo "::error::No nightly is published"; exit 1; }
+          fi
+          prerelease=$(gh release view "$tag" --json isPrerelease --jq .isPrerelease) || { echo "::error::$tag is not a release"; exit 1; }
+          [[ "$prerelease" == true ]] || { echo "::error::$tag is a stable release already"; exit 1; }
+          stable=$(gh release view --json tagName --jq .tagName 2>/dev/null || true)
+          if [[ -n "$stable" ]]; then
+            [[ "$(printf '%s\n%s\n' "${stable#v}" "${tag#v}" | sort -V | tail -n 1)" == "${tag#v}" ]] ||
+              { echo "::error::$tag is older than the stable release, $stable"; exit 1; }
+            gh api "repos/$GH_REPO/releases/generate-notes" -f tag_name="$tag" -f previous_tag_name="$stable" --jq .body > "$RUNNER_TEMP/notes.md"
+            gh release edit "$tag" --prerelease=false --latest --notes-file "$RUNNER_TEMP/notes.md"
+          else
+            gh release edit "$tag" --prerelease=false --latest
+          fi
+          echo "::notice::$tag is the stable release"

@@ -7,7 +7,24 @@ research, or anything a profile of yours describes.
 The plugins are written against a runtime the host and the web app provide, so
 a plugin of yours stands where a bundled one does.
 
-Lemma runs from a checkout and is under active development.
+Lemma is under active development: while its version is 0.x, a release may
+change what plugins are written against.
+
+## Install
+
+On macOS (Apple silicon) or Linux (x64 or arm64):
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/phongndo/lemma/main/scripts/install.sh | sh
+cd your-project
+lemma serve
+```
+
+`lemma serve` starts the host and opens the web app, where you log in to a
+provider. That installs the stable release; `… | LEMMA_CHANNEL=nightly sh`
+installs the newest build of `main`. [Installation](docs/installation.md)
+covers channels, updating, and removing a release;
+[Development](docs/development.md) running Lemma from a checkout.
 
 ## Principles
 
@@ -26,6 +43,7 @@ Lemma runs from a checkout and is under active development.
 
 ## Documentation
 
+- [Installation](docs/installation.md): install a release, update it, and remove it
 - [Usage](docs/usage.md): run the host, the web app, the desktop app, and the CLI
 - [Configuration](docs/configuration.md): config files, plugins, project trust, and providers
 - [Remote access](docs/remote.md): run the host on one machine and use it from another
@@ -36,5 +54,9 @@ Lemma runs from a checkout and is under active development.
 - [CLI](apps/cli/README.md): `lemma`, for people and agents
 - [Architecture](docs/architecture.md): packages, plugins, the runtime, and the session log
 - [Kernel design](packages/core/DESIGN.md): the plugin kernel's rationale and limits
-- [Development](docs/development.md): dev shell, checks, and git hooks
+- [Development](docs/development.md): dev shell, checks, git hooks, and releases
 - [App icons](assets/brand/README.md): shared light and dark artwork
+
+## License
+
+[MIT](LICENSE)

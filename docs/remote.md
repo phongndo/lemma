@@ -18,23 +18,25 @@ The web app comes from the host, so it always matches.
 
 ## On the server
 
-Build the web app once (and after updating the checkout), then keep the host
-running as a user service, so it comes back after a crash or a reboot. Turns a
-crash or a restart cut off resume when it does, and queued prompts run on (see
-the [agent plugin](../domains/agent/loop/README.md#durability)):
+[Install](installation.md) a release, then keep the host running as a user
+service, so it comes back after a crash or a reboot. Turns a crash or a restart
+cut off resume when it does, and queued prompts run on (see the [agent
+plugin](../domains/agent/loop/README.md#durability)):
 
 ```sh
-nix develop -c pnpm --filter @lemma/web-app build
-nix develop -c pnpm lemma service install   # a systemd user unit, or a launchd agent, running `lemma serve`
-nix develop -c pnpm lemma service           # installed, enabled, running
-loginctl enable-linger $USER                # Linux: keep it running without a login session, from boot
+lemma service install          # a systemd user unit, or a launchd agent, running `lemma serve`
+lemma service                  # installed, enabled, running
+loginctl enable-linger $USER   # Linux: keep it running without a login session, from boot
 ```
 
 `lemma service install --print` shows the definition without writing it. It
-names this checkout's `node` and `lemma`, which under Nix live in the store and
-may be garbage-collected: on NixOS and nix-darwin, declare the service in the
-system configuration instead (`systemd.user.services`, `launchd.user.agents`)
-from what `--print` shows. `lemma stop` stops a host the service runs through
+names the installed release's `node` and `lemma`: run it again after updating
+([installation](installation.md#updating)). From a checkout, `nix develop -c
+pnpm lemma service install` runs the checkout's home, `~/.lemma-dev`, unless
+`LEMMA_HOME` names another, on a `node` that lives in the Nix store and may be
+garbage-collected: on NixOS and nix-darwin, declare that service in the system
+configuration instead (`systemd.user.services`, `launchd.user.agents`) from
+what `--print` shows. `lemma stop` stops a host the service runs through
 the service manager; `lemma logs` shows what it printed.
 
 Keep the transport on loopback (its default `host`) and let Tailscale serve it to

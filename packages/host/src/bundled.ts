@@ -47,8 +47,13 @@ export const optIn: ReadonlySet<string> = new Set(["context.prune"]);
 /** The web app build the transport serves when no `staticDir` is configured. */
 export const webDist = fileURLToPath(new URL("../../../apps/web/dist", import.meta.url));
 
-/** How the agent runs this checkout's `lemma` CLI from its shell; `node` is on PATH wherever the host runs. */
-export const cliCommand = `node --conditions=lemma-source ${fileURLToPath(new URL("../../../apps/cli/src/main.ts", import.meta.url))}`;
+const shellWord = (word: string) => (/^[\w@%+=:,./-]+$/.test(word) ? word : `'${word.replaceAll("'", "'\\''")}'`);
+
+/**
+ * How the agent runs the `lemma` CLI beside this host from its shell: on the Node.js the host runs on, which a release
+ * carries and need not put on PATH; a host in the desktop app runs on Electron, so its agent uses the `node` on PATH.
+ */
+export const cliCommand = `${process.versions.electron === undefined ? shellWord(process.execPath) : "node"} --conditions=lemma-source ${shellWord(fileURLToPath(new URL("../../../apps/cli/src/main.ts", import.meta.url)))}`;
 
 /**
  * Everything a fresh install runs. What the host provides itself (`Paths`,
