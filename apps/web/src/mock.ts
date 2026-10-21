@@ -1808,23 +1808,51 @@ export const createMockHost = (): Host => {
   /** What the bundled plugins serve, as they serve it (`serveSessions`, `serveAgent`, `serveLlm`, `serveWorkspace`, `serveFiles`, `serveCommands`). */
   const integrations = createIntegrationsMock();
   let profiles: readonly ProfileInfo[] = [
-    { name: "default", default: true, current: true, running: true, port: 7433, avatar: { kind: "pattern", seed: "default" } },
+    { name: "default", default: true, current: true, running: true, port: 7433, home: "/home/me/.lemma", avatar: { kind: "pattern", seed: "default" } },
   ];
+  /** Changes the profile `name` as `change` says, as the plugin keeps what it is given. */
+  const changeProfile = (name: string, change: (profile: ProfileInfo) => ProfileInfo) => {
+    const profile = profiles.find((candidate) => candidate.name === name);
+    if (profile === undefined) throw new HostError({ code: "NotFound", subject: name, message: `No profile "${name}"` });
+    const changed = change(profile);
+    profiles = profiles.map((candidate) => (candidate === profile ? changed : candidate));
+    return changed;
+  };
   const served: Served[] = [
     // This machine's profiles: the default alone, as for anyone who has made none, until one is made here.
     serveCall("profiles.switcher", ProfileChannels.list, async () => profiles),
-    serveCall("profiles.switcher", ProfileChannels.create, async ({ name }) => {
+    serveCall("profiles.switcher", ProfileChannels.create, async ({ name, title }) => {
       if (profiles.some((profile) => profile.name === name)) throw new HostError({ code: "Exists", message: `A profile "${name}" is there already` });
-      const made: ProfileInfo = { name, default: false, current: false, running: false, port: 7433 + profiles.length, avatar: { kind: "pattern", seed: name } };
+      const made: ProfileInfo = {
+        name,
+        ...(title === undefined || title.trim() === "" ? {} : { title: title.trim() }),
+        default: false,
+        current: false,
+        running: false,
+        port: 7433 + profiles.length,
+        home: `/home/me/.lemma/profiles/${name}`,
+        avatar: { kind: "pattern", seed: name },
+      };
       profiles = [...profiles, made];
       return made;
     }),
-    serveCall("profiles.switcher", ProfileChannels.setAvatar, async ({ name, avatar }) => {
+    serveCall("profiles.switcher", ProfileChannels.setAvatar, async ({ name, avatar }) =>
+      changeProfile(name, (profile) => ({ ...profile, avatar: avatar.kind === "default" ? { kind: "pattern", seed: name } : avatar })),
+    ),
+    serveCall("profiles.switcher", ProfileChannels.rename, async ({ name, title }) =>
+      changeProfile(name, ({ title: _, ...profile }) => (title.trim() === "" ? profile : { ...profile, title: title.trim() })),
+    ),
+    serveCall("profiles.switcher", ProfileChannels.stop, async ({ name }) => {
+      if (profiles.find((profile) => profile.name === name)?.current === true)
+        throw new HostError({ code: "Current", subject: name, message: `This is the host for "${name}", which cannot stop itself from here` });
+      return changeProfile(name, (profile) => ({ ...profile, running: false }));
+    }),
+    serveCall("profiles.switcher", ProfileChannels.remove, async ({ name }) => {
       const profile = profiles.find((candidate) => candidate.name === name);
       if (profile === undefined) throw new HostError({ code: "NotFound", subject: name, message: `No profile "${name}"` });
-      const changed: ProfileInfo = { ...profile, avatar: avatar.kind === "default" ? { kind: "pattern", seed: name } : avatar };
-      profiles = profiles.map((candidate) => (candidate.name === name ? changed : candidate));
-      return changed;
+      if (profile.default || profile.current)
+        throw new HostError({ code: "Current", subject: name, message: `The profile "${name}" is not deleted from here` });
+      profiles = profiles.filter((candidate) => candidate !== profile);
     }),
     serveCall("profiles.switcher", ProfileChannels.open, async ({ name }) => {
       throw new HostError({ code: "NotStarted", subject: name, message: `The mock host starts no host for the profile "${name}"` });
