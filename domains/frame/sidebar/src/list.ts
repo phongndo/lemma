@@ -49,11 +49,63 @@ export interface Sections {
 /** A thread with nothing sent yet is a new thread being written: not listed until it has a prompt (`draftRows`). */
 const listed = (session: SessionInfo) => session.lastSeq > 0;
 
+/**
+ * The thread an agent is listed under (`SessionInfo.parent`), rather than on its own: the one that started it, while
+ * it is there and neither is archived. An agent whose thread is gone, or archived apart from it, is a thread of its own.
+ */
+export const nestedUnder = (session: SessionInfo, byId: ReadonlyMap<string, SessionInfo>): string | undefined => {
+  const parent = session.parent === undefined ? undefined : byId.get(session.parent.sessionId);
+  return parent === undefined || parent.id === session.id || parent.archived === true || session.archived === true ? undefined : parent.id;
+};
+
+/** An agent listed under a thread: its session, and how far down (1 for one the thread started, 2 for that one's). */
+export interface NestedAgent {
+  readonly session: SessionInfo;
+  readonly level: number;
+}
+
+/**
+ * The agents listed under each thread listed on its own, by the thread's id: those it started (`nestedUnder`), and
+ * theirs in turn, since an agent has no row of its own to list them under; each after the agent that started it,
+ * oldest first among those one started.
+ */
+export const nestedAgents = (sessions: readonly SessionInfo[]): ReadonlyMap<string, readonly NestedAgent[]> => {
+  const byId = new Map(sessions.map((session) => [session.id, session]));
+  const started = new Map<string, SessionInfo[]>();
+  for (const session of sessions) {
+    const under = listed(session) ? nestedUnder(session, byId) : undefined;
+    if (under === undefined) continue;
+    const agents = started.get(under) ?? [];
+    agents.push(session);
+    started.set(under, agents);
+  }
+  for (const agents of started.values()) agents.sort((a, b) => a.createdAt - b.createdAt);
+  const out = new Map<string, NestedAgent[]>();
+  for (const session of sessions) {
+    if (!started.has(session.id) || !listed(session) || nestedUnder(session, byId) !== undefined) continue;
+    const rows: NestedAgent[] = [];
+    const seen = new Set([session.id]);
+    const visit = (id: string, level: number) => {
+      for (const agent of started.get(id) ?? []) {
+        if (seen.has(agent.id)) continue;
+        seen.add(agent.id);
+        rows.push({ session: agent, level });
+        visit(agent.id, level + 1);
+      }
+    };
+    visit(session.id, 1);
+    out.set(session.id, rows);
+  }
+  return out;
+};
+
 const ranks = (order: readonly string[]) => new Map(order.map((id, at) => [id, at]));
 
 /** The threads in their sections and order. */
 export const sections = (sessions: readonly SessionInfo[], marks: Marks): Sections => {
-  const shown = sessions.filter(listed);
+  const byId = new Map(sessions.map((session) => [session.id, session]));
+  // An agent is listed under its thread (`nestedAgents`), not on its own.
+  const shown = sessions.filter((session) => listed(session) && nestedUnder(session, byId) === undefined);
   const newest = (session: SessionInfo) => Math.max(session.createdAt, marks.unarchivedAt[session.id] ?? 0);
   const archivedAt = (session: SessionInfo) => marks.archivedAt[session.id] ?? session.updatedAt;
   /** Those `order` ranks in its order, and the rest newest first: `unranked` before or after them. */
