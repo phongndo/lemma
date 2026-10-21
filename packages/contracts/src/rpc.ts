@@ -31,6 +31,9 @@ export const RuntimeEvent = Schema.Union([
 ]);
 export type RuntimeEvent = typeof RuntimeEvent.Type;
 
+/** A channel's result or element as it crosses: JSON its channel's codec made (`wireCodec`), not walked again to check. */
+const ChannelJson = Schema.declare((_: unknown): _ is unknown => true, { toCodecJson: () => undefined });
+
 /**
  * The runtime's remote surface, served by the transport and used by every
  * client: the host's own calls, its events, the questions it asks, the web
@@ -121,7 +124,7 @@ export class RuntimeRpcs extends RpcGroup.make(
    * starting at the transport's startup timeout, as above; a handler's domain
    * error may be `Unavailable` too).
    */
-  Rpc.make("Channel.Call", { payload: { id: Schema.String, payload: Schema.optional(Schema.Unknown) }, success: Schema.Unknown, error: HostError }),
+  Rpc.make("Channel.Call", { payload: { id: Schema.String, payload: Schema.optional(Schema.Unknown) }, success: ChannelJson, error: HostError }),
   /**
    * Opens a channel stream: its elements, encoded as for `Channel.Call`, until
    * it ends. Fails as `Channel.Call` does, except that it ends `Withdrawn` as
@@ -134,7 +137,7 @@ export class RuntimeRpcs extends RpcGroup.make(
    */
   Rpc.make("Channel.Open", {
     payload: { id: Schema.String, payload: Schema.optional(Schema.Unknown) },
-    success: Schema.Unknown,
+    success: ChannelJson,
     error: HostError,
     stream: true,
   }),
