@@ -837,12 +837,17 @@ export const parts = async (): Promise<string> => {
   await page.reload();
   await page.waitForSelector(rowOf(pinning));
   assert(await dropped(), `a dragged thread's place is lost on a reload: ${(await sorted()).join(", ")}`);
-  // The sidebar's head: the toggle, and across from it search and a new thread.
+  // The sidebar's head: the toggle, and across from it the palette, search, and a new thread.
   assert.deepEqual(
     await page.$$eval(".sidebar-head button", (buttons) => buttons.map((button) => button.getAttribute("aria-label"))),
-    ["Toggle sidebar", "Search threads", "New thread"],
-    "the sidebar's head is not the toggle, search, and a new thread",
+    ["Toggle sidebar", "Command palette", "Search threads", "New thread"],
+    "the sidebar's head is not the toggle, the palette, search, and a new thread",
   );
+  // Its palette button opens the palette with nothing typed.
+  await page.click(".sidebar-head [aria-label='Command palette']");
+  await page.waitForFunction(() => (document.querySelector(".palette input") as HTMLInputElement | null)?.value === "", undefined, { timeout: 5_000 });
+  await page.keyboard.press("Escape");
+  await page.waitForSelector(".palette input", { state: "detached" });
   // A thread a plugin says waits on the person shows it where its time goes.
   await checkPlugin(page);
   await page.evaluate(async (id) => {

@@ -4,8 +4,9 @@ Every thread down the side (in `SidebarRegion`): new threads left mid-prompt
 on top, then the pinned and the active ones in an order dragged into, and the
 archived folded away below. Its head has the toggle, and across from it the
 `SidebarActions` ([`@lemma/frame`](../contract/src/index.ts)), whose defaults
-it adds: Search, which opens the palette's thread search
-(`ActionIds.searchThreads`, while a plugin offers it), and New thread. Its foot
+it adds: the command palette (`ActionIds.palette`) and Search, which opens
+the palette's thread search (`ActionIds.searchThreads`), each while a plugin
+offers it, and New thread. Its foot
 has the `SidebarFooter`. Each thread is a `SidebarRowPart` and its menu the
 `ThreadActions` ([`@lemma/threads`](../../threads/contract/src/index.ts)).
 Adds to `ThreadWaits` the threads a host question waits in (`Interactions`,
