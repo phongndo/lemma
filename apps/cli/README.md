@@ -59,7 +59,8 @@ plugin shadows one.
   Ctrl+C cancels it on the host. A command whose plugin stopped or reloaded
   while it ran fails `Withdrawn`.
 - **Calls and streams.** A command of the runtime's that makes a call or two
-  does so over HTTP; one that watches the host (`events`, `channels open`, and
+  does so over HTTP, as help and completion do to list the plugins' commands;
+  one that watches the host (`events`, `channels open`, and
   every plugin's command) holds `@lemma/client`'s reconnecting WebSocket, as the
   web app does, saying it is the `cli` (`Host.Clients`). While the host is still
   starting, a command fails `Unavailable` naming what it called (exit 3).
@@ -100,9 +101,15 @@ plugin shadows one.
   among them when one answers within 1.5 seconds, their flags, and flag
   values.
 - **Speed.** A command loads only the client, the runtime's contracts, and
-  `@lemma/cli`, never a domain, and the host only for `serve`. From the
-  sources it starts in about 190 ms, most of it loading TypeScript;
-  `pnpm lemma:build` bundles it into `apps/cli/dist/lemma.mjs` (1.5 MB), which
-  starts in about 60 ms (`node apps/cli/dist/lemma.mjs …`; measured on Linux,
-  Node 24). `pnpm lemma` and the agent's `lemma` stay on the sources, which a
-  stale bundle never shadows.
+  `@lemma/cli`, never a domain, and the host only for `serve`. What `pnpm
+  lemma`, the `bin`, and the agent's shell run is `bin/lemma.js`: it turns on
+  Node's compile cache, then runs the bundle in `dist/lemma.mjs` while every
+  file it was built from is unchanged (`dist/lemma.json` lists them, with
+  their sizes and modification times), else the sources, so a stale bundle
+  never shadows them. `pnpm build` makes the bundle, as `pnpm check`, `pnpm
+  test`, and `pnpm start` do, or `pnpm lemma:build` alone; `serve` runs the
+  sources, whose modules the host shares. A command to a host on this machine
+  takes about 80 ms from the bundle and 150 ms from the sources (measured on
+  Linux, Node 24), of which Node and one call to the host take 37 ms in any
+  client. Most of the sources' time is loading Effect: 286 of their 370
+  modules.

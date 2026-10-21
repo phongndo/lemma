@@ -1,7 +1,6 @@
 #!/usr/bin/env -S node --conditions=lemma-source
 import { spawn } from "node:child_process";
 import { createInterface } from "node:readline";
-import { fileURLToPath } from "node:url";
 import { run } from "./cli.ts";
 
 const argv = process.argv.slice(2);
@@ -105,7 +104,8 @@ process.exitCode = await run(argv, {
     process.argv = [process.argv[0]!, process.argv[1]!, ...args];
     await import(hostModule);
   },
-  self: [process.execPath, ...process.execArgv, fileURLToPath(import.meta.url)],
+  // The script node started, `bin/lemma.js` when that chose this: a host started again (`serve --detach`, a service) chooses again.
+  self: [process.execPath, ...process.execArgv, process.argv[1]!],
 });
 // Whatever still holds the event loop (a socket closing) does not keep an interrupted command alive.
 if (interrupt.signal.aborted) process.exit();

@@ -3,7 +3,6 @@ import { existsSync } from "node:fs";
 import { mkdir, open, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { homedir, userInfo } from "node:os";
 import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
 import { Duration, Effect } from "effect";
 import { readDiscovery } from "@lemma/contracts/discovery";
 import { CliChannels } from "@lemma/cli";
@@ -14,6 +13,7 @@ import { CliError, defineBuiltin, ExitCode, usage } from "../command.ts";
 import type { Builtin, Globals, Io } from "../command.ts";
 import { connect, homeOf } from "../connect.ts";
 import { startedByText } from "../format.ts";
+import { webIndex } from "../open.ts";
 
 /*
  * Starting, stopping, and keeping a host on this machine: the commands that
@@ -30,9 +30,6 @@ const localOnly = (globals: Globals, what: string): CliError | undefined =>
   globals.env !== undefined && globals.env !== "local"
     ? usage(`${what} acts on this machine's host; run it on the machine --env ${globals.env} names`)
     : undefined;
-
-/** The built web app the host serves by default: a checkout's, which `pnpm start` builds. */
-const webIndex = fileURLToPath(new URL("../../../web/dist/index.html", import.meta.url));
 
 const isAlive = (pid: number): boolean => {
   try {
