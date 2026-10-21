@@ -100,16 +100,19 @@ export class OutputAccumulator {
     return this.file;
   }
 
-  append(data: Buffer): void {
-    if (this.finished) return;
+  /** Takes the next bytes of output, and returns them decoded (a character split between chunks held for the next), for a live view. */
+  append(data: Buffer): string {
+    if (this.finished) return "";
     this.rawBytes += data.length;
-    this.decoded(this.decoder.decode(data, { stream: true }));
+    const text = this.decoder.decode(data, { stream: true });
+    this.decoded(text);
     if (this.stream !== undefined || this.overLimit) {
       this.spill();
       this.stream?.write(data);
     } else if (data.length > 0) {
       this.raw.push(data);
     }
+    return text;
   }
 
   finish(): void {
@@ -222,7 +225,8 @@ export class OutputAccumulator {
   }
 
   private trimTail(): void {
-    const kept = tailBytes(this.tail, this.rollingBytes);
+    // A tail as many bytes as characters is ASCII, whose last bytes are its last characters: no need to encode it.
+    const kept = this.tailSize === this.tail.length ? this.tail.slice(-this.rollingBytes) : tailBytes(this.tail, this.rollingBytes);
     if (kept.length < this.tail.length) this.tailAtLineStart = this.tail[this.tail.length - kept.length - 1] === "\n";
     this.tail = kept;
     this.tailSize = bytes(kept);
