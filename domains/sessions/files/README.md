@@ -116,8 +116,9 @@ costs re-reading the files.
   that reads, into a new session that takes writes, and is how a damaged one
   goes on (the web app's composer offers it). A file whose header does not read
   is `Corrupt`, as nothing of it is known to be a session. The listing reads
-  without decoding, so it sees a seq gap at once and other damage once the
-  session is opened, which `SessionChanged` then announces.
+  without decoding, and most lines from their heads (below), so it sees a seq
+  gap at once and other damage once the session is opened, which
+  `SessionChanged` then announces.
 - **Validation.** `append` decodes the event's JSON against the schema first, so
   a line that could not be read back is never written, and memory holds the event
   exactly as a reload will. A field the schema lacks is refused (it would be
@@ -125,10 +126,16 @@ costs re-reading the files.
   it (`NaN` becomes `null`). `parent` must exist (`InvalidParent`).
 - **Listing.** `list` reads directory entries and `stat`s each file. A file whose
   size, mtime, and inode match the listing index is not read; one that grew is read
-  (with `JSON.parse` only, checking only that `seq` runs on without a gap) from
-  where the last read stopped, since sessions are
+  from where the last read stopped, since sessions are
   only appended to, once the line read last is found unchanged (a failed write's
-  line may since have been replaced; if it was, the whole file is read). Sessions
+  line may since have been replaced; if it was, the whole file is read). It reads
+  each event line from its head, the first bytes the store writes (`seq`, `id`,
+  `parent`, `at`, the data's `type`), checking only that `seq` runs on without a
+  gap, and parses the rest: titles, checkout and marks records, a line another
+  writer laid out otherwise, and the file's last line, the one a power loss can
+  leave torn. Reading a head costs a few times less than parsing a short line, and
+  a long one (a tool's output) no more: a host whose index is gone lists 500
+  sessions (3.7 GB) in 0.8 to 1.2 s rather than 5.8 s. Sessions
   are indexed when created, read, unloaded, and when the plugin stops, those last
   two from memory, so a restarted host reads only what changed since. Sessions
   this process has opened are served from memory. A file that cannot be read is
@@ -149,7 +156,14 @@ costs re-reading the files.
 - **Search** (`search`) reads the sessions with something in them, the most
   recently updated first, eight at a time, until enough have matched. A
   session in memory is read there; any other is read from its file and let go,
-  not counted as a use, so searching neither loads sessions nor keeps them.
+  not counted as a use, so searching neither loads sessions nor keeps them. From
+  a file it reads what a search needs: the branch from every line's head, as the
+  listing does, and only the prompts and replies whose line holds every word
+  sought parsed and decoded (a word with a character JSON escapes, or a sigma,
+  has every one parsed). A search that matches nothing in 500 sessions (3.7 GB)
+  takes 1.4 s rather than 9.6 s. It stops where opening stops, but for a line
+  that is JSON yet no event, which only opening checks; a session known to be
+  damaged is read as opening reads it.
 - **Empty sessions** nothing has gone into for `emptyAfter` seconds since they
   were made are deleted, as the store starts and every hour after, unless kept
   (`SessionMarks.kept`: a client holds something for one), pinned, archived,
@@ -183,8 +197,8 @@ costs re-reading the files.
   recreated.
 - **Reading.** Files are read a chunk at a time, so no string holds a whole file
   and a session larger than the longest string Node allows still opens (each line
-  must still fit in one). Opening validates every line; listing uses `JSON.parse`
-  alone.
+  must still fit in one). Opening validates every line; listing and search read
+  lines from their heads (above).
 - **Removal.** Holds (`hold`) are counted per session, in memory: the store
   starts with none, as the plugins that held sessions through it restart with
   it. `remove` of a session nothing holds runs through `SessionRemoveHook`; a

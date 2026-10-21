@@ -21,7 +21,7 @@ import {
 import type { SessionInfo, SessionSearchMatch, Sessions } from "@lemma/sessions";
 import { errorCode, syncDirectory, syncParents, writeFileAtomic } from "@lemma/contracts/fs";
 import type { FileSystem } from "@lemma/contracts/fs";
-import { applyMarks, CHANGED_ON_DISK, confirmLast, createFile, infoOf, io, lineHash, load, openFile, scan, unfiled } from "./file.ts";
+import { applyMarks, CHANGED_ON_DISK, confirmLast, createFile, infoOf, io, lineHash, load, openFile, scan, searchFile, unfiled } from "./file.ts";
 import type { Damage, FiledAs, LastLine, Scanned, Writer } from "./file.ts";
 import { encodeCwd, encodeLine, EVENT_ID_BYTES, FORMAT_VERSION, idFromFileName, SESSION_ID_BYTES, sessionFile } from "./format.ts";
 import type { Header, Line } from "./format.ts";
@@ -91,6 +91,13 @@ const asRead = (event: SessionEvent): Result.Result<SessionEvent, string> => {
 };
 
 const notFound = (sessionId: string, message: string) => new SessionError({ sessionId, reason: "NotFound", message });
+
+/** The branch from the root to `leaf`, by the events' parents. */
+const pathTo = (byId: ReadonlyMap<string, SessionEvent>, leaf: string | undefined): SessionEvent[] => {
+  const path: SessionEvent[] = [];
+  for (let at = leaf === undefined ? undefined : byId.get(leaf); at !== undefined; at = at.parent === null ? undefined : byId.get(at.parent)) path.push(at);
+  return path.reverse();
+};
 
 const infoOfOpen = (open: Open): SessionInfo =>
   infoOf(open.header, {
@@ -661,24 +668,25 @@ export const make = ({
         for (let at = 0; at < said.length && found.length < limit; at += SEARCH_READS) {
           const matches = yield* Effect.forEach(
             said.slice(at, at + SEARCH_READS),
-            (info) =>
-              Effect.orElseSucceed(
-                Effect.map(readBranch(info.id), (events) => searchLog(info.id, events, words)),
-                () => undefined,
-              ),
+            (info) => Effect.orElseSucceed(searchSession(info.id, words), () => undefined),
             { concurrency: SEARCH_READS },
           );
           for (const match of matches) if (match !== undefined) found.push(match);
         }
         return found.slice(0, limit);
       });
-    /** A session's current branch, from memory when it is loaded, else read from its file and not kept. */
-    const readBranch = (sessionId: string): Effect.Effect<readonly SessionEvent[], SessionError> =>
+    /**
+     * A session's match on its current branch: from memory when it is loaded, else read from its file for what a search
+     * needs (`searchFile`) and not kept; one known damaged is read as opening it would, so no match is past its damage.
+     */
+    const searchSession = (sessionId: string, words: readonly string[]): Effect.Effect<SessionSearchMatch | undefined, SessionError> =>
       Effect.suspend(() => {
         const entry = entries.get(sessionId);
-        if (entry === undefined) return Effect.succeed([]);
-        if (entry.open !== undefined) return Effect.succeed(branchOf(entry.open.events, entry.open.leaf));
-        return Effect.map(load(fs, entry.file, sessionId), (loaded) => branchOf(loaded.events, loaded.leaf));
+        if (entry === undefined) return Effect.succeed(undefined);
+        if (entry.open !== undefined) return Effect.succeed(searchLog(sessionId, pathTo(entry.open.byId, entry.open.leaf), words));
+        if (entry.info.damaged !== undefined)
+          return Effect.map(load(fs, entry.file, sessionId), (loaded) => searchLog(sessionId, branchOf(loaded.events, loaded.leaf), words));
+        return searchFile(fs, entry.file, sessionId, words);
       });
 
     /**
@@ -753,11 +761,7 @@ export const make = ({
         if (options?.leaf !== undefined && !open.byId.has(options.leaf)) {
           return Effect.fail(notFound(sessionId, `Event ${options.leaf} does not exist in session ${sessionId}`));
         }
-        const path: SessionEvent[] = [];
-        for (let at = leaf === undefined ? undefined : open.byId.get(leaf); at !== undefined; at = at.parent === null ? undefined : open.byId.get(at.parent)) {
-          path.push(at);
-        }
-        return Effect.succeed(path.reverse());
+        return Effect.succeed(pathTo(open.byId, leaf));
       });
 
     const list: Service["list"] = (options) =>
