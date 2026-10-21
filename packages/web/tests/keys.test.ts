@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { bindingOf, formatKeys, listKey, matchesKeys, quickKey } from "../src/keys.ts";
+import { bindingOf, formatKeys, holdsKeys, listKey, matchesKeys, quickKey } from "../src/keys.ts";
 
 // Not a Mac here, so `mod` is Ctrl. Node has a `navigator` that reports the host, so pin it.
 vi.hoisted(() => {
@@ -49,6 +49,21 @@ describe("matchesKeys", () => {
     expect(matchesKeys("mod+k", press("k", "KeyK", { ctrl: true, shift: true }))).toBe(false);
     expect(matchesKeys("mod+k", press("k", "KeyK"))).toBe(false);
     expect(matchesKeys("escape", press("Escape", "Escape"))).toBe(true);
+  });
+});
+
+describe("holdsKeys", () => {
+  it("holds a binding while exactly its modifiers are down", () => {
+    expect(holdsKeys("mod+1", press("Control", "ControlLeft", { ctrl: true }))).toBe(true);
+    expect(holdsKeys("mod+1", press("Shift", "ShiftLeft", { ctrl: true, shift: true }))).toBe(false);
+    expect(holdsKeys("mod+shift+]", press("Shift", "ShiftLeft", { ctrl: true, shift: true }))).toBe(true);
+    expect(holdsKeys("alt+1", press("Alt", "AltLeft", { alt: true, ctrl: true }))).toBe(false);
+    expect(holdsKeys("mod+1", press("Control", "ControlLeft"))).toBe(false);
+  });
+
+  it("never holds a binding without a modifier", () => {
+    expect(holdsKeys("escape", press("Escape", "Escape"))).toBe(false);
+    expect(holdsKeys("?", press("Shift", "ShiftLeft", { shift: true }))).toBe(false);
   });
 });
 

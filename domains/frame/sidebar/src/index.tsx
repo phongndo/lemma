@@ -6,7 +6,7 @@ import { Accessibility, AutoScroller, Feedback, PointerActivationConstraints } f
 import { RestrictToVerticalAxis } from "@dnd-kit/abstract/modifiers";
 import { RestrictToElement } from "@dnd-kit/dom/modifiers";
 import type { SessionInfo, SessionMarks } from "@lemma/sessions";
-import { withKeys } from "@lemma/web/keys";
+import { formatKeys, withKeys } from "@lemma/web/keys";
 import { loadJson, recordOf, save } from "@lemma/web/storage";
 import { dragEdge } from "@lemma/web/drag";
 import { ActionIds, Actions, shownKeysOf } from "@lemma/actions";
@@ -219,7 +219,9 @@ function ThreadRow(props: SidebarRowProps) {
                     )}
                   </Show>
                 </span>
-                <Status {...props} />
+                <Show when={props.shortcut} fallback={<Status {...props} />}>
+                  {(keys) => <span class="thread-when thread-shortcut">{keys()}</span>}
+                </Show>
               </span>
             </Show>
           </a>
@@ -354,6 +356,8 @@ interface Deps {
   /** A drop's new order, and the change to the thread dropped (`dropped`). */
   readonly drop: (session: SessionInfo, marks: Marks, change: SessionMarks | undefined) => Promise<void>;
   readonly marks: () => Marks;
+  /** The keys that go to a thread, while all but their last are held down (`Action.onHold`). */
+  readonly shortcut: (id: string) => string | undefined;
 }
 
 /** A thread's row, as the `sidebar.row` part draws it: it follows the thread as it changes. */
@@ -387,6 +391,7 @@ const rowOf = (deps: Deps, onPick: () => void) => {
         archive={() => (session().archived === true ? deps.unarchive(session()) : deps.archive(session()))}
         pin={session().archived === true ? undefined : () => deps.pin(session(), session().pinned !== true)}
         archivedAt={deps.archivedAt(id())}
+        shortcut={deps.shortcut(id())}
       />
     );
   };
@@ -948,6 +953,20 @@ export default defineWebPlugin({
     const lists = createMemo(() => sections(threads.list(), marks()));
     /** The threads ⌘1 … ⌘9 and stepping go through: as listed, pinned first, the archived not among them. */
     const order = () => [...lists().pinned, ...lists().active];
+    // While ⌘ is held alone (`onHold`), the first nine show the keys that go to them.
+    const [holding, setHolding] = createSignal<Readonly<Record<number, string>>>({});
+    const shortcuts = createMemo((): ReadonlyMap<string, string> => {
+      const keys = holding();
+      if (Object.keys(keys).length === 0) return new Map();
+      return new Map(
+        order()
+          .slice(0, 9)
+          .flatMap((session, index) => {
+            const binding = keys[index + 1];
+            return binding === undefined ? [] : [[session.id, formatKeys(binding)] as const];
+          }),
+      );
+    });
     /** The new thread shown, when it was a draft as it was opened: it stays among the drafts while it shows. */
     const held = createMemo(
       on(threads.activeId, (id) =>
@@ -1024,6 +1043,7 @@ export default defineWebPlugin({
       drafts,
       drop,
       marks,
+      shortcut: (id) => shortcuts().get(id),
     };
     slots.add(SidebarRegion, { id: "sidebar", phase: "default", component: (props) => <Sidebar deps={deps} onPick={props.onPick} /> });
     slots.add(SidebarRowPart, { id: "sidebar.row", phase: "default", component: ThreadRow });
@@ -1120,6 +1140,10 @@ export default defineWebPlugin({
         hidden: true,
         when: () => order().length >= at,
         run: () => void threads.select(order()[at - 1]!.id),
+        onHold: (binding) => {
+          const { [at]: _, ...rest } = holding();
+          setHolding(binding === undefined ? rest : { ...rest, [at]: binding });
+        },
       });
     add("sidebar.archive-thread", 22, {
       title: "Archive thread",

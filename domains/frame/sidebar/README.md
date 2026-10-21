@@ -72,9 +72,11 @@ asked from a turn): `Needs approval`, or `Needs input` for a value. Requires
 - **Search** is the palette's, floating over the page: threads by title,
   project, and what was said in them.
 - **Keys.** `mod+1` … `mod+9` go to the thread at that place, pinned ones
-  first; `mod+shift+]` and `mod+shift+[` go to the next and previous, stopping
-  at the ends. A right-click opens a thread's menu and a double-click renames
-  it. Settings › Keyboard rebinds them all.
+  first; while `mod` is held alone a moment (`Action.onHold`, from the
+  keymap), each of those threads shows its keys (`⌘1`) where its state goes,
+  as T3 Code does. `mod+shift+]` and `mod+shift+[` go to the next and
+  previous, stopping at the ends. A right-click opens a thread's menu and a
+  double-click renames it. Settings › Keyboard rebinds them all.
 - **Kept in this browser** (`lemma.frame.sidebar.marks`): the pinned and
   active orders, and when threads were archived and unarchived, which order the
   list beyond when each was made; and whether the archived fold is open, and

@@ -27,6 +27,13 @@ Keyboard says so). Requires `Slots`, `Dialogs` (`@lemma/frame`), and
 - **A value first.** An action with `input` is not run directly: its keys run
   `ActionIds.palette` with its id, so the palette asks for the value. With no
   action at that id (`actions.palette` off), it runs with no value.
+- **Held keys.** Modifiers held down alone for a moment (200 ms, so a
+  shortcut pressed at once passes first) tell each action they would run with
+  one more key (`onHold`, with that binding), as pressing it would choose: the
+  first in order for each binding, held back as above. It hears again
+  (`undefined`) once a modifier changes, the window loses focus, or a key
+  pressed with them runs nothing (`mod+c`); one that runs an action keeps the
+  hold, so `mod+1` then `mod+2` show throughout.
 - **Handled keys.** A key already handled (`defaultPrevented`), or typed while
   composing text with an input method, is left alone. A key that runs an
   action has its default prevented.
