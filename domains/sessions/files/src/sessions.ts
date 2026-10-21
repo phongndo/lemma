@@ -466,7 +466,7 @@ export const make = ({
                 open.leaf = id;
                 open.updatedAt = Math.max(open.updatedAt, event.at);
                 if (event.data.type === "title") open.title = event.data.title;
-                if (event.data.type === "request") open.contributions = event.data.contributions;
+                if (event.data.type === "request" && event.data.contributions !== undefined) open.contributions = event.data.contributions;
                 // As `load` checks each line it reads back: seqs count from 1 without a gap, and every id is new.
                 assert(open.events.length === event.seq, `session ${sessionId}: event ${id} has seq ${event.seq} at ${open.events.length}`);
                 assert(open.byId.size === open.events.length, `session ${sessionId}: ${open.byId.size} ids for ${open.events.length} events`);

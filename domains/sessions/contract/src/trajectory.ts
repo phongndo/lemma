@@ -285,6 +285,7 @@ export function trajectory(branch: readonly SessionEvent[]): TrajectoryTurn[] {
   const stepById = new Map<string, MutableStep>();
   // Resolved header state, as `requestState` folds it, plus what the previous request contributed.
   let system: string | undefined;
+  let contributions: readonly Contribution[] = [];
   let specByName = new Map<string, ToolSpec>();
   // Each spec's JSON, which says whether its tool changed: made once a spec, as requests that declare no tools keep the
   // last ones (stringifying every spec of every request was most of a long branch's time).
@@ -393,8 +394,9 @@ export function trajectory(branch: readonly SessionEvent[]): TrajectoryTurn[] {
       case "request": {
         if (data.system !== undefined) system = data.system;
         if (data.tools !== undefined) specByName = new Map(data.tools.map((spec) => [spec.name, spec]));
-        const texts = splitSystem(system, data.contributions);
-        const sectionContributions = data.contributions.filter((contribution) => contribution.kind === "system");
+        if (data.contributions !== undefined) contributions = data.contributions;
+        const texts = splitSystem(system, contributions);
+        const sectionContributions = contributions.filter((contribution) => contribution.kind === "system");
         const sections = sectionContributions.map((contribution, i): TrajectorySection => {
           const text = texts?.[i];
           const previous = previousSections.get(contribution.label);
@@ -406,7 +408,7 @@ export function trajectory(branch: readonly SessionEvent[]): TrajectoryTurn[] {
             changed: previous === undefined || previous !== (text ?? contribution.chars),
           };
         });
-        const tools = data.contributions
+        const tools = contributions
           .filter((contribution) => contribution.kind === "tool")
           .map((contribution): TrajectoryTool => {
             const spec = specByName.get(contribution.label);

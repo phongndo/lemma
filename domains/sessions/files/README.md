@@ -58,9 +58,12 @@ never taken for damage. The rules for changing the format, so no change makes a
 user's session unreadable:
 
 - Adding a member to `EventData` (`@lemma/sessions`) is not a new version: old
-  files hold none of it. Removing a member, narrowing one, or changing a line's
+  files hold none of it. Nor is making a member's field optional, which old
+  files hold everywhere. Removing a member, narrowing one, or changing a line's
   shape is, and the store reads every earlier version through migrations, one
-  per version (`vN` to `vN+1`), applied as a file is read.
+  per version (`vN` to `vN+1`), applied as a file is read. Either change makes
+  an older Lemma read a session written since as damaged where the new data
+  starts (read-only up to there, its file unchanged).
 - A migration accepts at least everything the reader of its version accepted:
   it may not refuse a field that reader ignored.
 - `tests/fixtures/v<N>/` holds session files version `N` wrote and how every
@@ -69,6 +72,15 @@ user's session unreadable:
   reads each one back the same. `pnpm sim --fixtures <dir>` writes a new
   version's corpus once; a version's corpus is never regenerated, so a change
   that reads an old session differently fails the test.
+
+A `request` event's `contributions` are logged only when they differ from the
+previous request's on its branch (older files have them on every request), and
+a request without them has that request's (`requestState`), which a reader
+always has: it is an ancestor, an event's parent is in the file before it, and
+a torn tail, damage, and a failed write each lose only the file's end, while
+`fork` copies the whole branch to its event. A sibling branch holds no ancestor,
+so a request never takes another branch's, and a compaction removes nothing
+from the log, so one after it finds the request before it.
 
 `<Paths.home>/sessions/.index.json` is the listing index: for each file, its size,
 mtime, and inode when last read or written, the `SessionInfo` it described up
@@ -145,11 +157,12 @@ costs re-reading the files.
   used it for `unloadAfter` seconds. A sweep (every `unloadAfter / 2`, at least
   once a minute) then closes the file and drops the events, skipping a session
   in the middle of an operation; `list` keeps its info without re-reading the
-  file, and the next use reloads it. A loaded session takes about 1.05× its file
-  size in heap (the requests that repeat the last one's contributions share one
-  array of them), and reloading one of 10,000 events (26 MB) about 90 ms, of
-  100,000 (284 MB) about 0.8 s: without unloading, a long-running host's heap
-  and open files grow with every session it touches.
+  file, and the next use reloads it. A loaded session takes about 1.1× its file
+  size in heap (in a file whose every request logged its contributions, those
+  that repeat the last one's share one array of them), and reloading one of
+  10,000 events (20 MB) about 40 to 45 ms, of 100,000 (207 MB) about 0.42 s:
+  without unloading, a long-running host's heap and open files grow with every
+  session it touches.
 - **Moving an empty session** (`relocate`) writes its new directory to its
   file first, then renames the file into that directory's folder: a `list` or
   `get` meanwhile finds it where it is. A rename that fails leaves the file

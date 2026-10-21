@@ -1,11 +1,11 @@
 import * as fs from "node:fs/promises";
-import { Effect, Schema } from "effect";
+import { Effect, Layer, Schema } from "effect";
 import fc from "fast-check";
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
-import { makeCore } from "@lemma/core";
-import { Agent } from "@lemma/agent";
+import { definePlugin, makeCore, PluginContext } from "@lemma/core";
+import { Agent, AgentRequestHook } from "@lemma/agent";
 import { emptyUsage } from "@lemma/llm";
-import { branchOf, rebuildRequest, Sessions } from "@lemma/sessions";
+import { branchOf, rebuildRequest, requestState, Sessions, splitSystem } from "@lemma/sessions";
 import type { LlmRequest, Message } from "@lemma/llm";
 import type { SessionEvent } from "@lemma/sessions";
 import type { Tool } from "@lemma/tools";
@@ -21,7 +21,9 @@ import type { Script } from "./fakes.ts";
  * an assistant message whose calls were never answered. Every request the
  * model received must be well formed (each tool call answered, no result
  * without its call), never patched by a provider library behind the log's
- * back, and exactly what `rebuildRequest` rebuilds from the log.
+ * back, and exactly what `rebuildRequest` rebuilds from the log, each part
+ * credited to the plugin that contributed it. A section whose length changes
+ * with each request makes each branch's first request credit other parts.
  */
 
 type Answer =
@@ -103,9 +105,20 @@ const conversation = (answers: readonly Answer[], steps: readonly Step[]) => {
   };
   const llm = fakeLlm(Array.from({ length: 200 }, () => script));
   const toolset = testTools([boom]);
+  let asked = 0;
+  const notes = definePlugin({
+    id: "notes",
+    layer: Layer.effectDiscard(
+      Effect.flatMap(PluginContext, (owner) =>
+        owner.on(AgentRequestHook, (draft, next) =>
+          next({ ...draft, sections: [...draft.sections, { id: "notes", source: owner.id, text: "n".repeat(1 + (asked++ % 3)) }] }),
+        ),
+      ),
+    ),
+  });
   return Effect.scoped(
     Effect.gen(function* () {
-      const core = yield* makeCore([paths(dir, dir), host(), sessions, tools, toolset.plugin, llm.plugin, agent], {
+      const core = yield* makeCore([paths(dir, dir), host(), sessions, tools, toolset.plugin, llm.plugin, notes, agent], {
         configs: { "agent.loop": { stopGrace: 0, retryDelay: 0.001, retries: 1, maxSteps: 4 } },
       });
       yield* core.run(
@@ -127,8 +140,15 @@ const conversation = (answers: readonly Answer[], steps: readonly Step[]) => {
           expect(logged.length).toBe(llm.requests.length);
           logged.forEach((event: SessionEvent, i) => {
             const sent = llm.requests[i]!;
+            const branch = branchOf(events, event.id);
             expect(malformed(sent.messages), `request ${i}`).toEqual([]);
-            expect(rebuildRequest(branchOf(events, event.id), event.id, id), `request ${i} rebuilds`).toEqual(sent);
+            expect(rebuildRequest(branch, event.id, id), `request ${i} rebuilds`).toEqual(sent);
+            // Each part is credited, by the request or the one before it on its branch: its sections make up the
+            // system prompt sent, and its tools are those declared.
+            const { contributions } = requestState(branch);
+            expect(contributions, `request ${i} is credited`).toBeDefined();
+            expect(splitSystem(sent.system, contributions!), `request ${i}'s sections`).toBeDefined();
+            expect(contributions!.filter((part) => part.kind === "tool").map((part) => part.label)).toEqual((sent.tools ?? []).map((tool) => tool.name));
           });
         }),
       );

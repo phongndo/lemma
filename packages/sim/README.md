@@ -184,7 +184,7 @@ bandwidth and latency):
   harness does; the harness adds nothing to it. Latency is the model's:
   seconds.
 - **Disk.** About six log lines a step (step start, request, answer, the tools'
-  start and results, step end), 2.3 KB, each synced before the next, as resuming
+  start and results, step end), 2.1 KB, each synced before the next, as resuming
   after a crash depends on each: 6 to 8 syncs, at 0.2 to 2 ms on an SSD, 2 to 15
   ms a step. The slowest resource the harness touches, and a cost per step that
   stays the same as the session grows.
@@ -211,8 +211,9 @@ of its logged fields without that copy (`requestFrom`), the model's view of the
 branch is derived once a step and walks the view rather than the whole branch,
 and the kernel's events and hooks take fewer steps: a step takes 1.23, 1.04,
 and 0.93 ms (`scripts/bench-compare.ts --harness`, 10 runs, 2026-10-21) and
-allocates about 1 MB, from 1.4 to 1.8. Each step writes 8 syncs and 2.4 KB,
-runs 3 public hooks, and publishes 22.5 events (45 a turn); a text delta
+allocates about 1 MB, from 1.4 to 1.8. Each step writes 8 syncs and 2.1 KB
+(2.4 KB until a request logged its contributions only when they change, as it
+did its system prompt and tools), runs 3 public hooks, and publishes 22.5 events (45 a turn); a text delta
 reaches an observer in 0.01 ms (p50) and 0.04 ms (p99). The p99 was 0.4 to
 0.6 ms: a reply's last delta comes with its end, and its observer waited for
 the turn to log the answer, until the turn let observers hear the end first.

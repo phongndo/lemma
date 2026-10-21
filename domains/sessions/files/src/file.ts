@@ -330,13 +330,14 @@ export interface Damage {
 }
 
 /**
- * `event`, its request's contributions the array `previous` when they are the same: an agent logs every request's in
- * full, and most repeat the last ones, so one array for all of them keeps a long session's heap about a tenth smaller.
- * Sound, as an event is never changed once read.
+ * `event`, its request's contributions the array `previous` when they are the same: an older agent logged every
+ * request's in full, most repeating the last ones, so one array for all of them keeps such a session's heap about a
+ * tenth smaller (an agent now logs them only when they change). Sound, as an event is never changed once read.
  */
 export const shareContributions = (event: SessionEvent, previous: readonly Contribution[] | undefined): SessionEvent => {
   const data = event.data;
-  if (data.type !== "request" || previous === undefined || data.contributions === previous || data.contributions.length !== previous.length) return event;
+  if (data.type !== "request" || data.contributions === undefined || previous === undefined || data.contributions === previous) return event;
+  if (data.contributions.length !== previous.length) return event;
   const same = data.contributions.every((part, i) => {
     const before = previous[i]!;
     return part.source === before.source && part.kind === before.kind && part.label === before.label && part.chars === before.chars;
@@ -410,7 +411,7 @@ export function load(fs: FileSystem, file: string, sessionId: string): Effect.Ef
       byId.set(event.id, event);
       leaf = event.id;
       if (event.data.type === "title") title = event.data.title;
-      if (event.data.type === "request") contributions = event.data.contributions;
+      if (event.data.type === "request" && event.data.contributions !== undefined) contributions = event.data.contributions;
       updatedAt = Math.max(updatedAt, event.at);
       return undefined;
     };

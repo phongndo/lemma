@@ -660,7 +660,8 @@ export function runTurn(services: TurnServices, settings: TurnSettings, input: T
         ...(unchanged ? {} : { tools: [...sent] }),
         ...(isDeepStrictEqual(previous.nested, nested) ? {} : { nested }),
         ...(restart === undefined ? {} : { restart }),
-        contributions,
+        // Those of the request before it on the branch are not logged again: a reader has them from it (`requestState`).
+        ...(isDeepStrictEqual(previous.contributions, contributions) ? {} : { contributions }),
         ...(handlers.length === 0 ? {} : { handlers }),
         ...(plan.providerOptions === undefined ? {} : { providerOptions: plan.providerOptions }),
       });
@@ -675,6 +676,10 @@ export function runTurn(services: TurnServices, settings: TurnSettings, input: T
       if (yield* Verify) {
         const stored = yield* sessions.branch(sessionId, { leaf: logged.id }).pipe(Effect.mapError(sessionError));
         assert(isDeepStrictEqual(rebuildRequest(stored, logged.id, sessionId), request), `request ${logged.id} is not what its branch rebuilds`);
+        assert(
+          isDeepStrictEqual(requestState(stored).contributions, contributions),
+          `request ${logged.id}: its branch does not credit its parts to the plugins that contributed them`,
+        );
         if (state.branch !== undefined) {
           assert(state.branch.length === stored.length, `turn ${turnId} keeps ${state.branch.length} events of a branch of ${stored.length}`);
           assert(

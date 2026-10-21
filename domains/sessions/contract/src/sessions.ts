@@ -116,11 +116,13 @@ export const EventData = Schema.Union([
     ),
   }),
   /**
-   * The request header, logged before the model call. `system`, `tools`, and
-   * `nested` are omitted when unchanged since the previous `request` on the branch.
-   * `system` is the text of the `system` contributions, in order, with empty
-   * ones dropped, joined by a blank line (`"\n\n"`); `chars` is each text's
-   * length, so `trajectory` can split it back into sections.
+   * The request header, logged before the model call. `system`, `tools`,
+   * `nested`, and `contributions` are omitted when unchanged since the previous
+   * `request` on the branch (the nearest among its ancestors, never a sibling
+   * branch's), and `requestState` resolves them. `system` is the text of the `system`
+   * contributions, in order, with empty ones dropped, joined by a blank line
+   * (`"\n\n"`); `chars` is each text's length, so `trajectory` can split it
+   * back into sections.
    *
    * A request without `restart` continues the previous one on the branch: the
    * same system prompt and tools, and its history with more appended, so a
@@ -145,7 +147,12 @@ export const EventData = Schema.Union([
     nested: Schema.optional(Schema.Array(Schema.String)),
     /** It declares its system prompt and tools afresh, and why (see above); absent on a request an older agent logged. */
     restart: Schema.optional(RequestRestart),
-    contributions: Schema.Array(Contribution),
+    /**
+     * Who put each section and tool there: logged when they differ from the previous request's on the branch, so always
+     * on a branch's first (older logs have them on every request). A request's own, logged or not, are the
+     * `contributions` of `requestState` of the branch ending at it.
+     */
+    contributions: Schema.optional(Schema.Array(Contribution)),
     /** `AgentRequestHook`'s handlers, in the order they ran: each one's own time, and what it changed. */
     handlers: Schema.optional(Schema.Array(HandlerCredit)),
     /** What the provider was told to pass on (`LlmRequest.providerOptions`), as a handler set them. */
