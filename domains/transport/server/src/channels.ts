@@ -73,6 +73,20 @@ const failed = (id: string, cause: Cause.Cause<unknown>): HostError => {
 };
 
 /**
+ * A call's lifetime for `resultOf`: its `Withdrawn` is made once it is read, as the call ends so, since an error's
+ * stack costs a small call a fifth of its time.
+ */
+const servedUntil = (left: Effect.Effect<void>, id: string) => {
+  let withdrawn: HostError | undefined;
+  return {
+    left,
+    get withdrawn() {
+      return (withdrawn ??= withdrawnFrom(id, "call"));
+    },
+  };
+};
+
+/**
  * One call, served with its channel (`withChannel`), from decoding its payload
  * to encoding its result: when its plugin stops or is replaced, the call is
  * drained, finishing on the instance it started on before that instance's
@@ -87,7 +101,7 @@ export const callChannel = (registries: Reader, id: string, payload: unknown): E
     decode(channel, payload).pipe(
       Effect.flatMap((input) =>
         contained(
-          () => resultOf(channel, input, { left, withdrawn: withdrawnFrom(id, "call") }),
+          () => resultOf(channel, input, servedUntil(left, id)),
           (cause) => failed(id, cause),
         ),
       ),
