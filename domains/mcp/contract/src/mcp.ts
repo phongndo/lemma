@@ -1,5 +1,4 @@
-import { Context, Data, Schema } from "effect";
-import type { Effect } from "effect";
+import { Context, Data, Effect, Schema } from "effect";
 import { Event, Registry } from "@lemma/core";
 import type { Events } from "@lemma/core";
 import { defineChannel, eventFeed, serveChannel } from "@lemma/contracts";
@@ -12,6 +11,23 @@ import type { Channel } from "@lemma/contracts";
  */
 export const Exposure = Schema.Literals(["codemode", "direct", "hidden"]);
 export type Exposure = typeof Exposure.Type;
+
+/**
+ * How Lemma signs in to a remote server that asks (OAuth), in the shape Claude Code's entries have. Needed only for a
+ * server whose authorization server registers no clients itself (no Dynamic Client Registration), or that expects a
+ * fixed address to come back to, or other scopes than it says it needs.
+ */
+export const McpOAuthConfig = Schema.Struct({
+  /** A client registered with the server's authorization server ahead of time; Lemma registers one itself when absent. */
+  clientId: Schema.optional(Schema.String),
+  /** That client's secret, when it has one: write it as `${VAR}`, so the secret stays out of the file. */
+  clientSecret: Schema.optional(Schema.String),
+  /** The port of the address the browser comes back to, `http://localhost:<port>/callback`; any free port when absent. */
+  callbackPort: Schema.optional(Schema.Number.check(Schema.isInt(), Schema.isBetween({ minimum: 1, maximum: 65535 }))),
+  /** The scopes to ask for, space-separated; those the server says it needs when absent. */
+  scopes: Schema.optional(Schema.String),
+});
+export type McpOAuthConfig = typeof McpOAuthConfig.Type;
 
 /**
  * One server, in the shape other MCP clients' `mcpServers` entries have, so an entry copied from one works here.
@@ -41,6 +57,8 @@ export const McpServerConfig = Schema.Struct({
   timeout: Schema.optional(Schema.Number.check(Schema.isGreaterThan(0))),
   /** Lemma's own: an image's address (`https:`, or a `data:image/` URL) for its icon, over the one the server declares. */
   icon: Schema.optional(Schema.String),
+  /** How Lemma signs in to a remote server that asks, when the server's own word is not enough. */
+  oauth: Schema.optional(McpOAuthConfig),
 });
 export type McpServerConfig = typeof McpServerConfig.Type;
 
@@ -70,8 +88,11 @@ export const McpServers = Registry.make<McpServer>("lemma/mcp.servers", {
   },
 });
 
-/** `off`: disabled, or every tool hidden; `failed`: it could not connect, or its connection dropped (`error` says why). */
-export const McpServerState = Schema.Literals(["off", "connecting", "connected", "failed"]);
+/**
+ * `off`: disabled, or every tool hidden; `failed`: it could not connect, or its connection dropped (`error` says why);
+ * `needs-sign-in`: a remote server that asks to be signed in to, with no sign-in it accepts (`auth` says how it stands).
+ */
+export const McpServerState = Schema.Literals(["off", "connecting", "connected", "failed", "needs-sign-in"]);
 export type McpServerState = typeof McpServerState.Type;
 
 export const McpToolInfo = Schema.Struct({
@@ -89,6 +110,19 @@ export const McpToolInfo = Schema.Struct({
 });
 export type McpToolInfo = typeof McpToolInfo.Type;
 
+/**
+ * Signing in to a remote server that asks (OAuth). `signed-out`: no sign-in, or one the server no longer accepts;
+ * `signing-in`: waiting on the person's browser, at `url`; `signed-in`: Lemma holds a token the server accepts.
+ */
+export const McpAuthStatus = Schema.Struct({
+  state: Schema.Literals(["signed-out", "signing-in", "signed-in"]),
+  /** While signing in: the page to open in a browser and approve. */
+  url: Schema.optional(Schema.String),
+  /** Why the last sign-in failed. */
+  error: Schema.optional(Schema.String),
+});
+export type McpAuthStatus = typeof McpAuthStatus.Type;
+
 /** One server as clients see it. */
 export const McpServerStatus = Schema.Struct({
   name: Schema.String,
@@ -102,8 +136,15 @@ export const McpServerStatus = Schema.Struct({
   enabled: Schema.Boolean,
   exposure: Exposure,
   description: Schema.optional(Schema.String),
-  /** Why it failed, or why it is off when it is not disabled. */
+  /** Why it failed, or why it is off when it is not disabled; never a value a `${VAR}` holds. */
   error: Schema.optional(Schema.String),
+  /**
+   * How long until Lemma tries to connect again on its own (ms, from when this status was made): a remote server that
+   * could not be reached. A span rather than a time, as the host's clock and a client's may differ.
+   */
+  retryIn: Schema.optional(Schema.Number),
+  /** Signing in: a remote server Lemma signs in to, once it asked, or once Lemma holds a sign-in for it. */
+  auth: Schema.optional(McpAuthStatus),
   /** The end of what a local server printed to stderr. */
   stderr: Schema.optional(Schema.String),
   /** What the server says it is, once connected. */
@@ -131,7 +172,10 @@ export const McpServerChange = Schema.Struct({
 });
 export type McpServerChange = typeof McpServerChange.Type;
 
-/** `NotFound`: no server has that name; `Invalid`: an entry `put` was given cannot run (`message` says why); `Failed`: the file could not be written. */
+/**
+ * `NotFound`: no server has that name; `Invalid`: an entry `put` was given cannot run, or a sign-in asked of a server
+ * that takes none (`message` says why); `Failed`: the file could not be written, or a sign-in failed.
+ */
 export class McpError extends Data.TaggedError("McpError")<{
   readonly reason: "NotFound" | "Invalid" | "Failed";
   readonly message: string;
@@ -148,6 +192,37 @@ export const McpState = Schema.Struct({
   servers: Schema.Array(McpServerStatus),
 });
 export type McpState = typeof McpState.Type;
+
+/**
+ * One server as an agent may read it: its state, what it is for, how many tools it offers, and how signing in to it
+ * stands, without where it is or how it is reached, which a `${VAR}` can put a credential in.
+ */
+export const McpServerSummary = Schema.Struct({
+  name: Schema.String,
+  state: McpServerState,
+  enabled: Schema.Boolean,
+  description: Schema.optional(Schema.String),
+  /** The tools it offered when it last connected that reach the model: a server that dropped, or needs signing in again, keeps them. */
+  tools: Schema.Number,
+  error: Schema.optional(Schema.String),
+  retryIn: Schema.optional(Schema.Number),
+  /** How signing in stands, for a server Lemma signs in to. */
+  auth: Schema.optional(McpAuthStatus.fields.state),
+});
+export type McpServerSummary = typeof McpServerSummary.Type;
+
+/** `state`'s servers as `McpServerSummary` has them. */
+export const summarize = (state: McpState): readonly McpServerSummary[] =>
+  state.servers.map((server) => ({
+    name: server.name,
+    state: server.state,
+    enabled: server.enabled,
+    ...(server.description === undefined ? {} : { description: server.description }),
+    tools: server.tools.filter((tool) => tool.exposure !== "hidden").length,
+    ...(server.error === undefined ? {} : { error: server.error }),
+    ...(server.retryIn === undefined ? {} : { retryIn: server.retryIn }),
+    ...(server.auth === undefined ? {} : { auth: server.auth.state }),
+  }));
 
 /** Published whenever a server's state, entry, or tools change, or the file does. Losable: `Mcp.state` is the record. */
 export const McpChanged = Event.make<McpState>("lemma/mcp.changed");
@@ -170,6 +245,22 @@ export class Mcp extends Context.Service<
      * (`null`), keeping the rest of the file, and applies it. Fails `Invalid` for a name or an entry that cannot run.
      */
     readonly put: (server: string, entry: McpServerConfig | null) => Effect.Effect<void, McpError>;
+    /**
+     * Starts signing in to a remote server that asks, replacing a sign-in under way: answers with the page to open in a
+     * browser and approve. The sign-in finishes when the browser comes back to Lemma, or the address it lands on is
+     * given to `finishSignIn`, and the server connects again. Fails `Invalid` for a server that takes no sign-in (a
+     * local one, or one given its own `Authorization` header), and `Failed` when the server offers none Lemma can use.
+     */
+    readonly signIn: (server: string) => Effect.Effect<{ readonly url: string }, McpError>;
+    /**
+     * Finishes the sign-in under way with the address the browser landed on after approving (or the code it shows),
+     * for a browser that could not reach Lemma: answers once the sign-in is stored. Fails `Invalid` with none under way.
+     */
+    readonly finishSignIn: (server: string, address: string) => Effect.Effect<void, McpError>;
+    /** Stops the sign-in under way, if any, keeping the sign-in Lemma holds. */
+    readonly cancelSignIn: (server: string) => Effect.Effect<void, McpError>;
+    /** Forgets the sign-in Lemma holds for the server, stopping one under way, and connects again. */
+    readonly signOut: (server: string) => Effect.Effect<void, McpError>;
   }
 >()("lemma/Mcp") {}
 
@@ -215,6 +306,53 @@ export const McpChannels = {
     payload: Schema.Struct({ ...serverField, change: McpServerChange }),
     success: Schema.Void,
   }),
+  list: defineChannel({
+    kind: "call",
+    id: "mcp.list",
+    access: "read",
+    title: "MCP servers' states",
+    description: "Each MCP server's state (connected, failed, needs-sign-in), what it is for, how many tools it offers, and how signing in to it stands",
+    payload: Schema.Void,
+    success: Schema.Array(McpServerSummary),
+    repeatable: true,
+  }),
+  signIn: defineChannel({
+    kind: "call",
+    id: "mcp.sign-in",
+    access: "operate",
+    title: "Sign in to an MCP server",
+    description:
+      "Starts signing in to a remote MCP server that asks: answers with the page the person opens in a browser and approves, after which the server connects",
+    payload: Schema.Struct(serverField),
+    success: Schema.Struct({ url: Schema.String }),
+  }),
+  finishSignIn: defineChannel({
+    kind: "call",
+    id: "mcp.finish-sign-in",
+    access: "secret",
+    title: "Finish signing in to an MCP server",
+    description: "Finishes the sign-in under way with the address the browser landed on after approving",
+    payload: Schema.Struct({ ...serverField, address: Schema.String }),
+    success: Schema.Void,
+  }),
+  cancelSignIn: defineChannel({
+    kind: "call",
+    id: "mcp.cancel-sign-in",
+    access: "operate",
+    title: "Stop signing in to an MCP server",
+    description: "Stops the sign-in under way, keeping the sign-in Lemma holds",
+    payload: Schema.Struct(serverField),
+    success: Schema.Void,
+  }),
+  signOut: defineChannel({
+    kind: "call",
+    id: "mcp.sign-out",
+    access: "change",
+    title: "Sign out of an MCP server",
+    description: "Forgets the sign-in Lemma holds for a server, and connects again",
+    payload: Schema.Struct(serverField),
+    success: Schema.Void,
+  }),
   put: defineChannel({
     kind: "call",
     id: "mcp.put",
@@ -234,4 +372,9 @@ export const serveMcp = (mcp: Context.Service.Shape<typeof Mcp>, events: Context
   serveChannel(McpChannels.reconnect, ({ server }) => mcp.reconnect(server)),
   serveChannel(McpChannels.configure, ({ server, change }) => mcp.configure(server, change)),
   serveChannel(McpChannels.put, ({ server, entry }) => mcp.put(server, entry)),
+  serveChannel(McpChannels.list, () => Effect.map(mcp.state, summarize)),
+  serveChannel(McpChannels.signIn, ({ server }) => mcp.signIn(server)),
+  serveChannel(McpChannels.finishSignIn, ({ server, address }) => mcp.finishSignIn(server, address)),
+  serveChannel(McpChannels.cancelSignIn, ({ server }) => mcp.cancelSignIn(server)),
+  serveChannel(McpChannels.signOut, ({ server }) => mcp.signOut(server)),
 ];

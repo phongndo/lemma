@@ -71,8 +71,9 @@ and forking sessions (`sessions.create`, `.set-title`, `.mark`, `.checkout`,
 `.fork`), running a
 command (`commands.run`), the workspace's writes
 (`workspace.create-directory`, `.create-worktree`, `.remove-worktree`,
-`.restore-worktree`, `.checkout`), and
-`mcp.reconnect`. A declined question, a dismissed one, or nobody to ask
+`.restore-worktree`, `.checkout`), and reconnecting an MCP server and
+starting its sign-in (`mcp.reconnect`, `mcp.sign-in`, which answers with the
+page the person approves in a browser). A declined question, a dismissed one, or nobody to ask
 leaves the channel uncalled, and the call is an error saying which.
 
 Never offered, whatever the config says: a channel that declares `secret`
@@ -82,7 +83,8 @@ signing in and out (`llm.login`, `llm.sign-ins`, `llm.answer-sign-in`,
 provider and server entries that can hold a credential (`llm.add-custom`,
 `llm.remove-custom`, `llm.set-logo`, `mcp.put`), their state as written
 (`mcp.state`, `mcp.changes`, where a credential may be typed in place of a
-`${VAR}`), and `cli.run`, which runs any `lemma` command, those among them.
+`${VAR}`; `mcp.list` reads the servers' states without it), finishing an MCP
+server's sign-in (`mcp.finish-sign-in`, whose address carries a code), and `cli.run`, which runs any `lemma` command, those among them.
 `commands.run` can run a command that logs out of a
 provider; its question shows the command's id.
 
