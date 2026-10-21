@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { spawn } from "node:child_process";
+import { flushCompileCache } from "node:module";
 import { Cause, Duration, Effect, Exit, Option, Stream } from "effect";
 import { appUrl, faultMessage } from "@lemma/contracts";
 import { Diagnostic, makeLoader, makeSpanCollector, ReloadError } from "@lemma/core";
@@ -322,6 +323,8 @@ const program = Effect.gen(function* () {
     yield* log(`open ${url}`);
     if (!args.has("--no-open")) yield* openBrowser(url);
   }
+  // What compiled as it started is written now, not only as it exits: a host killed (its group, by a supervisor) keeps it.
+  yield* Effect.sync(flushCompileCache);
 
   yield* untilSignal;
   yield* log("shutting down");

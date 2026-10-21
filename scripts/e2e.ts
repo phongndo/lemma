@@ -17,7 +17,7 @@ import { fileURLToPath } from "node:url";
  * import it by its path.
  */
 
-const hostMain = fileURLToPath(new URL("../packages/host/src/main.ts", import.meta.url));
+const hostMain = fileURLToPath(new URL("../packages/host/src/start.ts", import.meta.url));
 const mockProvider = fileURLToPath(new URL("mock-openai.ts", import.meta.url));
 
 /** Calls `read` until `until` accepts what it returns (a throw is "not yet"), or `timeout` ms pass: then undefined. */

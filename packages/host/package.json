@@ -4,12 +4,12 @@
   "private": true,
   "type": "module",
   "exports": {
-    ".": "./src/main.ts",
+    ".": "./src/start.ts",
     "./paths": "./src/paths.ts",
     "./limits": "./src/limits.ts"
   },
   "scripts": {
-    "start": "node --conditions=lemma-source src/main.ts",
+    "start": "node --conditions=lemma-source src/start.ts",
     "check": "tsrs --noEmit",
     "test": "vitest run"
   },
