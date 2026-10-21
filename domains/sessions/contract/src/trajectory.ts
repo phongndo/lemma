@@ -598,25 +598,33 @@ const settledTurn = (turn: MutableTurn): TrajectoryTurn => ({
  * (`createLedgerProjector` keeps their records). Unlike `trajectory`'s, the turns it returns never change.
  */
 export function createTrajectoryProjector(): (branch: readonly SessionEvent[]) => readonly TrajectoryTurn[] {
-  let last: { readonly branch: readonly SessionEvent[]; readonly fold: TrajectoryFold; readonly turns: readonly TrajectoryTurn[] } | undefined;
+  // `read`: how many of the branch's events were fed, as a caller may grow the branch it passed in place since.
+  let last:
+    | {
+        readonly read: number;
+        readonly first: SessionEvent | undefined;
+        readonly end: SessionEvent | undefined;
+        readonly fold: TrajectoryFold;
+        readonly turns: readonly TrajectoryTurn[];
+      }
+    | undefined;
   return (branch) => {
-    const before = last?.branch;
+    const read = last?.read ?? 0;
+    // Grown at its end, whether a new array or the one before grown in place.
     const appended =
       last !== undefined &&
-      before !== undefined &&
-      before.length > 0 &&
-      branch.length >= before.length &&
-      branch[0] === before[0] &&
-      branch[before.length - 1] === before.at(-1) &&
-      !branch.slice(before.length).some((event) => last!.fold.unresolved.has(event.id));
-    if (appended && branch.length === before!.length) return last!.turns;
+      read > 0 &&
+      branch.length >= read &&
+      branch[0] === last.first &&
+      branch[read - 1] === last.end &&
+      !branch.slice(read).some((event) => last!.fold.unresolved.has(event.id));
+    if (appended && branch.length === read) return last!.turns;
     const fold = appended ? last!.fold : foldTrajectory(branch);
     /** The turns the events fed may change; all of them, folded afresh. */
     const touched = new Set<string>();
-    for (let position = appended ? before!.length : 0; position < branch.length; position++)
-      for (const turnId of fold.feed(branch, position)) touched.add(turnId);
+    for (let position = appended ? read : 0; position < branch.length; position++) for (const turnId of fold.feed(branch, position)) touched.add(turnId);
     const turns = fold.turns.map((turn, at) => (appended && !touched.has(turn.turnId) && last!.turns[at] !== undefined ? last!.turns[at]! : settledTurn(turn)));
-    last = { branch, fold, turns };
+    last = { read: branch.length, first: branch[0], end: branch.at(-1), fold, turns };
     return turns;
   };
 }

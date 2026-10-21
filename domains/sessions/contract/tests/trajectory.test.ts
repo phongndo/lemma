@@ -472,12 +472,17 @@ describe("createTrajectoryProjector", () => {
       const events = log(...Array.from({ length: 1 + pick(30) }, anyEvent));
       const project = createTrajectoryProjector();
       const records = createLedgerProjector();
+      // One array grown in place, as a caller that keeps its branch may pass it: each call sees the events pushed since.
+      const inPlace = createTrajectoryProjector();
+      const grown: SessionEvent[] = [];
       let shown: { readonly turns: ReturnType<typeof project>; readonly records: ReturnType<typeof records>; readonly end: number } | undefined;
       for (let end = pick(3); end <= events.length; end += 1 + pick(3)) {
         const prefix = events.slice(0, end);
         const now = project(prefix);
         const whole = trajectory(prefix);
         expect(JSON.parse(JSON.stringify(now)), JSON.stringify(prefix.map((event) => event.data))).toEqual(JSON.parse(JSON.stringify(whole)));
+        grown.push(...events.slice(grown.length, end));
+        expect(JSON.parse(JSON.stringify(inPlace(grown)))).toEqual(JSON.parse(JSON.stringify(whole)));
         const listed = records(now);
         expect(JSON.parse(JSON.stringify(listed))).toEqual(JSON.parse(JSON.stringify(ledger(whole))));
         // A turn no event appended names is the same object, and so are its records (unless an event appended is one an

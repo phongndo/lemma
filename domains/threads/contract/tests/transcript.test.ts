@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { createProjector, pendingToolCalls, promptBases, promptMarks } from "../src/transcript.ts";
 import type { AssistantItem } from "../src/transcript.ts";
 import { assistant, branch, toolResult, transcriptOf, usage, user } from "../src/testing.ts";
-import type { EventData } from "@lemma/sessions";
+import type { EventData, SessionEvent } from "@lemma/sessions";
 
 const call = (id: string) => ({ type: "toolCall" as const, id, name: "bash", arguments: { command: "ls" } });
 
@@ -292,10 +292,15 @@ describe("createProjector", () => {
       turns = 0;
       const events = branch(...Array.from({ length: 1 + pick(30) }, anyEvent));
       const project = createProjector();
+      // One array grown in place, as a caller that keeps its branch may pass it: each call sees the events pushed since.
+      const inPlace = createProjector();
+      const grown: SessionEvent[] = [];
       let shown: ReturnType<typeof project> | undefined;
       for (let end = pick(3); end <= events.length; end += 1 + pick(3)) {
         const next = project(events.slice(0, end));
         expect(shape(next), JSON.stringify(events.slice(0, end).map((event) => event.data))).toEqual(shape(createProjector()(events.slice(0, end))));
+        grown.push(...events.slice(grown.length, end));
+        expect(shape(inPlace(grown))).toEqual(shape(next));
         // A turn that did not change is the same object, so a view keyed by it keeps its DOM. (Not when turns share a
         // key, as two do when a turn is started with an id a prompt before it already named: the cache is by key.)
         const keys = next.turns.map((turn) => turn.key);

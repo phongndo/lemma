@@ -249,6 +249,8 @@ const blocksOf = (cache: Cache, eventId: string, message: AssistantMessage, resu
  */
 interface Fold {
   readonly branch: readonly SessionEvent[];
+  /** How many of its events were folded: a caller may grow the branch it passed in place since. */
+  readonly read: number;
   /** Each turn's last step, and the turns the person stopped: what makes a result the stop's (`ToolResultView.stopped`). */
   readonly lastSteps: Map<string, string>;
   readonly stoppedTurns: Set<string>;
@@ -269,6 +271,7 @@ interface Fold {
 
 const emptyFold = (branch: readonly SessionEvent[]): Fold => ({
   branch,
+  read: branch.length,
   lastSteps: new Map(),
   stoppedTurns: new Set(),
   results: new Map(),
@@ -539,8 +542,8 @@ const projectWhole = (branch: readonly SessionEvent[], cache: Cache): Fold => {
  * own, an earlier turn ends, or a stop makes an earlier turn's errors its own.
  */
 const projectAppended = (fold: Fold, branch: readonly SessionEvent[], cache: Cache): Fold => {
-  const from = fold.branch.length;
-  const next: Fold = { ...fold, branch };
+  const from = fold.read;
+  const next: Fold = { ...fold, branch, read: branch.length };
   let earliest = Math.max(0, next.turns.length - 1);
   const touch = (turn: number | undefined) => {
     if (turn !== undefined) earliest = Math.min(earliest, turn);
@@ -581,11 +584,16 @@ export const createProjector = (): ((branch: readonly SessionEvent[]) => Transcr
   const cache = makeCache();
   let last: { readonly fold: Fold; readonly transcript: Transcript } | undefined;
   return (branch) => {
-    const before = last?.fold.branch;
-    // The branch shown, grown at its end (a turn appending): carried on rather than projected whole.
+    const before = last?.fold;
+    // The branch shown, grown at its end (a turn appending), whether a new array or the one before grown in place:
+    // carried on rather than projected whole.
     const appended =
-      before !== undefined && before.length > 0 && branch.length >= before.length && branch[before.length - 1] === before.at(-1) && branch[0] === before[0];
-    if (appended && branch.length === before.length) return last!.transcript;
+      before !== undefined &&
+      before.read > 0 &&
+      branch.length >= before.read &&
+      branch[before.read - 1] === before.branch[before.read - 1] &&
+      branch[0] === before.branch[0];
+    if (appended && branch.length === before.read) return last!.transcript;
     const fold = appended ? projectAppended(last!.fold, branch, cache) : projectWhole(branch, cache);
     last = { fold, transcript: transcriptOfFold(fold) };
     return last.transcript;
