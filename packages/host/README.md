@@ -1,6 +1,6 @@
 # @lemma/host
 
-The host process. Importing the package runs it (`src/start.ts`, which starts
+The host process. Importing the package runs it (`src/start.mjs`, which starts
 `src/main.ts`, [below](#its-start)): it resolves
 paths, reads the config and plugin files into a composition, loads it, and
 reloads when they change. [Usage](../../docs/usage.md) describes running it.
@@ -36,14 +36,16 @@ worker thread, which takes its module cache with it when it stops, as
 
 Most of a start is compiling the modules the host loads and stripping their
 types, which Node.js's compile cache keeps from one start to the next:
-`src/start.ts` turns it on and then imports `src/main.ts`, as the cache holds
+`src/start.mjs` turns it on and then imports `src/main.ts`, as the cache holds
 only what loads after it is on. A warm cache starts the host in about two
-thirds of the time.
+thirds of the time, and spares it Node's type stripper (10–20 MB a thread),
+which is why the one module loaded before it is JavaScript. The stall
+watchdog's worker, [below](#a-blocked-event-loop), uses it too.
 
 - **Where.** The checkout's `packages/host/node_modules/.cache/compile`, so
   every home, shell, and test's host shares it. `NODE_COMPILE_CACHE` names
   another directory; `NODE_DISABLE_COMPILE_CACHE=1` turns it off. It can be
-  deleted at any time.
+  deleted at any time. What the host's tools run does not inherit it.
 - **Edits.** Each module's entry is checked against its source, so an edited
   file (this checkout's, or a plugin file's) compiles again. Each version of a
   plugin file the host loads keeps an entry of its own.
