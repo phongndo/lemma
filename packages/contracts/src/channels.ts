@@ -510,12 +510,12 @@ export const withChannel = <Kind extends ChannelKind, A, E, R>(
         },
         { missing: () => (missing ??= look === "again" ? unanswered(id) : notFound(id)), expired: () => withdrawnFrom(id, kind) },
       );
+      // Only once made is it `missing`: a handler may fail with `undefined` too.
+      const isMissing = (error: E | HostError) => missing !== undefined && error === missing;
       const waits = (error: E | HostError) =>
-        error === missing
-          ? look === "first" || (look === "again" && seen)
-          : ran?.item.kind === "call" && ran.item.repeatable === true && isWithdrawn(error, id);
+        isMissing(error) ? look === "first" || (look === "again" && seen) : ran?.item.kind === "call" && ran.item.repeatable === true && isWithdrawn(error, id);
       return Effect.catchIf(served, waits, (error) =>
-        error === missing
+        isMissing(error)
           ? Effect.andThen(answeredOrSettled(registries, id, gone), serve(look === "first" ? "last" : "again", gone))
           : Effect.andThen(answeredOrSettled(registries, id, ran), serve("again", ran)),
       );
