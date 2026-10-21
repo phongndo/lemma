@@ -28,7 +28,10 @@ export type JournalRecord =
   | { readonly type: "start"; readonly id: number }
   /** A call begun that never reached its tool (it was gone as the core shut down): it runs when the script resumes. */
   | { readonly type: "unrun"; readonly id: number }
-  /** A call settled; `display`: what a `display` tool's call showed, which a resumed run shows again. */
+  /**
+   * A call settled; `display`: what a `display` tool's call showed, which a resumed run shows again; `unshown`: one
+   * past what a script shows, named as the result names it.
+   */
   | {
       readonly type: "result";
       readonly seq: number;
@@ -36,6 +39,7 @@ export type JournalRecord =
       readonly id: number;
       readonly outcome: CodemodeOutcome;
       readonly display?: CodemodeDisplay;
+      readonly unshown?: string;
     }
   /** The call's result, as the tool returned it: a host that stops before the agent logs it runs the call again. */
   | { readonly type: "done"; readonly result: unknown };

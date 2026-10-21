@@ -648,7 +648,7 @@ describe("what a script's call resolves to", () => {
     expect(textOf(result)).toContain('[Shown to the person outside your reply: page "Chart". Don\'t describe it again.]');
   });
 
-  it("shows at most 20 pages, 10 MiB together, from one script: past that, a call shows nothing and the script hears why", async () => {
+  it("shows at most 20 pages, 10 MiB together, from one script: past that, a call shows nothing but answers, and the result names it", async () => {
     const page = definePlugin({
       id: "page",
       layer: Layer.effectDiscard(
@@ -656,10 +656,14 @@ describe("what a script's call resolves to", () => {
           owner.add(Tools, {
             name: "page",
             description: "Shows a page",
-            input: Schema.Struct({ title: Schema.String, mib: Schema.optional(Schema.Number) }),
+            input: Schema.Struct({ title: Schema.String, mib: Schema.optional(Schema.Number), fail: Schema.optional(Schema.Boolean) }),
             display: true,
-            execute: ({ title, mib }) =>
-              new ToolResult({ content: [{ type: "text", text: "shown" }], details: { title, html: "x".repeat((mib ?? 0) * 1024 * 1024) } }),
+            execute: ({ title, mib, fail }) =>
+              new ToolResult({
+                content: [{ type: "text", text: fail === true ? "failed" : "shown" }],
+                ...(fail === true ? { isError: true } : {}),
+                details: { title, html: "x".repeat((mib ?? 0) * 1024 * 1024) },
+              }),
           }),
         ),
       ),
@@ -670,14 +674,21 @@ describe("what a script's call resolves to", () => {
       [page],
     );
     expect((many.details as CodemodeDetails).displays).toHaveLength(20);
-    expect(textOf(many)).toContain("page showed nothing: one script shows at most 20 pages, 10 MiB together");
+    // They ran: the script hears what the tool answered, which may have done more than show.
+    expect(textOf(many)).toContain("[]");
+    expect(textOf(many)).toContain('[Not shown to the person, though they ran: page "20", page "21" (one script shows at most 20 pages, 10 MiB together).');
     const large = await run(
-      `await tools.page({ title: "a", mib: 6 }); return await tools.page({ title: "b", mib: 6 }).then(() => "shown", (error) => error.message);`,
+      `await tools.page({ title: "a", mib: 6 }); return await tools.page({ title: "b", mib: 6 }).then(() => "answered", (error) => error.message);`,
       process.cwd(),
       [page],
     );
     expect((large.details as CodemodeDetails).displays?.map((display) => display.title)).toEqual(["a"]);
-    expect(textOf(large)).toContain("page showed nothing");
+    expect(textOf(large)).toContain("answered");
+    expect(textOf(large)).toContain('Not shown to the person, though they ran: page "b"');
+    // A failed call whose result still holds something for its view shows it; it rejects in the script all the same.
+    const failed = await run(`return await tools.page({ title: "c", fail: true }).then(() => "ok", (error) => error.message);`, process.cwd(), [page]);
+    expect((failed.details as CodemodeDetails).displays?.map((display) => display.title)).toEqual(["c"]);
+    expect(textOf(failed)).toContain("failed");
   });
 });
 

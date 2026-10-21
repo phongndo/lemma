@@ -55,10 +55,14 @@ class Held {
   }
 }
 
-/** A call settled: what the script hears, and what it showed when it is a `display` call that showed something. */
+/**
+ * A call settled: what the script hears, and what it showed when it is a `display` call that showed something, or its
+ * name (`unshown`) when it would have, past what one script shows.
+ */
 interface Settled {
   readonly outcome: CodemodeOutcome;
   readonly display?: CodemodeDisplay;
+  readonly unshown?: string;
 }
 
 /**
@@ -85,6 +89,9 @@ const MAX_KEPT_CALLS = 500;
  */
 const MAX_DISPLAYS = 20;
 const MAX_DISPLAY_BYTES = 10 * 1024 * 1024;
+/** A shown call as the result names it to the model: its tool, and its title. */
+const named = (display: CodemodeDisplay) => (display.title === undefined ? display.name : `${display.name} "${display.title}"`);
+
 /** A call's arguments as its line shows them. */
 const ARGS_CHARS = 160;
 
@@ -273,6 +280,8 @@ export const codemodeTool = (deps: CodemodeDeps): Tool<CodemodeInput> => ({
       /** Each call as it settled, with the VM's number for it: the result lists them in the order the script made them. */
       const records: { readonly id: number; readonly call: CodemodeCallRecord }[] = [];
       const displays: { readonly id: number; readonly display: CodemodeDisplay }[] = [];
+      /** The `display` calls past what a script shows, named: they ran, and the result says they were not shown. */
+      const unshown: { readonly id: number; readonly name: string }[] = [];
       /** What the script's `display` calls have shown, in calls and size; past either limit, a call shows nothing. */
       const shown = { calls: 0, bytes: 0 };
       const fits = (display: CodemodeDisplay) => {
@@ -443,7 +452,8 @@ export const codemodeTool = (deps: CodemodeDeps): Tool<CodemodeInput> => ({
                       ? text
                       : { text, images: images.map((image): ImageBlock => ({ type: "image", data: image.data, mimeType: image.mimeType })) },
                 };
-        if (display !== true || result.isError === true) return { outcome };
+        // A failed call shows what its result still holds for its view (an agent that failed); one holding nothing, nothing.
+        if (display !== true || (result.isError === true && result.details === undefined)) return { outcome };
         const title = (args as { readonly title?: unknown } | null)?.title;
         const kept: CodemodeDisplay = {
           name: spec.name,
@@ -451,10 +461,9 @@ export const codemodeTool = (deps: CodemodeDeps): Tool<CodemodeInput> => ({
           content: result.content,
           ...(result.details === undefined ? {} : { details: result.details }),
         };
-        if (!fits(kept)) {
-          const limit = `one script shows at most ${MAX_DISPLAYS} pages, ${MAX_DISPLAY_BYTES / (1024 * 1024)} MiB together`;
-          return { outcome: { ok: false, message: `${spec.name} showed nothing: ${limit}. Show fewer or smaller ones, or the rest from another script` } };
-        }
+        // Past the limit it shows nothing, but it ran: the script hears what the tool answered, which may have done
+        // more than show (an agent's work), and the result names it as not shown.
+        if (!fits(kept)) return { outcome, unshown: named(kept) };
         return { outcome, display: kept };
       };
 
@@ -500,6 +509,7 @@ export const codemodeTool = (deps: CodemodeDeps): Tool<CodemodeInput> => ({
             fits(recorded.display);
             displays.push({ id: call.id, display: recorded.display });
           }
+          if (recorded.unshown !== undefined) unshown.push({ id: call.id, name: recorded.unshown });
           deliver(recorded.seq, recorded.now, call.id, recorded.outcome);
           return;
         }
@@ -536,6 +546,7 @@ export const codemodeTool = (deps: CodemodeDeps): Tool<CodemodeInput> => ({
             return;
           }
           const { outcome, display } = settled;
+          const hidden = settled.unshown;
           if (run.finished || !pending.has(call.id)) return;
           pending.delete(call.id);
           const seq = nextSeq++;
@@ -547,8 +558,17 @@ export const codemodeTool = (deps: CodemodeDeps): Tool<CodemodeInput> => ({
             durationMs: performance.now() - at,
           });
           // Kept before the script sees it, so a run resumed from here sees the same.
-          await journal?.append({ type: "result", seq, now, id: call.id, outcome, ...(display === undefined ? {} : { display }) });
+          await journal?.append({
+            type: "result",
+            seq,
+            now,
+            id: call.id,
+            outcome,
+            ...(display === undefined ? {} : { display }),
+            ...(hidden === undefined ? {} : { unshown: hidden }),
+          });
           if (display !== undefined) displays.push({ id: call.id, display });
+          if (hidden !== undefined) unshown.push({ id: call.id, name: hidden });
           deliver(seq, now, call.id, outcome);
         });
       };
@@ -614,9 +634,15 @@ export const codemodeTool = (deps: CodemodeDeps): Tool<CodemodeInput> => ({
       if (!result.ok) items.push({ type: "text", text: `Script error:\n${formatError(result.error, calls)}` });
       // The model does not see what its script showed the person: it is told, so its reply neither repeats nor misses it.
       const showed = [...displays].sort((a, b) => a.id - b.id).map(({ display }) => display);
-      if (showed.length > 0) {
-        const named = showed.map((display) => (display.title === undefined ? display.name : `${display.name} "${display.title}"`));
-        items.push({ type: "text", text: `[Shown to the person outside your reply: ${named.join(", ")}. Don't describe it again.]` });
+      if (showed.length > 0)
+        items.push({ type: "text", text: `[Shown to the person outside your reply: ${showed.map(named).join(", ")}. Don't describe it again.]` });
+      if (unshown.length > 0) {
+        const limit = `one script shows at most ${MAX_DISPLAYS} pages, ${MAX_DISPLAY_BYTES / (1024 * 1024)} MiB together`;
+        const names = [...unshown].sort((a, b) => a.id - b.id).map(({ name }) => name);
+        items.push({
+          type: "text",
+          text: `[Not shown to the person, though they ran: ${names.join(", ")} (${limit}). Show what matters from another script.]`,
+        });
       }
       const budget = (options.maxOutputTokens ?? DEFAULT_MAX_OUTPUT_TOKENS) * CHARS_PER_TOKEN;
       // Under the registry's cap with room for the header, so the note naming the full output survives it.
