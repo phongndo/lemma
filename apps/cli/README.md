@@ -20,8 +20,8 @@ A client of a host that holds no domain. Its own commands are the ones no
 plugin could serve:
 
 - **This machine's host and setup:** `serve`, `stop`, `restart`, `logs`,
-  `service`, `env`, `token`, `config`, `trust`, `doctor`, `plugins check`.
-  They need no host running.
+  `service`, `env`, `token`, `config`, `trust`, `profile`, `doctor`,
+  `plugins check`. They need no host running.
 - **This lemma:** `version`, and `update`, which installs another release with
   the installer the release carries ([versioning](../../docs/versioning.md)).
 - **The runtime's:** `status`, `plugins`, `reload`, `kernel`, `inspectors`,
@@ -44,6 +44,15 @@ plugin shadows one.
   that needs one fails `NoHost` (exit 3) rather than starting one; `serve` and
   the desktop app start hosts. A target that is set but cannot be used fails
   rather than falling back to another host.
+- **Which profile.** A command goes to the [profile](../../docs/configuration.md#profiles)
+  `--profile` names, else `LEMMA_PROFILE`'s, else the default, the home's own:
+  `serve`, `stop`, `logs`, `token`, `config`, and `trust` act on that profile's
+  home, and `service` installs a service of its own for it (`lemma-<name>`).
+  On another machine (`--env`, `LEMMA_URL`), the host there opens the profile
+  (`profiles.open`, which starts it), and the command goes to it at that
+  machine's name and the profile's port. The environments a client knows are
+  the home's, whichever the profile. `profile` lists the profiles, `profile
+  create` makes one, and `profile remove` deletes one, asking first.
 - **One host per home.** The host takes `<home>/host.lock` as it starts, so a
   second fails at once naming the first; `serve` says so before starting.
   `serve --detach` starts one in the background, marked as the CLI's
@@ -98,14 +107,16 @@ plugin shadows one.
   give its path (`--cwd`, `--path`).
 - **Pages.** `open` (and a command that opens one, as `sessions open` does)
   shows the web app in the desktop app when it runs here and shows the same
-  host (`<home>/desktop.json`), else in the browser, else prints the address.
+  host (`<home>/desktop.json`, the default profile's home, for every profile),
+  in the window of the command's profile, else in the browser, else prints the address.
   A page elsewhere (a sign-in) opens in the browser where there is one.
 - **Completion.** `lemma completion bash|zsh|fish` prints a script that asks
   `lemma __complete` for the next word: the commands, the host's plugins'
   among them when one answers within 1.5 seconds, their flags, and flag
   values.
 - **Speed.** A command loads only the client, the runtime's contracts, and
-  `@lemma/cli`, never a domain, and the host only for `serve`. From the
+  two domains' contracts (`@lemma/cli`, `@lemma/profiles`), never a plugin,
+  and the host only for `serve`. From the
   sources it starts in about 190 ms, most of it loading TypeScript;
   `pnpm lemma:build` bundles it into `apps/cli/dist/lemma.mjs` (1.5 MB), which
   starts in about 60 ms (`node apps/cli/dist/lemma.mjs …`; measured on Linux,

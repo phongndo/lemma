@@ -1,10 +1,12 @@
 import { Effect } from "effect";
 import type { Scope } from "effect";
 import type { RpcClientError } from "effect/rpc";
-import { makeHostRpcHttp, tooLarge } from "@lemma/client";
+import { callChannel, makeHostRpcHttp, tooLarge } from "@lemma/client";
 import { HOST_PROTOCOL, HostError } from "@lemma/contracts";
 import { findTarget as resolveTarget } from "@lemma/contracts/discovery";
 import type { Target } from "@lemma/contracts/discovery";
+import { profileOf } from "@lemma/contracts/profiles";
+import { isLoopback, ProfileChannels, profileAddress } from "@lemma/profiles";
 import { resolvePaths } from "@lemma/host/paths";
 import { openHost } from "./channels.ts";
 import { CliError, ExitCode, usage } from "./command.ts";
@@ -16,7 +18,11 @@ import type { Connection, Failure, Globals, Io } from "./command.ts";
  * what a failure to reach it says.
  */
 
+/** The home of the profile a command goes to (`--profile`, `LEMMA_PROFILE`): the root's own unless one is named. */
 export const homeOf = (io: Pick<Io, "env" | "cwd">): string => resolvePaths({ env: io.env, cwd: io.cwd }).home;
+
+/** `~/.lemma` (or `$LEMMA_HOME`), whatever the profile: where this client's environments and every profile are. */
+export const rootOf = (io: Pick<Io, "env" | "cwd">): string => resolvePaths({ env: io.env, cwd: io.cwd }).root;
 
 /** The HTTP status behind a failed call, when there was a response: `filterStatusOk` turns a `401` into a failed send. */
 export const statusOf = (error: RpcClientError.RpcClientError): unknown =>
@@ -82,10 +88,13 @@ export const toCliError = (error: Failure, target?: Target): CliError => {
   return new CliError({ code: "Unreachable", message: `Cannot reach the host: ${reasonOf(error)}`, exit: ExitCode.unavailable });
 };
 
-export const noLocalHost = (home: string) =>
+export const noLocalHost = (home: string, profile?: string) =>
   new CliError({
     code: "NoHost",
-    message: `No running Lemma host for ${home}. Start one with \`lemma serve\` (or the desktop app), or use another with --env.`,
+    message:
+      profile === undefined
+        ? `No running Lemma host for ${home}. Start one with \`lemma serve\` (or the desktop app), or use another with --env.`
+        : `No running Lemma host for the profile "${profile}" (${home}). Start one with \`lemma --profile ${profile} serve\` (or open it in the desktop app).`,
     exit: ExitCode.unavailable,
   });
 
@@ -93,10 +102,15 @@ export const noLocalHost = (home: string) =>
  * The host commands go to, or undefined when it is the local one and none
  * runs. A bad `LEMMA_URL` is a usage error; an environments.json that cannot
  * be used, or an environment it does not have, no host (falling back would act
- * on the wrong machine).
+ * on the wrong machine). The local host is the one of the profile `io.env`
+ * names (`LEMMA_PROFILE`, which `--profile` sets). On another machine,
+ * `profile` (`--profile`, named for this command, not inherited) is opened by
+ * the host there (`profiles.open`, which starts it), and the command goes to
+ * it at that machine's name and the profile's port; without it, to whichever
+ * profile that host is.
  */
-export const findTarget = (io: Pick<Io, "env" | "cwd">, name?: string): Effect.Effect<Target | undefined, CliError> =>
-  resolveTarget(io.env, homeOf(io), name).pipe(
+export const findTarget = (io: Pick<Io, "env" | "cwd">, name?: string, profile?: string): Effect.Effect<Target | undefined, CliError> =>
+  resolveTarget(io.env, rootOf(io), name, homeOf(io)).pipe(
     Effect.catchTag("TargetError", (error) =>
       Effect.fail(
         error.reason === "Environment"
@@ -104,7 +118,42 @@ export const findTarget = (io: Pick<Io, "env" | "cwd">, name?: string): Effect.E
           : new CliError({ code: error.reason === "Unknown" ? "UnknownEnvironment" : "NoHost", message: error.message, exit: ExitCode.unavailable }),
       ),
     ),
+    Effect.flatMap((target) =>
+      target === undefined || target.source === "local" || profile === undefined ? Effect.succeed(target) : remoteProfile(target, profile),
+    ),
   );
+
+/**
+ * The profile `profile` of the machine `target` is on, as its host opens it (starting it when none runs there). Not
+ * through a loopback address, which may be a tunnel to that machine (`ssh -L`): it carries one port, and another
+ * profile's port on loopback is this machine's, which would be handed the profile's token.
+ */
+const remoteProfile = (target: Target, profile: string): Effect.Effect<Target, CliError> =>
+  isLoopback(target.url)
+    ? Effect.fail(
+        new CliError({
+          code: "Unreachable",
+          message: `${target.name} (${target.url}) is a loopback address, which may be a tunnel to another machine: reach the profile "${profile}" at its own address instead (lemma env add, or LEMMA_URL)`,
+          exit: ExitCode.unavailable,
+        }),
+      )
+    : Effect.scoped(Effect.flatMap(makeHostRpcHttp(target.url, target.token), (rpc) => callChannel(rpc, ProfileChannels.open, { name: profile }))).pipe(
+        Effect.map((opened) => ({
+          url: profileAddress(target.url, opened),
+          token: opened.token,
+          source: target.source,
+          name: `${target.name}/${profile}`,
+          from: target.from,
+        })),
+        Effect.mapError((error) => {
+          const reason = error instanceof HostError ? error.message : reasonOf(error);
+          return new CliError({
+            code: error instanceof HostError ? error.code : "NoHost",
+            message: `The host at ${target.url} (${target.name}) cannot open the profile "${profile}": ${reason}`,
+            exit: ExitCode.unavailable,
+          });
+        }),
+      );
 
 /**
  * Whether the host speaks another RPC protocol (`HOST_PROTOCOL`): a host from another version of Lemma fails every
@@ -142,10 +191,10 @@ export const otherProtocol = (target: Target): Effect.Effect<CliError | undefine
  * command that watches the host) for its events, questions, and streams, as
  * the web app has it.
  */
-export const connect = (io: Io, globals: Pick<Globals, "env">): Effect.Effect<Connection, Failure, Scope.Scope> =>
+export const connect = (io: Io, globals: Pick<Globals, "env" | "profile">): Effect.Effect<Connection, Failure, Scope.Scope> =>
   Effect.gen(function* () {
-    const target = yield* findTarget(io, globals.env);
-    if (target === undefined) return yield* noLocalHost(homeOf(io));
+    const target = yield* findTarget(io, globals.env, globals.profile);
+    if (target === undefined) return yield* noLocalHost(homeOf(io), profileOf(io.env));
     return yield* connectTo(target);
   });
 

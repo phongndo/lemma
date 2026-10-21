@@ -83,6 +83,11 @@ export const GLOBAL_FLAGS: Readonly<Record<string, FlagSpec>> = {
   json: { type: "boolean", description: 'Print results as JSON (errors as {"error": {...}} on stderr); streams print one JSON value per line' },
   text: { type: "boolean", description: "Print results as text, though an agent runs the command (see LEMMA_OUTPUT)" },
   env: { type: "string", placeholder: "name", description: "The host to use: a saved environment, or local (see lemma env)" },
+  profile: {
+    type: "string",
+    placeholder: "name",
+    description: "The profile to use, a separate Lemma with its own home and host (see lemma profile); default is the home's own, as LEMMA_PROFILE says",
+  },
   quiet: { type: "boolean", short: "q", description: "Print only the ids a command reports, one per line" },
   fields: { type: "string", placeholder: "a,b", description: "With JSON output, keep only these fields of each object in a list" },
   questions: {
