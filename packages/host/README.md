@@ -34,6 +34,13 @@ worker thread, which takes its module cache with it when it stops, as
 
 ## Its start
 
+What the host loads as it starts is what its plugins import at their top
+level, so a bundled plugin imports a dependency only some of its calls use
+where those calls run: Playwright with `browser.chromium`'s first launch, the
+MCP SDK with a server's first connect, codemode's sandbox with its first
+script. `tests/startup.test.ts` holds the bundled plugins to that, and to a
+number of modules.
+
 Most of a start is compiling the modules the host loads and stripping their
 types, which Node.js's compile cache keeps from one start to the next:
 `src/start.mjs` turns it on and then imports `src/main.ts`, as the cache holds
