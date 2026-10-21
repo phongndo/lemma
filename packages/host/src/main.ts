@@ -98,6 +98,7 @@ const launch = {
   pid: process.pid,
   startedAt: Date.now(),
   ...(process.env.LEMMA_STARTED_BY?.trim() ? { startedBy: process.env.LEMMA_STARTED_BY.trim() } : {}),
+  ...(safe ? { safe: true } : {}),
 };
 delete process.env.LEMMA_STARTED_BY;
 // `pnpm start` runs from packages/host; INIT_CWD is where the user invoked it.

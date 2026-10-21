@@ -35,6 +35,11 @@ export const ReleaseStatus = Schema.Struct({
   updatable: Schema.Boolean,
   /** Whether it asks by itself, now and then, whether a newer release is out (its plugin's config). */
   checks: Schema.Boolean,
+  /**
+   * The channel updates come from: what the installer recorded with the release installed last, which `lemma update
+   * --channel` may have switched since this host started.
+   */
+  channel: Schema.optional(Schema.Literals(["stable", "nightly"])),
   /** The channel's newest release, as the last check found it. */
   newest: Schema.optional(Schema.String),
   /** Whether `newest` is newer than this, or older: the channel went back to it (a stable release rolled back). */
@@ -43,6 +48,8 @@ export const ReleaseStatus = Schema.Struct({
   /** When the last check answered (epoch ms), and why the last one failed, if it did. */
   checkedAt: Schema.optional(Schema.Number),
   error: Schema.optional(Schema.String),
+  /** Why the restart `release.update` asked for failed, leaving this host running; absent when none did. */
+  restartError: Schema.optional(Schema.String),
 });
 export type ReleaseStatus = typeof ReleaseStatus.Type;
 

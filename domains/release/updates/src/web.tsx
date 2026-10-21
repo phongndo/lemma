@@ -9,8 +9,11 @@ import { Client, HostPlugins, Notify, Slots, defineWebPlugin } from "@lemma/web"
 const SECTION = "about";
 /** How often the page asks the host what its last check found. */
 const REFRESH_MS = 10 * 60_000;
-/** How long the page waits for the host to come back on the new release before saying so. */
+/** How long the page waits for the host to come back on the new release before saying so, and how often it looks. */
 const BACK_MS = 3 * 60_000;
+const LOOK_MS = 1_000;
+
+type Restart = { readonly outcome: "back" } | { readonly outcome: "failed"; readonly why: string } | { readonly outcome: "late" };
 
 /** Where a commit is, on the repository releases come from. */
 const commitUrl = (commit: string) => `https://github.com/phongndo/lemma/commit/${commit}`;
@@ -60,25 +63,38 @@ export default defineWebPlugin({
       setUpdating({ step: "confirm", cutOff: work.flatMap((report) => report.items) });
     };
 
-    /** Resolves once the connection is back after dropping, or false after `BACK_MS`. */
-    const back = () =>
-      new Promise<boolean>((resolve) => {
-        const generation = client.status().generation;
-        const timeout = setTimeout(() => finish(false), BACK_MS);
-        const stop = client.onConnect(() => {
-          if (client.status().generation > generation) finish(true);
-        });
-        function finish(ok: boolean) {
-          clearTimeout(timeout);
-          stop();
-          resolve(ok);
-        }
+    /**
+     * Where the restart onto `version` is. `back`: the page is connected to a host running it, or its connection
+     * dropped and the page's own address answers again, over plain HTTP, so a new host on another RPC protocol, which
+     * this page's client cannot talk to, counts too. `failed`: the old host, still answering, says its restart failed,
+     * and why. `late`: neither, after `BACK_MS`.
+     */
+    const restarted = (version: string) =>
+      new Promise<Restart>((resolve) => {
+        const deadline = Date.now() + BACK_MS;
+        let dropped = false;
+        const look = async (): Promise<void> => {
+          if (Date.now() > deadline) return resolve({ outcome: "late" });
+          if (!dropped && client.connected()) {
+            const now = await client.channel.call(ReleaseChannels.status, undefined).catch(() => undefined);
+            if (now?.build.version === version) return resolve({ outcome: "back" });
+            if (now?.restartError !== undefined) return resolve({ outcome: "failed", why: now.restartError });
+          } else {
+            dropped = true;
+            const up = await fetch(`${window.location.origin}/`, { cache: "no-store" }).then(
+              (response) => response.ok,
+              () => false,
+            );
+            if (up) return resolve({ outcome: "back" });
+          }
+          plugin.after(LOOK_MS, look);
+        };
+        plugin.after(LOOK_MS, look);
       });
 
     const update = async () => {
       setUpdating({ step: "installing" });
       try {
-        const restarted = back();
         const result = await client.channel.call(ReleaseChannels.update, {});
         if (!result.restarting) {
           setUpdating(undefined);
@@ -87,11 +103,18 @@ export default defineWebPlugin({
         }
         setUpdating({ step: "restarting", version: result.version });
         // The page the new host serves is the new release's: load it once the host is back.
-        if (await restarted) window.location.reload();
-        else {
-          setUpdating(undefined);
-          notify.toast({ level: "error", message: `The host did not come back on Lemma ${result.version}: lemma logs says why` });
-        }
+        const restart = await restarted(result.version);
+        if (restart.outcome === "back") return window.location.reload();
+        setUpdating(undefined);
+        void load();
+        const log = `${client.info()?.home ?? "~/.lemma"}/logs/restart.log`;
+        notify.toast({
+          level: "error",
+          message:
+            restart.outcome === "failed"
+              ? `Lemma ${result.version} is installed, but the host did not restart on it: ${restart.why}`
+              : `The host did not come back on Lemma ${result.version}: ${log} and lemma logs say why`,
+        });
       } catch (error) {
         setUpdating(undefined);
         notify.report(error, "Could not update Lemma");
@@ -175,12 +198,12 @@ export default defineWebPlugin({
                     : !now.updatable
                       ? "Not installed by the installer, so it cannot replace it."
                       : now.newer
-                        ? `Lemma ${now.newest} is out on ${build.channel ?? "its channel"}.`
+                        ? `Lemma ${now.newest} is out on ${now.channel ?? "its channel"}.`
                         : now.older
-                          ? `The ${build.channel ?? "stable"} release went back to ${now.newest}.`
+                          ? `The ${now.channel ?? "stable"} release went back to ${now.newest}.`
                           : now.newest === undefined
-                            ? `On the ${build.channel ?? "stable"} channel.`
-                            : `The newest on ${build.channel ?? "its channel"}.`
+                            ? `On the ${now.channel ?? "stable"} channel.`
+                            : `The newest on ${now.channel ?? "its channel"}.`
                 }
               >
                 <Show when={now.updatable}>
@@ -239,7 +262,7 @@ export default defineWebPlugin({
             view: () => (
               <SettingRow
                 title="Check for updates"
-                description={`Ask every few hours whether a newer release is out on the ${now.build.channel ?? "stable"} channel.${now.error === undefined ? "" : ` The last check failed: ${now.error}`}`}
+                description={`Ask every few hours whether a newer release is out on the ${now.channel ?? "stable"} channel.${now.error === undefined ? "" : ` The last check failed: ${now.error}`}`}
               >
                 <Toggle label="Check for updates" checked={checks.value() ?? true} onChange={(on) => checks.set(on)} />
               </SettingRow>
@@ -248,8 +271,8 @@ export default defineWebPlugin({
           row(
             "channel stable nightly switch",
             "Channel",
-            () => now.build.channel ?? "stable",
-            () => `lemma update --channel ${now.build.channel === "nightly" ? "stable" : "nightly"} switches to the other.`,
+            () => now.channel ?? "stable",
+            () => `lemma update --channel ${now.channel === "nightly" ? "stable" : "nightly"} switches to the other.`,
           ),
         ];
       },

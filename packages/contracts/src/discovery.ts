@@ -17,6 +17,15 @@ export const Discovery = Schema.Struct({
   pid: Schema.Number,
   /** Epoch milliseconds. */
   startedAt: Schema.Number,
+  /**
+   * How it runs, as `Host.Info` says, for a client that cannot ask it (one on another protocol, which `lemma restart
+   * --force` starts again as it ran): the project it serves, what started it, whether in safe mode, and the address it
+   * binds. Absent from an entry an older host wrote.
+   */
+  cwd: Schema.optional(Schema.String),
+  startedBy: Schema.optional(Schema.String),
+  safe: Schema.optional(Schema.Boolean),
+  host: Schema.optional(Schema.String),
 });
 export type Discovery = typeof Discovery.Type;
 

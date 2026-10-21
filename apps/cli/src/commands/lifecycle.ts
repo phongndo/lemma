@@ -6,13 +6,14 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Duration, Effect } from "effect";
 import { readDiscovery } from "@lemma/contracts/discovery";
+import type { Discovery } from "@lemma/contracts/discovery";
 import { CliChannels } from "@lemma/cli";
 import { callChannel } from "@lemma/client";
 import { SHUTDOWN_TIMEOUT_MS } from "@lemma/host/limits";
 import { hostFiles } from "@lemma/host/paths";
 import { CliError, defineBuiltin, ExitCode, usage } from "../command.ts";
 import type { Builtin, Globals, Io } from "../command.ts";
-import { connect, homeOf } from "../connect.ts";
+import { connect, homeOf, otherProtocol, toCliError } from "../connect.ts";
 import { startedByText } from "../format.ts";
 import { readBuild } from "../release.ts";
 
@@ -168,37 +169,66 @@ const confirm = (io: Io, question: string): Effect.Effect<boolean> =>
 /** How long a host may take to stop: its own shutdown deadline, and a margin. */
 const STOPPING = Duration.millis(SHUTDOWN_TIMEOUT_MS + 5_000);
 
+/** What is known of the running host: what started it, the project it serves, whether in safe mode, and what stopping it would cut off. */
+interface Running {
+  readonly startedBy: string | undefined;
+  readonly cwd: string | undefined;
+  readonly safe: boolean;
+  readonly items: readonly string[];
+}
+
 /**
- * The running host's info, and what stopping it would cut off, once whoever asked has agreed to that: a host the
- * desktop app started, or one with work in progress, only with `force` or a yes at the terminal.
+ * The running host's facts, as it answers them. A host that cannot answer (one on another version of Lemma, whose
+ * calls this one cannot read) is known by its transport.json alone, and only with `force`, as what stopping it would
+ * cut off is not known; without, the failure says why (`OtherVersion`), and that `--force` goes on.
  */
-const beforeStop = (io: Io, force: boolean, doing: "Stopping" | "Restarting") =>
+const runningHost = (io: Io, entry: Discovery, force: boolean, verb: "stop" | "restart") =>
   Effect.gen(function* () {
-    const { rpc } = yield* connect(io, { env: "local" });
-    const [info, items] = yield* Effect.all(
-      [
-        rpc["Host.Info"](),
-        // A plugin's to say: a host that cannot is taken to be busy, as it may be.
-        callChannel(rpc, CliChannels.inProgress, {}).pipe(
-          Effect.map((work) => work.flatMap((report) => report.items)),
-          Effect.orElseSucceed(() => ["work it cannot list (cli.registry is off)"]),
-        ),
-      ],
-      { concurrency: "unbounded" },
+    const { rpc, target } = yield* connect(io, { env: "local" });
+    const answered = yield* Effect.result(
+      Effect.all(
+        [
+          rpc["Host.Info"](),
+          // A plugin's to say: a host that cannot is taken to be busy, as it may be.
+          callChannel(rpc, CliChannels.inProgress, {}).pipe(
+            Effect.map((work) => work.flatMap((report) => report.items)),
+            Effect.orElseSucceed(() => ["work it cannot list (cli.registry is off)"]),
+          ),
+        ],
+        { concurrency: "unbounded" },
+      ),
     );
+    if (answered._tag === "Success") {
+      const [info, items] = answered.success;
+      return { startedBy: info.startedBy, cwd: info.cwd, safe: info.safe === true, items } satisfies Running;
+    }
+    if (!force) {
+      const why = (yield* otherProtocol(target)) ?? toCliError(answered.failure, target);
+      return yield* new CliError({
+        code: why.code,
+        message: `${why.message}\nlemma ${verb} --force ${verb}s it all the same, not knowing what that cuts off.`,
+        exit: why.exit,
+        ...(why.subject === undefined ? {} : { subject: why.subject }),
+      });
+    }
+    return { startedBy: entry.startedBy, cwd: entry.cwd, safe: entry.safe === true, items: [] } satisfies Running;
+  });
+
+/** Whether to go on stopping `running`: a host the desktop app started, or one with work in progress, only with `force` or a yes at the terminal. */
+const agreed = (io: Io, force: boolean, doing: "Stopping" | "Restarting", running: Running) =>
+  Effect.gen(function* () {
     const verb = doing === "Stopping" ? "stop" : "restart";
-    if (!force && info.startedBy === "desktop")
+    if (!force && running.startedBy === "desktop")
       return yield* new CliError({
         code: "Owned",
         message: `The desktop app started this host and stops it when it quits: quit the app, or ${verb} it here with --force`,
         exit: ExitCode.failed,
       });
-    if (!force && items.length > 0) {
-      io.err(`${doing} the host cuts off:\n${items.map((item) => `  ${item}`).join("\n")}\n(running turns resume when a host starts again)`);
+    if (!force && running.items.length > 0) {
+      io.err(`${doing} the host cuts off:\n${running.items.map((item) => `  ${item}`).join("\n")}\n(running turns resume when a host starts again)`);
       if (!(yield* confirm(io, `${doing === "Stopping" ? "Stop" : "Restart"} it anyway?`)))
         return yield* new CliError({ code: "Busy", message: `The host has work in progress; --force ${verb}s it anyway`, exit: ExitCode.failed });
     }
-    return { info, items };
   });
 
 /** Waits for the host's process to exit, failing once it has taken longer than a host may. */
@@ -230,14 +260,15 @@ const stop = defineBuiltin({
       const home = homeOf(io);
       const running = yield* readDiscovery(home);
       if (running === undefined) return { json: { stopped: false, home }, text: `No host runs for ${home}` };
-      const { info, items } = yield* beforeStop(io, flags.force, "Stopping");
-      const service = info.startedBy === "service" ? serviceManager() : undefined;
+      const host = yield* runningHost(io, running, flags.force, "stop");
+      yield* agreed(io, flags.force, "Stopping", host);
+      const service = host.startedBy === "service" ? serviceManager() : undefined;
       if (service !== undefined) service.stop();
       else process.kill(running.pid, "SIGTERM");
       yield* exited(running.pid);
       return {
-        json: { stopped: true, pid: running.pid, startedBy: info.startedBy ?? null, cutOff: items },
-        text: `Stopped the host for ${home} (pid ${running.pid}, started ${startedByText(info.startedBy)})${service === undefined ? "" : "; the service stays installed and starts it again at login (lemma service)"}`,
+        json: { stopped: true, pid: running.pid, startedBy: host.startedBy ?? null, cutOff: host.items },
+        text: `Stopped the host for ${home} (pid ${running.pid}, started ${startedByText(host.startedBy)})${service === undefined ? "" : "; the service stays installed and starts it again at login (lemma service)"}`,
       };
     }),
 });
@@ -247,7 +278,7 @@ const restart = defineBuiltin({
   group: RUN,
   summary: "Restart this machine's host on this lemma: after lemma update, to run the release it installed",
   description:
-    "As lemma stop does, it says first what it would cut off; running turns resume once the host is back. A host a service runs restarts through the service, which runs the lemma command and so the release installed last. Any other starts again in the background, for the same project and on the same port; --port, --host, and --safe apply to its new run as they do to lemma serve's.",
+    "As lemma stop does, it says first what it would cut off; running turns resume once the host is back. A host a service runs restarts through the service, which runs the lemma command and so the release installed last. Any other starts again in the background as it ran: for the same project, on the same port and address, in safe mode if it was; --port, --host, and --safe change that for its new run. A host on another version of Lemma cannot say what it is doing: --force restarts it from what its transport.json says.",
   flags: {
     force: { type: "boolean", description: "Restart it whatever it is doing, and whoever started it" },
     port: { type: "number", description: "Listen on this port, rather than the one it listens on" },
@@ -263,27 +294,32 @@ const restart = defineBuiltin({
       const running = yield* readDiscovery(home);
       if (running === undefined)
         return yield* new CliError({ code: "NoHost", message: `No host runs for ${home}: lemma serve starts one`, exit: ExitCode.unavailable });
-      const { info, items } = yield* beforeStop(io, flags.force, "Restarting");
-      const service = info.startedBy === "service" ? serviceManager() : undefined;
+      const host = yield* runningHost(io, running, flags.force, "restart");
+      const service = host.startedBy === "service" ? serviceManager() : undefined;
+      // Before asking whether to cut anything off: a restart these flags cannot change is refused whatever the answer.
+      if (service !== undefined && (flags.port !== undefined || flags.host !== undefined || flags.safe))
+        return yield* usage("A service runs this host as its definition says: --port, --host, and --safe are for one lemma serve started");
+      yield* agreed(io, flags.force, "Restarting", host);
       if (service !== undefined) {
-        if (flags.port !== undefined || flags.host !== undefined || flags.safe)
-          return yield* usage("A service runs this host as its definition says: --port, --host, and --safe are for one lemma serve started");
         const problems = service.restart();
         if (problems.length > 0) return yield* new CliError({ code: "ServiceFailed", message: problems.join("\n"), exit: ExitCode.failed });
         const within = Duration.sum(STOPPING, START);
         const back = yield* listening(home, (entry) => entry.pid !== running.pid, within);
         if (back === undefined) return yield* notStarted(home, true, within);
         return {
-          json: { restarted: true, url: back.url, pid: back.pid, previous: running.pid, startedBy: "service", cutOff: items },
+          json: { restarted: true, url: back.url, pid: back.pid, previous: running.pid, startedBy: "service", cutOff: host.items },
           text: `Restarted the host for ${home} through ${service.name}: ${back.url} (pid ${back.pid})`,
         };
       }
       process.kill(running.pid, "SIGTERM");
       yield* exited(running.pid);
-      const port = flags.port ?? (Number(new URL(running.url).port) || undefined);
-      const started = yield* startInBackground(io, home, info.cwd, hostArgs({ port, host: flags.host, safe: flags.safe }));
+      // As it ran: its port (a URL leaves out its scheme's default), the address it bound, and safe mode.
+      const url = new URL(running.url);
+      const port = flags.port ?? (url.port === "" ? (url.protocol === "https:" ? 443 : 80) : Number(url.port));
+      const args = hostArgs({ port, host: flags.host ?? running.host, safe: flags.safe || host.safe });
+      const started = yield* startInBackground(io, home, host.cwd ?? io.cwd, args);
       return {
-        json: { restarted: true, url: started.url, pid: started.pid, previous: running.pid, startedBy: "cli", cutOff: items, log: started.log },
+        json: { restarted: true, url: started.url, pid: started.pid, previous: running.pid, startedBy: "cli", cutOff: host.items, log: started.log },
         text: `Restarted the host for ${home} in the background: ${started.url} (pid ${started.pid}). Its log is ${started.log}; \`lemma stop\` stops it.`,
       };
     }),

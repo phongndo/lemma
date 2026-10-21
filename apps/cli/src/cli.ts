@@ -2,6 +2,7 @@ import { Cause, Duration, Effect, Exit } from "effect";
 import type { Scope } from "effect";
 import { closest, columns, GLOBAL_FLAGS, inputJsonSchema, parseInput, renderGlobalFlags, renderHelp, usageLine } from "@lemma/cli";
 import type { CliCommandInfo, CommandSpec } from "@lemma/cli";
+import { shellWord } from "@lemma/contracts";
 import { readEnvironments } from "@lemma/contracts/discovery";
 import packageJson from "../package.json" with { type: "json" };
 import { hostCommands } from "./commands/host.ts";
@@ -102,9 +103,6 @@ const project = (value: unknown, fields: readonly string[] | undefined): unknown
       : item;
   return Array.isArray(value) ? value.map(pick) : pick(value);
 };
-
-/** A word as a POSIX shell reads it back. */
-const shellWord = (word: string): string => (/^[\w@%+=:,./-]+$/.test(word) ? word : `'${word.replaceAll("'", "'\\''")}'`);
 
 const report = (io: Io, json: boolean, error: CliError): number => {
   if (json) {

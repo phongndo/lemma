@@ -1,5 +1,8 @@
 import { spawn } from "node:child_process";
+import { closeSync, mkdirSync, openSync, readFileSync } from "node:fs";
+import { dirname } from "node:path";
 import { Effect, Schema } from "effect";
+import { shellWord } from "@lemma/contracts";
 import { ReleaseError } from "@lemma/release";
 
 /*
@@ -10,7 +13,7 @@ import { ReleaseError } from "@lemma/release";
 /** What `lemma update --check --json` answers. */
 export const CheckAnswer = Schema.Struct({
   version: Schema.String,
-  channel: Schema.String,
+  channel: Schema.Literals(["stable", "nightly"]),
   newest: Schema.String,
   newer: Schema.Boolean,
   older: Schema.Boolean,
@@ -18,8 +21,6 @@ export const CheckAnswer = Schema.Struct({
 
 /** What `lemma update --json` answers: the release installed, and whether that took installing. */
 export const UpdateAnswer = Schema.Struct({ updated: Schema.Boolean, version: Schema.String });
-
-const shellWord = (word: string) => (/^[\w@%+=:,./-]+$/.test(word) ? word : `'${word.replaceAll("'", "'\\''")}'`);
 
 /** What a failed `lemma` said: its JSON error's message on stderr, else what it printed. */
 const said = (stderr: string, code: number | null): { readonly code?: string; readonly message: string } => {
@@ -78,8 +79,25 @@ export const runLemma = <A>(cli: string, args: readonly string[], schema: Schema
 /**
  * Has the `lemma` at `link` restart this host once it has answered: it stops it, saying first what that cuts off, and
  * starts it again on the release installed last (`lemma restart --force`). Started apart from the host, so it outlives
- * it; the second's wait lets the answer leave first.
+ * it; the second's wait lets the answer leave first. What it prints goes to `log`. A restart that fails before stopping
+ * the host leaves it running, which hears so: `failed` gets why, from what it printed.
  */
-export const restartLater = (link: string): void => {
-  spawn("sh", ["-c", 'sleep 1; exec "$0" restart --force', link], { detached: true, stdio: "ignore" }).unref();
+export const restartLater = (link: string, log: string, failed: (why: string) => void): void => {
+  mkdirSync(dirname(log), { recursive: true });
+  const out = openSync(log, "w");
+  const child = spawn("sh", ["-c", 'sleep 1; exec "$0" restart --force', link], { detached: true, stdio: ["ignore", out, out] });
+  closeSync(out);
+  child.once("error", (error) => failed(`Could not run lemma restart: ${error.message}`));
+  child.once("exit", (code, signal) => {
+    if (code === 0) return;
+    const printed = (() => {
+      try {
+        return readFileSync(log, "utf8");
+      } catch {
+        return "";
+      }
+    })();
+    failed(`lemma restart failed (${signal ?? `exit ${code}`}): ${said(printed, code).message} (${log})`);
+  });
+  child.unref();
 };

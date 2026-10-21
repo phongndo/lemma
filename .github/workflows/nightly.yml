@@ -37,8 +37,11 @@ jobs:
           GH_REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
-          sha=$(gh run list --workflow check.yml --branch main --status success --limit 1 --json headSha --jq '.[0].headSha // empty')
+          # A push's run: a pull request's from a fork's own `main` names that branch too, and its commit is not main's.
+          sha=$(gh run list --workflow check.yml --branch main --event push --status success --limit 1 --json headSha --jq '.[0].headSha // empty')
           [[ -n "$sha" ]] || { echo "::error::No commit on main has passed Check"; exit 1; }
+          on_main=$(gh api "repos/$GH_REPO/compare/$sha...main" --jq .status)
+          [[ "$on_main" == ahead || "$on_main" == identical ]] || { echo "::error::$sha passed Check but is not on main ($on_main)"; exit 1; }
           previous=$(gh release list --exclude-drafts --limit 1 --json tagName --jq '.[0].tagName // empty')
           if [[ -n "$previous" ]]; then
             # A rerun of an older commit's Check can pass after a newer one's: only a commit after the last release is new.

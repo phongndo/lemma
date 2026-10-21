@@ -81,11 +81,13 @@ nix develop -c pnpm dev:desktop    # the window again, while `pnpm dev` runs
 nix develop -c pnpm lemma status   # the CLI from the checkout, on the host `pnpm dev` runs
 ```
 
-What runs from the checkout (`pnpm dev`, `dev:desktop`, `desktop`, `start`,
-`lemma`) uses its own home, `~/.lemma-dev`, unless `LEMMA_HOME` names another,
-and `pnpm dev`'s host listens on port 7434: a Lemma you
+What runs from the checkout (`pnpm dev`, `dev:desktop`, `dev:web`, `desktop`,
+`start`, `lemma`) uses its own home, `~/.lemma-dev`, unless `LEMMA_HOME` names
+another, and `pnpm dev`'s host listens on port 7434: a Lemma you
 [installed](installation.md) runs beside it, on `~/.lemma` and port 7433, its
-sessions and settings out of a development build's reach. Log in to a provider
+sessions and settings out of a development build's reach. `pnpm dev:web` alone
+proxies to the host running on that home, else to 7434, unless
+`LEMMA_HOST_URL` names another. Log in to a provider
 there once. Every checkout shares `~/.lemma-dev`, which has one host at a
 time; another host from the checkout (`pnpm desktop`, `pnpm lemma serve`)
 beside an installed one needs a port of its own, which

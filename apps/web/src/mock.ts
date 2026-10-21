@@ -353,6 +353,7 @@ const MOCK_RELEASE: ReleaseStatus = {
   },
   updatable: true,
   checks: true,
+  channel: "nightly",
   newest: "0.2.9",
   newer: true,
   older: false,

@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import type { ChildProcess } from "node:child_process";
 import { once } from "node:events";
-import { createReadStream } from "node:fs";
+import { createReadStream, existsSync } from "node:fs";
 import { chmod, mkdir, mkdtemp, readdir, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
@@ -229,7 +229,16 @@ export default definePlugin({
     { type: "result", reason: "done", toolCalls: 1 },
     "the turn ended",
   );
-  console.log("release: host, lemma restart, plugins, web app, a TypeScript plugin file, file search, the agent's CLI, and a turn passed");
+
+  // However many installs come after, the release a host runs from stays: here the one lemma restart started it on.
+  const hosting = dirname(dirname(await realpath(lemma)));
+  await command("sh", [installer]);
+  await command("sh", [installer]);
+  assert.ok(existsSync(hosting), "an install keeps the release a running host started on");
+  assert.equal(await releases(), 3, "and the one before the new one, removing the rest");
+  console.log(
+    "release: host, lemma restart, plugins, web app, a TypeScript plugin file, file search, the agent's CLI, a turn, and pruning around a running host passed",
+  );
 } finally {
   if (restartedPid !== undefined) await command(lemma, ["stop", "--force"]).catch((error: unknown) => console.error(error));
   for (const child of children.reverse()) {
