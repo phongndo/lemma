@@ -177,8 +177,10 @@ its plugins, the web app, a TypeScript plugin file, the file search, the CLI
 the agent is told of, and a turn on the scripted provider. CI's `dist` job
 runs both for Linux on x64.
 
-The archive keeps the workspace's layout, as Lemma runs its TypeScript
-sources: Node.js strips types only outside `node_modules`, and the host finds
+An archive says what it is in `release.json` (its version, the commit it was
+built from, and when), and carries the installer, which `lemma update` runs
+([versioning](versioning.md)). The archive keeps the workspace's layout, as
+Lemma runs its TypeScript sources: Node.js strips types only outside `node_modules`, and the host finds
 the web app and each bundled plugin by its path in the workspace. One machine
 builds every platform's, as pnpm installs another platform's prebuilt packages
 when told it (`--os`, `--cpu`, `--libc`); nothing compiles at install, so a

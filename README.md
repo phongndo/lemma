@@ -44,6 +44,7 @@ covers channels, updating, and removing a release;
 ## Documentation
 
 - [Installation](docs/installation.md): install a release, update it, and remove it
+- [Versioning](docs/versioning.md): what Lemma's versions mean, and what happens where two differ
 - [Usage](docs/usage.md): run the host, the web app, the desktop app, and the CLI
 - [Configuration](docs/configuration.md): config files, plugins, project trust, and providers
 - [Remote access](docs/remote.md): run the host on one machine and use it from another

@@ -14,6 +14,8 @@ import type { Target } from "./dist-config.ts";
  * runs without a checkout, Nix, or Node.js installed (docs/installation.md):
  *
  *   bin/lemma              the command (scripts/lemma.sh), which runs the CLI on the runtime below
+ *   release.json           what it is: its version, the commit it was built from, and when (`lemma version`)
+ *   scripts/install.sh     the installer, which `lemma update` runs to install another release
  *   runtime/bin/node       the official Node.js build dist-config.ts pins, by version and checksum
  *   apps/, packages/, …    the workspace, laid out as in the checkout: the `lemma` command's packages and what they
  *                          read beside their sources (a profile's files), the web app's build, and the docs and examples
@@ -24,6 +26,7 @@ import type { Target } from "./dist-config.ts";
  *
  *   pnpm dist                                       this machine's archive, at the checkout's version
  *   pnpm dist --version 0.2.7 --target all          every target's, as the nightly workflow builds them
+ *   pnpm dist --commit <sha>                        built from another commit than the checkout's (its HEAD)
  *
  * One machine builds every target's: the sources and builds are the same for each, and pnpm installs another
  * platform's prebuilt packages (fff's file search) when told the platform. Nothing compiles at install
@@ -31,7 +34,7 @@ import type { Target } from "./dist-config.ts";
  */
 
 const { values } = parseArgs({
-  options: { version: { type: "string", default: version }, target: { type: "string", multiple: true } },
+  options: { version: { type: "string", default: version }, target: { type: "string", multiple: true }, commit: { type: "string" } },
 });
 const release = values.version;
 if (!/^\d+\.\d+\.\d+$/.test(release)) throw new Error(`Not a release version: ${release}`);
@@ -47,12 +50,15 @@ const chosen: readonly Target[] =
 const root = fileURLToPath(new URL("..", import.meta.url));
 const output = join(root, "dist");
 const temporary = await mkdtemp(join(tmpdir(), "lemma-dist-"));
+const built = new Date().toISOString().replace(/\.\d+Z$/, "Z");
 
 const env = { ...process.env, CI: "true" };
 const run = (command: string, args: readonly string[], cwd = root): void => {
   execFileSync(command, args, { cwd, stdio: ["ignore", "inherit", "inherit"], env });
 };
 const read = (command: string, args: readonly string[]): string => execFileSync(command, args, { cwd: root, encoding: "utf8", env });
+const commit = values.commit ?? read("git", ["rev-parse", "HEAD"]).trim();
+if (!/^[0-9a-f]{40}$/.test(commit)) throw new Error(`Not a commit: ${commit}`);
 
 interface Project {
   readonly path: string;
@@ -109,6 +115,7 @@ try {
     "patches",
     "LICENSE",
     "README.md",
+    "scripts/install.sh",
     "docs",
     "examples",
     ...manifests,
@@ -144,7 +151,7 @@ try {
     // The release's version, which `lemma --version` prints, in place of the checkout's.
     const cli = join(stage, "apps/cli/package.json");
     await writeFile(cli, `${JSON.stringify({ ...JSON.parse(await readFile(cli, "utf8")), version: release }, null, 2)}\n`);
-    await writeFile(join(stage, "VERSION"), `${release}\n`);
+    await writeFile(join(stage, "release.json"), `${JSON.stringify({ version: release, commit, built }, null, 2)}\n`);
     await checkLinks(stage, stage, await realpath(stage));
 
     const file = join(output, `${name}.tar.gz`);

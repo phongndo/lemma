@@ -124,7 +124,11 @@ export const otherProtocol = (target: Target): Effect.Effect<CliError | undefine
       const where = target.source === "local" ? "The local host" : `The host at ${target.url}`;
       return new CliError({
         code: "OtherVersion",
-        message: `${where} runs another version of Lemma: it speaks RPC protocol ${String(protocol)}, this command ${HOST_PROTOCOL}. Restart it from this version (stop it, then \`lemma serve\`, or reopen the desktop app).`,
+        message: `${where} runs another version of Lemma: it speaks RPC protocol ${String(protocol)}, this command ${HOST_PROTOCOL}. Restart it from this version: ${
+          target.source === "local"
+            ? "`lemma restart` (or reopen the desktop app)"
+            : "there, `lemma update` to the release this one is (`lemma version` says which), then `lemma restart`"
+        }.`,
         exit: ExitCode.unavailable,
       });
     } catch {

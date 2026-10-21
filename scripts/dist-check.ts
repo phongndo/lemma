@@ -34,6 +34,8 @@ const data = join(temporary, "data");
 const stubs = join(temporary, "stubs");
 const lemma = join(bin, "lemma");
 const children: ChildProcess[] = [];
+/** The host lemma restart started, in the background, which the check stops at its end. */
+let restartedPid: number | undefined;
 const env: NodeJS.ProcessEnv = {
   ...process.env,
   HOME: home,
@@ -47,9 +49,13 @@ const env: NodeJS.ProcessEnv = {
 };
 for (const name of ["LEMMA_URL", "LEMMA_TOKEN", "LEMMA_ENV", "INIT_CWD", "NODE_OPTIONS"]) delete env[name];
 
+/** `env` with `variables` over it, an undefined one left out. */
+const withVariables = (variables: Readonly<Record<string, string | undefined>>): NodeJS.ProcessEnv =>
+  Object.fromEntries(Object.entries({ ...env, ...variables }).filter(([, value]) => value !== undefined));
+
 /** Runs `file` in the project to its end, failing unless it exits `expected`; its stdout. */
-const command = async (file: string, args: readonly string[], expected = 0): Promise<string> => {
-  const child = spawn(file, args, { cwd: project, env, stdio: ["ignore", "pipe", "pipe"], timeout: 90_000 });
+const command = async (file: string, args: readonly string[], expected = 0, variables: Readonly<Record<string, string | undefined>> = {}): Promise<string> => {
+  const child = spawn(file, args, { cwd: project, env: withVariables(variables), stdio: ["ignore", "pipe", "pipe"], timeout: 90_000 });
   children.push(child);
   let out = "";
   let err = "";
@@ -76,9 +82,12 @@ const launch = (file: string, args: readonly string[], variables: NodeJS.Process
   };
 };
 
-// The release, as GitHub serves it; with a wrong checksum when asked.
+// The release, as GitHub serves it, and its API, which says it is the newest on either channel; with a wrong checksum
+// when asked.
 let badChecksum = false;
 const server = createServer((request, response) => {
+  if (request.url === "/api/releases/latest") return void response.end(JSON.stringify({ tag_name: `v${version}` }));
+  if (request.url === "/api/releases?per_page=1") return void response.end(JSON.stringify([{ tag_name: `v${version}` }]));
   const name = request.url?.slice(1);
   if (name !== basename(archive) && name !== `${basename(archive)}.sha256`) return void response.writeHead(404).end();
   if (badChecksum && name.endsWith(".sha256")) return void response.end(`${"0".repeat(64)}  ${basename(archive)}\n`);
@@ -94,6 +103,7 @@ try {
   server.listen(0, "127.0.0.1");
   await once(server, "listening");
   env.LEMMA_RELEASE_BASE_URL = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+  env.LEMMA_RELEASE_API_URL = `${env.LEMMA_RELEASE_BASE_URL}/api`;
 
   const installer = join(root, "scripts/install.sh");
   const releases = async () => (await readdir(join(data, "releases"))).length;
@@ -112,7 +122,31 @@ try {
   await command("sh", [installer], 1);
   assert.equal(await realpath(lemma), installed, "a download that fails its checksum leaves the installed release in place");
   badChecksum = false;
-  console.log("installer: install, reinstall, pruning, and a bad checksum passed");
+
+  // A channel's newest, as the API says, and what lemma version and lemma update make of the install.
+  await command("sh", [installer], 0, { LEMMA_VERSION: undefined, LEMMA_CHANNEL: "nightly" });
+  const about = JSON.parse(await command(lemma, ["version", "--json"])) as Record<string, unknown>;
+  assert.deepEqual(
+    { ...about, commit: typeof about.commit, built: typeof about.built, root: typeof about.root },
+    { version, kind: "release", channel: "nightly", link: lemma, dataDir: data, node: about.node, commit: "string", built: "string", root: "string" },
+    "lemma version says what the release is and how it was installed",
+  );
+  assert.deepEqual(JSON.parse(await command(lemma, ["update", "--check", "--json"])), { version, channel: "nightly", newest: version, newer: false });
+  const before = await realpath(lemma);
+  assert.deepEqual(JSON.parse(await command(lemma, ["update", "--channel", "stable", "--json"])), {
+    updated: true,
+    from: version,
+    version,
+    channel: "stable",
+    root: dirname(dirname(await realpath(lemma))),
+    link: lemma,
+    host: null,
+  });
+  assert.notEqual(await realpath(lemma), before, "lemma update installs with the installer the release carries");
+  assert.equal((JSON.parse(await command(lemma, ["version", "--json"])) as { channel: string }).channel, "stable");
+  const service = JSON.parse(await command(lemma, ["service", "install", "--print", "--json"])) as { command: string[] };
+  assert.deepEqual(service.command, [lemma, "serve", "--no-open"], "a service runs the lemma the installer links, so the newest release");
+  console.log("installer: install, reinstall, pruning, a bad checksum, channels, lemma version, and lemma update passed");
 
   await command("git", ["init", "--quiet"]);
   await writeFile(join(project, "needle.txt"), "what the file search finds\n");
@@ -153,6 +187,11 @@ export default definePlugin({
 
   launch(lemma, ["serve", "--no-open"]);
   await settled(() => command(lemma, ["status"]), undefined, 60_000);
+  // A host in the terminal starts again in the background, on the same port, for the same project; it runs the rest.
+  const serving = JSON.parse(await readFile(join(home, ".lemma/transport.json"), "utf8")) as { url: string; pid: number };
+  const restarted = JSON.parse(await command(lemma, ["restart", "--json"])) as { url: string; pid: number; previous: number };
+  assert.deepEqual([restarted.url, restarted.previous], [serving.url, serving.pid], "lemma restart starts the host again where it was");
+  restartedPid = restarted.pid;
   const status = JSON.parse(await command(lemma, ["status", "--json"])) as { plugins: readonly { id: string; state: string }[] };
   const failed = status.plugins.filter((plugin) => plugin.state !== "active" && plugin.state !== "disabled").map(({ id, state }) => `${id}: ${state}`);
   assert.deepEqual(failed, [], "every plugin turned on runs");
@@ -184,8 +223,9 @@ export default definePlugin({
     { type: "result", reason: "done", toolCalls: 1 },
     "the turn ended",
   );
-  console.log("release: host, plugins, web app, a TypeScript plugin file, file search, the agent's CLI, and a turn passed");
+  console.log("release: host, lemma restart, plugins, web app, a TypeScript plugin file, file search, the agent's CLI, and a turn passed");
 } finally {
+  if (restartedPid !== undefined) await command(lemma, ["stop", "--force"]).catch((error: unknown) => console.error(error));
   for (const child of children.reverse()) {
     if (child.exitCode !== null || child.signalCode !== null) continue;
     const closed = once(child, "close");
