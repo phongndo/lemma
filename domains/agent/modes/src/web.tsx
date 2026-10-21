@@ -6,7 +6,7 @@ import { CheckIcon, ChevronDownIcon, Popover, SettingRow, SlidersIcon } from "@l
 import { SectionIds, SettingsGroups } from "@lemma/settings";
 import { Client, Slots, defineWebPlugin } from "@lemma/web";
 import { load, save } from "@lemma/web/storage";
-import { ModeChannels, MODES_PLUGIN, MODES_PLUGIN_FORMERLY } from "@lemma/agent";
+import { ModeChannels, MODES_PLUGIN, MODES_PLUGIN_FORMERLY, offeredFor } from "@lemma/agent";
 import type { ModeInfo } from "@lemma/agent";
 import { firstMode, RENAMED } from "./mode.ts";
 import styles from "./web.css?inline";
@@ -32,7 +32,9 @@ export default defineWebPlugin({
   styles,
   requires: { client: Client, threads: Threads, models: Models, slots: Slots },
   setup: ({ client, threads, models, slots }, plugin) => {
-    const [modes, setModes] = createSignal<readonly ModeInfo[]>([]);
+    /** Every mode the host lists for the directory; the menu offers those for threads (`offeredFor`). */
+    const [all, setAll] = createSignal<readonly ModeInfo[]>([]);
+    const modes = createMemo(() => all().filter((mode) => offeredFor(mode, "thread")));
     const [fallback, setFallback] = createSignal<string | undefined>(undefined);
     const [next, setNext] = createSignal<string | undefined>(load(NEXT_KEY) ?? load(FORMER_NEXT_KEY));
 
@@ -41,21 +43,22 @@ export default defineWebPlugin({
       on(cwd, (dir) => {
         void client.channel.call(ModeChannels.list, dir === undefined ? {} : { cwd: dir }).then(
           (answer) => {
-            setModes(answer.modes);
+            setAll(answer.modes);
             setFallback(answer.default);
           },
-          () => setModes([]),
+          () => setAll([]),
         );
       }),
     );
 
     /** The modes as the menu lists them: the default first, then the rest as the host sorts them. */
     const ordered = createMemo(() => [...modes()].sort((a, b) => Number(b.name === fallback()) - Number(a.name === fallback())));
-    const listed = (name: string) => modes().some((mode) => mode.name === name);
+    // An agent's thread has a mode offered to agents only (`explore`): it is the host's still, and named as one.
+    const listed = (name: string) => all().some((mode) => mode.name === name);
     /** The mode a new thread starts with: this browser's pick while the host still offers it, else the default. */
     const forNew = () => {
       const name = next();
-      return name !== undefined && (modes().length === 0 || listed(name)) ? name : fallback();
+      return name !== undefined && (modes().length === 0 || modes().some((mode) => mode.name === name)) ? name : fallback();
     };
     /** The open thread's mode once its first turn has logged it (a bundled one since renamed is its successor, as the host has it). */
     const thread = () => {
@@ -64,7 +67,7 @@ export default defineWebPlugin({
       const name = first.name ?? fallback();
       return name === undefined || listed(name) || RENAMED[name] === undefined ? name : RENAMED[name];
     };
-    const describe = (name: string | undefined) => modes().find((mode) => mode.name === name)?.description;
+    const describe = (name: string | undefined) => all().find((mode) => mode.name === name)?.description;
 
     /** Gives `mode` to the next new thread, with its model and reasoning. */
     const pick = (mode: ModeInfo) => {

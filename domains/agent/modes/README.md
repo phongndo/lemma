@@ -11,6 +11,7 @@ model: anthropic/claude-sonnet-5-5
 thinking: low
 tools: read, write, edit
 sections: "*", "!project-context"
+use: thread, agent
 ---
 
 You help the user write. Keep their voice; say what you changed and why.
@@ -57,6 +58,11 @@ You help the user write. Keep their voice; say what you changed and why.
   first `turn-start`), so a turn resumed after a restart keeps it, and a request
   rebuilds from the log; a tool the mode left out is refused to a resumed
   call too.
+- **Threads and agents.** `use` says where a mode is offered: `thread`, a new
+  thread's mode in the Mode picker; `agent`, an agent's a thread hands a task to
+  (`tools.delegate`'s `mode`); or both, as a mode naming neither is. An
+  agent's thread shows its mode as any thread does, though the picker offers it
+  only where `thread` is named.
 - **A name not found** (deleted, mistyped) gives the thread no mode, said
   once as a `Notice`. The bundled `coding` and `general`, which `work`
   replaced, go on as `work` in the threads that logged them.
@@ -65,9 +71,11 @@ You help the user write. Keep their voice; say what you changed and why.
 | --------- | ------- | ---------------------------------------------------- |
 | `default` | `work`  | The mode a new thread has when none is chosen for it |
 
-Two ship with Lemma, with every tool: `work` (how to carry work through in a
-codebase), the default, and `creator` (how to change Lemma itself: plugins,
-modes, and settings, checked with the `lemma` CLI). With this plugin off,
+Three ship with Lemma: `work` (how to carry work through in a codebase), the
+default, with every tool and offered for both; `creator` (how to change Lemma
+itself: plugins, modes, and settings, checked with the `lemma` CLI), with every
+tool, for threads; and `explore`, for agents: it reads and searches (`read`,
+`grep`, `find`, `bash`), changes nothing, and reports what it found. With this plugin off,
 the agent has its base prompt alone: what makes it a coding agent is a mode.
 `work`'s first line asks the model to carry a task through: a reminder to
 persist, one of three (with using tools and planning) that together raised
@@ -76,4 +84,4 @@ prompting guide](https://developers.openai.com/cookbook/examples/gpt4-1_promptin
 archived, read 2026-10-19).
 
 Serves `modes.list` (`ModeChannels` in `@lemma/agent`): the modes a thread in
-a directory can be given, and the default.
+a directory can be given, with where each is offered (`use`), and the default.
