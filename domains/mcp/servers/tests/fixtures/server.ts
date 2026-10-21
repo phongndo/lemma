@@ -10,7 +10,7 @@ const make = () => {
     {
       name: "fixture",
       version: "1.2.3",
-      // An insecure one, one for a theme, and one for any: the last is its icon.
+      // An insecure one, one for a dark theme, and one for any: the last is its icon, the dark one its icon on a dark theme.
       icons: [
         { src: "http://example.com/icon.png" },
         { src: "https://example.com/dark.svg", theme: "dark" },

@@ -14,6 +14,11 @@ const server = (status: Omit<McpServerStatus, "source" | "sourceKind" | "enabled
   ...status,
 });
 
+/** An icon of the user's own, an SVG file written into the entry as the add form does. */
+const NOTES_ICON = `data:image/svg+xml;base64,${btoa(
+  '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><rect x="3" y="2" width="18" height="20" rx="4" fill="#f5b83d"/><path d="M7 8h10M7 12h10M7 16h6" stroke="#7a4a00" stroke-width="2" stroke-linecap="round"/></svg>',
+)}`;
+
 const SERVERS: readonly McpServerStatus[] = [
   server({
     name: "filesystem",
@@ -26,6 +31,38 @@ const SERVERS: readonly McpServerStatus[] = [
       { name: "read_file", tool: "mcp__filesystem__read_file", exposure: "codemode", description: "Read a file" },
       { name: "list_directory", tool: "mcp__filesystem__list_directory", exposure: "codemode", description: "List a directory" },
     ],
+  }),
+  server({
+    name: "github",
+    state: "connected",
+    transport: "http",
+    target: "https://api.githubcopilot.com/mcp/",
+    entry: { url: "https://api.githubcopilot.com/mcp/", headers: { Authorization: "Bearer ${GITHUB_PERSONAL_ACCESS_TOKEN}" } },
+    server: { name: "github-mcp-server", version: "1.4.0" },
+    tools: [
+      { name: "search_issues", tool: "mcp__github__search_issues", exposure: "codemode", description: "Search issues and pull requests" },
+      { name: "get_file_contents", tool: "mcp__github__get_file_contents", exposure: "codemode", description: "Read a file in a repository" },
+      { name: "create_pull_request", tool: "mcp__github__create_pull_request", exposure: "direct", own: "direct", description: "Open a pull request" },
+    ],
+  }),
+  server({
+    name: "notes",
+    state: "connected",
+    transport: "stdio",
+    target: "node ~/notes/server.js",
+    entry: { command: "node", args: ["~/notes/server.js"], icon: NOTES_ICON },
+    icon: NOTES_ICON,
+    tools: [{ name: "search", tool: "mcp__notes__search", exposure: "codemode", description: "Search the notes" }],
+  }),
+  // A plugin's server: the file has no entry for it, so it is turned off or its tools changed, but not edited.
+  server({
+    name: "tickets",
+    state: "connected",
+    source: "examples.tickets",
+    sourceKind: "plugin",
+    transport: "stdio",
+    target: "node tickets-server.js",
+    tools: [{ name: "open_ticket", tool: "mcp__tickets__open_ticket", exposure: "codemode", description: "Open a ticket" }],
   }),
   server({
     name: "docs",
@@ -101,6 +138,7 @@ export const createIntegrationsMock = () => {
           target: targetOf(entry),
           entry,
           ...(entry.description === undefined ? {} : { description: entry.description }),
+          ...(entry.icon === undefined ? {} : { icon: entry.icon }),
         });
         servers = servers.some((status) => status.name === name)
           ? servers.map((status) =>

@@ -72,6 +72,8 @@ describe("a server in mcp.json", () => {
           expect(status.icon).toBe(
             "data:image/svg+xml;base64,PHN2ZyB4bWxucz0naHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmcnIHZpZXdCb3g9JzAgMCAyNCAyNCc+PGNpcmNsZSBjeD0nMTInIGN5PScxMicgcj0nMTAnIGZpbGw9JyMxMGEzN2YnLz48L3N2Zz4=",
           );
+          // The one for a dark theme besides; the insecure one is not drawn.
+          expect(status.iconDark).toBe("https://example.com/dark.svg");
           expect(status.instructions).toBe("Tools for the tests.");
           expect(status.stderr).toContain("fixture: started");
           expect(status.tools.map((tool) => [tool.name, tool.tool, tool.exposure])).toContainEqual(["add-numbers", "mcp__fixture__add_numbers", "codemode"]);

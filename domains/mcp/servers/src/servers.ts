@@ -28,8 +28,9 @@ import type { McpTool } from "./connection.ts";
 import { isImageAddress } from "./form.ts";
 import { inputOf, namespaceOf, outputOf, structuredOf, toContent, toolNames } from "./tools.ts";
 
-/** A server's icon: its entry's, when it can be one, else the one it declares. */
-const iconOf = (own: string | undefined, declared: string | undefined): string | undefined => (own !== undefined && isImageAddress(own) ? own : declared);
+/** A server's icon: its entry's, when it can be one (for every theme), else the ones it declares. */
+const iconsOf = (own: string | undefined, declared: Connection["icons"] | undefined): { readonly icon?: string; readonly iconDark?: string } =>
+  own !== undefined && isImageAddress(own) ? { icon: own } : (declared ?? {});
 
 /** What the manager needs of the kernel: adding a tool (the returned function removes it), and telling of a change. */
 export interface Kernel {
@@ -740,7 +741,7 @@ export class Servers {
       ...(connection === undefined || connection.stderr === "" ? {} : { stderr: this.redact(entry, connection.stderr) }),
       ...(connection?.server === undefined ? {} : { server: connection.server }),
       ...(connection?.protocolVersion === undefined ? {} : { protocolVersion: connection.protocolVersion }),
-      ...(iconOf(config.icon, connection?.icon) === undefined ? {} : { icon: iconOf(config.icon, connection?.icon)! }),
+      ...iconsOf(config.icon, connection?.icons),
       ...(connection?.instructions === undefined ? {} : { instructions: connection.instructions }),
       tools,
       ...(definition.source.kind === "file" && definition.file !== undefined ? { entry: definition.file } : {}),

@@ -26,7 +26,7 @@ function Row(props: { kind: Kind; item: IntegrationItem; selected: boolean; open
   return (
     <div class="integration-row" classList={{ selected: props.selected, off: props.item.status.tone === "off" }}>
       <button type="button" class="integration-row-main" aria-current={props.selected ? "true" : undefined} onClick={() => props.open()}>
-        <Mark kind={props.kind} logo={props.item.logo} icon={props.item.icon} />
+        <Mark kind={props.kind} logo={props.item.logo} icon={props.item.icon} iconDark={props.item.iconDark} />
         <span class="integration-row-text">
           <span class="integration-row-title">
             {props.item.title}
@@ -53,7 +53,6 @@ function Overview(props: { add: () => void }) {
     <div class="integrations-overview">
       <PlugIcon />
       <h2>Integrations</h2>
-      <p class="muted">The MCP servers that give agents tools. Pick one to see and change it, or add one.</p>
       <div class="integrations-overview-kinds">
         <button type="button" class="button" onClick={() => props.add()}>
           <PlusIcon />
@@ -71,21 +70,40 @@ interface Choice {
   readonly offer?: IntegrationOffer;
 }
 
-/** An image, or `fallback` while there is none or it fails to load (an address that is gone, an image that is not one). */
-function Picture(props: { src: string | undefined; fallback: JSX.Element }) {
-  const [failed, setFailed] = createSignal<string>();
+/**
+ * An image, or `fallback` while there is none or it fails to load (an address that is gone, an image that is not one);
+ * with `dark`, that one on a dark theme. Fetched without telling its host the page it is on, and only once in view.
+ */
+function Picture(props: { src: string | undefined; dark?: string | undefined; fallback: JSX.Element }) {
+  const [failed, setFailed] = createSignal<readonly string[]>([]);
+  const fail = (src: string) => setFailed((all) => [...all, src]);
+  const usable = (src: string | undefined) => (src !== undefined && !failed().includes(src) ? src : undefined);
   return (
-    <Show when={props.src !== undefined && props.src !== failed() ? props.src : undefined} fallback={props.fallback}>
-      {(src) => <img src={src()} alt="" onError={() => setFailed(src())} />}
+    <Show when={usable(props.src)} fallback={props.fallback}>
+      {(src) => (
+        <>
+          <img
+            src={src()}
+            classList={{ "integration-icon-light": usable(props.dark) !== undefined }}
+            alt=""
+            loading="lazy"
+            referrerPolicy="no-referrer"
+            onError={() => fail(src())}
+          />
+          <Show when={usable(props.dark)}>
+            {(dark) => <img src={dark()} class="integration-icon-dark" alt="" loading="lazy" referrerPolicy="no-referrer" onError={() => fail(dark())} />}
+          </Show>
+        </>
+      )}
     </Show>
   );
 }
 
-/** A mark for the Add dialog's rows and the list's: a logo, an image, or the kind's icon. */
-function Mark(props: { kind: Kind; logo?: Component | undefined; icon?: string | undefined }) {
+/** A mark for the Add dialog's rows and the list's: a logo, an image (one for a dark theme besides), or the kind's icon. */
+function Mark(props: { kind: Kind; logo?: Component | undefined; icon?: string | undefined; iconDark?: string | undefined }) {
   return (
     <span class="integration-icon" aria-hidden="true">
-      <Show when={props.logo} fallback={<Picture src={props.icon} fallback={<props.kind.icon />} />}>
+      <Show when={props.logo} fallback={<Picture src={props.icon} dark={props.iconDark} fallback={<props.kind.icon />} />}>
         {(logo) => <Isolated component={logo()} />}
       </Show>
     </span>

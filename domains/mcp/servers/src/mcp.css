@@ -96,14 +96,15 @@
   min-height: 180px;
 }
 
-/* An icon's address, the icon it draws on its left. */
+/* An icon of the user's: its tile (picked, or dropped on), then its address or the SVG file it is, and its buttons. */
 .mcp-icon-field {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
 }
 
-.mcp-icon-field .field {
+.mcp-icon-field .field,
+.mcp-icon-file {
   flex: 1;
   min-width: 0;
 }
@@ -139,4 +140,97 @@
 .mcp-paste-form .field {
   flex: 1;
   min-width: 0;
+}
+
+.mcp-icon-file {
+  font-size: calc(12px * var(--text-scale));
+  color: var(--text-3);
+}
+
+.mcp-icon-drop {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-raised);
+  color: var(--text-3);
+  cursor: pointer;
+  transition:
+    border-color 120ms ease,
+    background-color 120ms ease;
+}
+
+.mcp-icon-drop.empty {
+  border-style: dashed;
+  border-color: var(--border-strong);
+}
+
+.mcp-icon-drop:hover,
+.mcp-icon-drop.over {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--text-2);
+}
+
+.mcp-icon-drop > img {
+  width: 26px;
+  height: 26px;
+  object-fit: contain;
+}
+
+.mcp-icon-drop > .icon,
+.mcp-icon-drop > svg {
+  width: 18px;
+  height: 18px;
+}
+
+/* An icon with one for a dark theme: each shows on its own. */
+.mcp-icon-dark,
+:root[data-theme="dark"] .mcp-icon-light {
+  display: none;
+}
+
+:root[data-theme="dark"] .mcp-icon-dark {
+  display: block;
+}
+
+/* A label with its add button at the end of the row (environment variables, headers). */
+.mcp-field-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-height: 24px;
+}
+
+/* What a part says without words: a help mark with its tip, where a plugin's server comes from. */
+.mcp-section-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.mcp-help,
+.mcp-source {
+  display: inline-flex;
+  color: var(--text-3);
+  cursor: help;
+}
+
+/* Where a plugin's server comes from, in the box an icon button beside it has. */
+.mcp-source {
+  display: inline-grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+}
+
+.mcp-help > .icon,
+.mcp-help > svg {
+  width: 13px;
+  height: 13px;
 }

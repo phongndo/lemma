@@ -152,6 +152,8 @@ export const McpServerStatus = Schema.Struct({
   protocolVersion: Schema.optional(Schema.String),
   /** Its icon's address: the entry's `icon`, else the one the server declares about itself once connected. */
   icon: Schema.optional(Schema.String),
+  /** The icon the server declares for a dark theme, when it differs from `icon` (absent when the entry has its own). */
+  iconDark: Schema.optional(Schema.String),
   /** The server's own instructions for using it, once connected. */
   instructions: Schema.optional(Schema.String),
   /** What it offered when it last connected. */
