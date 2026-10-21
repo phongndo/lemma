@@ -54,6 +54,16 @@ export function describe(error: unknown, config: McpServerConfig): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+/** The icons a server declares, as `Connection.icons` keeps them: one for any theme, and one for a dark theme besides. */
+export function declaredIcons(declared: readonly { readonly src: string; readonly theme?: "light" | "dark" | undefined }[]): Connection["icons"] {
+  const icons = declared.filter((candidate) => isImageAddress(candidate.src));
+  const of = (theme: "light" | "dark" | undefined) => icons.find((candidate) => candidate.theme === theme)?.src;
+  const icon = of(undefined) ?? of("light") ?? of("dark");
+  const dark = of("dark");
+  if (icon === undefined) return undefined;
+  return dark === undefined || dark === icon ? { icon } : { icon, iconDark: dark };
+}
+
 /**
  * Whether a remote server that failed to connect may connect later: not one whose address is wrong, or that answered
  * with a client error other than a timeout or a rate limit, which trying again would only repeat.
@@ -91,8 +101,11 @@ export class Connection {
   server: { readonly name: string; readonly version?: string; readonly title?: string } | undefined;
   protocolVersion: string | undefined;
   instructions: string | undefined;
-  /** The icon the server declares, an `https:` or `data:` image; one for a theme only when it has no other. */
-  icon: string | undefined;
+  /**
+   * The icons the server declares, `https:` or `data:` images: `icon` for any theme (one for a light theme, or the only
+   * one, when it has none for any), and `iconDark` for a dark theme when it declares one besides.
+   */
+  icons: { readonly icon?: string; readonly iconDark?: string } | undefined;
   private client: Client | undefined;
   private connecting: Promise<Client> | undefined;
   /** Stops the connect under way: its probe, its handshake, and a local server's process. */
@@ -225,8 +238,7 @@ export class Connection {
       if (this.closing) throw new Error("The server was stopped");
       const info = client.getServerVersion();
       this.server = info === undefined ? undefined : { name: info.name, version: info.version, ...(info.title === undefined ? {} : { title: info.title }) };
-      const icons = (info?.icons ?? []).filter((candidate) => isImageAddress(candidate.src));
-      this.icon = (icons.find((candidate) => candidate.theme === undefined) ?? icons[0])?.src;
+      this.icons = declaredIcons(info?.icons ?? []);
       this.protocolVersion = client.getNegotiatedProtocolVersion();
       this.instructions = client.getInstructions();
       const spoke = client.getProtocolEra();

@@ -26,6 +26,8 @@ export interface IntegrationItem {
   readonly version?: string;
   /** An image's address for its icon; the kind's icon when absent. */
   readonly icon?: string;
+  /** Its icon on a dark theme, when it differs from `icon`. */
+  readonly iconDark?: string;
   /** Draws its mark instead of `icon` (a brand's logo, in its color). */
   readonly logo?: Component;
   readonly status: IntegrationStatus;

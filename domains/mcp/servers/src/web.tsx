@@ -7,8 +7,25 @@ import { browserPlace } from "@lemma/llm/web";
 import { McpChannels } from "@lemma/mcp";
 import type { Exposure, McpAuthStatus, McpServerChange, McpServerConfig, McpServerStatus, McpState, McpToolInfo } from "@lemma/mcp";
 import { Client, Notify, Slots, defineWebPlugin, usePlugin } from "@lemma/web";
-import { AlertIcon, ChevronDownIcon, CopyButton, ExternalIcon, HammerIcon, PlusIcon, RefreshIcon, Segmented, Spinner, Toggle, XIcon } from "@lemma/look";
-import { draftOf, entryOf, parsePasted, isImageAddress } from "./form.ts";
+import {
+  AlertIcon,
+  ChevronDownIcon,
+  CopyButton,
+  ExternalIcon,
+  HammerIcon,
+  ImageIcon,
+  PencilIcon,
+  PlusIcon,
+  PuzzleIcon,
+  QuestionIcon,
+  RefreshIcon,
+  Segmented,
+  Spinner,
+  Toggle,
+  TrashIcon,
+  XIcon,
+} from "@lemma/look";
+import { draftOf, entryOf, parsePasted, isImageAddress, svgBytes, svgIcon, svgProblem } from "./form.ts";
 import type { Rows, ServerDraft } from "./form.ts";
 import styles from "./mcp.css?inline";
 
@@ -256,7 +273,18 @@ function RowsEditor(props: { label: string; rows: Rows; onChange: (rows: Rows) =
   const set = (index: number, patch: Partial<Rows[number]>) => props.onChange(props.rows.map((row, i) => (i === index ? { ...row, ...patch } : row)));
   return (
     <div class="integration-field">
-      <span>{props.label}</span>
+      <span class="mcp-field-head">
+        {props.label}
+        <button
+          type="button"
+          class="icon-button"
+          aria-label={`Add to ${props.label}`}
+          data-tip="Add"
+          onClick={() => props.onChange([...props.rows, { name: "", value: "" }])}
+        >
+          <PlusIcon />
+        </button>
+      </span>
       <Index each={props.rows}>
         {(row, index) => (
           <div class="integration-kv">
@@ -280,6 +308,7 @@ function RowsEditor(props: { label: string; rows: Rows; onChange: (rows: Rows) =
               type="button"
               class="icon-button"
               aria-label={`Remove ${row().name || "row"}`}
+              data-tip="Remove"
               onClick={() => props.onChange(props.rows.filter((_, i) => i !== index))}
             >
               <XIcon />
@@ -287,23 +316,121 @@ function RowsEditor(props: { label: string; rows: Rows; onChange: (rows: Rows) =
           </div>
         )}
       </Index>
-      <div>
-        <button type="button" class="button small" onClick={() => props.onChange([...props.rows, { name: "", value: "" }])}>
-          <PlusIcon />
-          Add
-        </button>
-      </div>
     </div>
   );
 }
 
-/** An image, or `fallback` while there is none or it fails to load (an address that is gone, an image that is not one). */
-function Picture(props: { src: string | undefined; fallback: JSX.Element }) {
-  const [failed, setFailed] = createSignal<string>();
+/**
+ * An image, or `fallback` while there is none or it fails to load (an address that is gone, an image that is not one);
+ * with `dark`, that one on a dark theme. Fetched without telling its host the page it is on.
+ */
+function Picture(props: { src: string | undefined; dark?: string | undefined; fallback: JSX.Element }) {
+  const [failed, setFailed] = createSignal<readonly string[]>([]);
+  const fail = (src: string) => setFailed((all) => [...all, src]);
+  const usable = (src: string | undefined) => (src !== undefined && !failed().includes(src) ? src : undefined);
   return (
-    <Show when={props.src !== undefined && props.src !== failed() ? props.src : undefined} fallback={props.fallback}>
-      {(src) => <img src={src()} alt="" onError={() => setFailed(src())} />}
+    <Show when={usable(props.src)} fallback={props.fallback}>
+      {(src) => (
+        <>
+          <img src={src()} classList={{ "mcp-icon-light": usable(props.dark) !== undefined }} alt="" referrerPolicy="no-referrer" onError={() => fail(src())} />
+          <Show when={usable(props.dark)}>
+            {(dark) => <img src={dark()} class="mcp-icon-dark" alt="" referrerPolicy="no-referrer" onError={() => fail(dark())} />}
+          </Show>
+        </>
+      )}
     </Show>
+  );
+}
+
+const kilobytes = (bytes: number) => (bytes < 1024 ? `${bytes} B` : `${(bytes / 1024).toFixed(1)} KB`);
+
+/**
+ * A server's icon: an SVG file of the user's (picked, or dropped on the tile), written into its entry, or an image's
+ * address; empty, the one the server declares.
+ */
+function IconField(props: { value: string; onChange: (icon: string) => void }) {
+  const plugin = usePlugin();
+  const [problem, setProblem] = createSignal<string>();
+  const [over, setOver] = createSignal(false);
+  let picker!: HTMLInputElement;
+  const icon = () => props.value.trim();
+  const uploaded = () => svgBytes(icon());
+  const read = plugin.action("read an icon file", async (file: File | undefined) => {
+    if (file === undefined) return;
+    const svg = file.type === "image/svg+xml" || /\.svg$/i.test(file.name) ? await file.text() : undefined;
+    const wrong = svg === undefined ? "Choose an SVG file" : svgProblem(svg);
+    setProblem(wrong);
+    if (svg !== undefined && wrong === undefined) props.onChange(svgIcon(svg));
+  });
+  return (
+    <div class="integration-field">
+      <span>Icon</span>
+      <div class="mcp-icon-field">
+        <button
+          type="button"
+          class="mcp-icon-drop"
+          classList={{ over: over(), empty: !isImageAddress(icon()) }}
+          aria-label="Choose an SVG file for its icon"
+          data-tip="Choose an SVG, or drop one here"
+          onClick={() => picker.click()}
+          onDragOver={(event) => {
+            event.preventDefault();
+            setOver(true);
+          }}
+          onDragLeave={() => setOver(false)}
+          onDrop={(event) => {
+            event.preventDefault();
+            setOver(false);
+            read(event.dataTransfer?.files[0]);
+          }}
+        >
+          <Picture src={isImageAddress(icon()) ? icon() : undefined} fallback={<ImageIcon />} />
+        </button>
+        <input
+          ref={picker}
+          type="file"
+          accept=".svg,image/svg+xml"
+          hidden
+          onChange={(event) => {
+            read(event.currentTarget.files?.[0]);
+            event.currentTarget.value = "";
+          }}
+        />
+        <Show
+          when={uploaded()}
+          fallback={
+            <input
+              class="field"
+              value={props.value}
+              placeholder="https://example.com/icon.svg"
+              aria-label="Icon address"
+              spellcheck={false}
+              onInput={(event) => {
+                setProblem(undefined);
+                props.onChange(event.currentTarget.value);
+              }}
+            />
+          }
+        >
+          {(bytes) => <span class="mcp-icon-file">SVG · {kilobytes(bytes())}</span>}
+        </Show>
+        <Show when={icon() !== ""}>
+          <button
+            type="button"
+            class="icon-button"
+            aria-label="Remove the icon"
+            data-tip="Remove"
+            onClick={() => {
+              setProblem(undefined);
+              props.onChange("");
+            }}
+          >
+            <XIcon />
+          </button>
+        </Show>
+      </div>
+      <Show when={problem()}>{(message) => <span class="integration-error">{message()}</span>}</Show>
+    </div>
   );
 }
 
@@ -353,7 +480,6 @@ function ServerForm(props: {
             data-autofocus
             onInput={(event) => update({ name: event.currentTarget.value })}
           />
-          <span class="integration-hint">Its tools are named mcp__{draft().name || "name"}__…</span>
         </label>
       </Show>
       <Segmented
@@ -378,9 +504,6 @@ function ServerForm(props: {
                 spellcheck={false}
                 onInput={(event) => update({ url: event.currentTarget.value })}
               />
-              <span class="integration-hint">
-                Streamable HTTP. A server that asks you to sign in offers a Sign in button once added; one that takes a token instead takes it in a header.
-              </span>
             </label>
             <RowsEditor
               label="Headers"
@@ -401,7 +524,6 @@ function ServerForm(props: {
             spellcheck={false}
             onInput={(event) => update({ command: event.currentTarget.value })}
           />
-          <span class="integration-hint">Run on the host, from its PATH. Quote an argument with spaces in it.</span>
         </label>
         <RowsEditor
           label="Environment"
@@ -419,24 +541,8 @@ function ServerForm(props: {
           placeholder="What it offers, for the model"
           onInput={(event) => update({ description: event.currentTarget.value })}
         />
-        <span class="integration-hint">{"${NAME}"} in any value reads the host's environment, so a secret need not be written here.</span>
       </label>
-      <label class="integration-field">
-        <span>Icon</span>
-        <span class="mcp-icon-field">
-          <span class="integration-icon" aria-hidden="true">
-            <Picture src={isImageAddress((draft().icon ?? "").trim()) ? (draft().icon ?? "").trim() : undefined} fallback={<HammerIcon />} />
-          </span>
-          <input
-            class="field"
-            value={draft().icon ?? ""}
-            placeholder="https://example.com/icon.svg, or a data:image/ URL"
-            spellcheck={false}
-            onInput={(event) => update({ icon: event.currentTarget.value })}
-          />
-        </span>
-        <span class="integration-hint">Optional: an image of its own, over the one the server declares.</span>
-      </label>
+      <IconField value={draft().icon ?? ""} onChange={(icon) => update({ icon })} />
       <Show when={error()}>{(message) => <p class="integration-error">{message()}</p>}</Show>
       <div class="integration-buttons">
         <button type="button" class="button" onClick={() => props.cancel()}>
@@ -512,9 +618,6 @@ function AddServer(props: IntegrationAddProps & { actions: Actions }) {
                 data-autofocus
                 onInput={(event) => setText(event.currentTarget.value)}
               />
-              <span class="integration-hint">
-                From another client (Claude Desktop, Cursor, VS Code) or a server's README: a whole config, servers by name, or one server.
-              </span>
             </label>
             <Show when={one()}>
               <label class="integration-field">
@@ -588,7 +691,7 @@ function ServerDetail(props: IntegrationDetailProps & { actions: Actions }) {
         <div class="mcp-detail" data-state={server().state}>
           <header class="integration-head">
             <span class="integration-icon" aria-hidden="true">
-              <Picture src={server().icon} fallback={<HammerIcon />} />
+              <Picture src={server().icon} dark={server().iconDark} fallback={<HammerIcon />} />
             </span>
             <div class="integration-head-text">
               <h2>
@@ -606,6 +709,11 @@ function ServerDetail(props: IntegrationDetailProps & { actions: Actions }) {
               </span>
             </div>
             <div class="integration-actions">
+              <Show when={server().sourceKind === "plugin"}>
+                <span class="mcp-source" role="img" aria-label={`Added by ${server().source}`} data-tip={`Added by ${server().source}`}>
+                  <PuzzleIcon />
+                </span>
+              </Show>
               <Show when={server().enabled && server().state !== "connecting"}>
                 <button
                   type="button"
@@ -616,6 +724,35 @@ function ServerDetail(props: IntegrationDetailProps & { actions: Actions }) {
                 >
                   <RefreshIcon />
                 </button>
+              </Show>
+              <Show when={server().sourceKind === "file" && server().entry !== undefined && !editing()}>
+                <button type="button" class="icon-button" aria-label={`Edit ${server().name}`} data-tip="Edit" onClick={() => setEditing(true)}>
+                  <PencilIcon />
+                </button>
+              </Show>
+              <Show when={server().sourceKind === "file"}>
+                <Show
+                  when={removing()}
+                  fallback={
+                    <button
+                      type="button"
+                      class="icon-button"
+                      aria-label={`Remove ${server().name}`}
+                      data-tip="Remove from mcp.json"
+                      onClick={() => setRemoving(true)}
+                    >
+                      <TrashIcon />
+                    </button>
+                  }
+                >
+                  <button type="button" class="button small button-danger" onClick={remove}>
+                    <TrashIcon />
+                    Remove
+                  </button>
+                  <button type="button" class="icon-button" aria-label="Keep it" data-tip="Keep" onClick={() => setRemoving(false)}>
+                    <XIcon />
+                  </button>
+                </Show>
               </Show>
               <Toggle
                 label={`${server().name} on`}
@@ -646,37 +783,10 @@ function ServerDetail(props: IntegrationDetailProps & { actions: Actions }) {
             <Show
               when={editing() && server().entry !== undefined}
               fallback={
-                <>
-                  <div class="mcp-target">
-                    <code class="integration-code">{server().target}</code>
-                    <CopyButton text={server().target} label="Copy" />
-                  </div>
-                  <Show when={server().sourceKind === "file"}>
-                    <div class="integration-actions">
-                      <Show when={server().entry !== undefined}>
-                        <button type="button" class="button small" onClick={() => setEditing(true)}>
-                          Edit
-                        </button>
-                      </Show>
-                      <Show
-                        when={removing()}
-                        fallback={
-                          <button type="button" class="button small" onClick={() => setRemoving(true)}>
-                            Remove
-                          </button>
-                        }
-                      >
-                        <span class="muted small">Remove {server().name} from mcp.json?</span>
-                        <button type="button" class="button small button-danger" onClick={remove}>
-                          Remove
-                        </button>
-                        <button type="button" class="button small" onClick={() => setRemoving(false)}>
-                          Keep
-                        </button>
-                      </Show>
-                    </div>
-                  </Show>
-                </>
+                <div class="mcp-target">
+                  <code class="integration-code">{server().target}</code>
+                  <CopyButton text={server().target} label="Copy" />
+                </div>
               }
             >
               <ServerForm
@@ -693,19 +803,21 @@ function ServerDetail(props: IntegrationDetailProps & { actions: Actions }) {
                 }}
               />
             </Show>
-            <Show when={server().sourceKind === "plugin"}>
-              <p class="integration-hint">
-                Added by the plugin {server().source}; turn it off or change its tools here, and the plugin's settings stay its own.
-              </p>
-            </Show>
           </section>
 
           <Show when={server().enabled}>
             <section class="integration-section">
-              <h3>Tools</h3>
-              <p class="integration-hint">
-                Code mode keeps them out of the model's tool list until it searches for them; Direct lists them like a built-in tool.
-              </p>
+              <h3 class="mcp-section-head">
+                Tools
+                <span
+                  class="mcp-help"
+                  role="img"
+                  aria-label="Code mode keeps them out of the model's tool list until it searches for them; Direct lists them like a built-in tool"
+                  data-tip="Code mode keeps them out of the model's tool list until it searches for them; Direct lists them like a built-in tool"
+                >
+                  <QuestionIcon />
+                </span>
+              </h3>
               <Segmented
                 label={`How ${server().name}'s tools reach the model`}
                 value={server().exposure}
@@ -768,6 +880,7 @@ export default defineWebPlugin({
         title: server.name,
         ...(server.server?.version === undefined ? {} : { version: server.server.version }),
         ...(server.icon === undefined ? {} : { icon: server.icon }),
+        ...(server.iconDark === undefined ? {} : { iconDark: server.iconDark }),
         status: statusOf(server),
         enabled: server.enabled,
         setEnabled: (enabled) => void actions.configure(server.name, { enabled }).catch(() => {}),

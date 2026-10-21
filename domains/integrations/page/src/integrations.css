@@ -505,3 +505,13 @@
 .integration-icon > img {
   object-fit: contain;
 }
+
+/* An icon with one for a dark theme: each shows on its own. */
+.integration-icon-dark,
+:root[data-theme="dark"] .integration-icon-light {
+  display: none;
+}
+
+:root[data-theme="dark"] .integration-icon-dark {
+  display: block;
+}

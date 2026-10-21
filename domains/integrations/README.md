@@ -8,6 +8,8 @@ Settings › Integrations: what Lemma works with besides its own models, in one 
 
 The page holds no kind of its own: an item's row (its icon, version, status in a few words, with a dot only for trouble, and a switch), its details, what it offers to add, and its form for one it does not offer are its kind's, drawn with the page's classes (`DetailClasses`) so every kind reads alike. The address names the open item (`/settings/integrations?kind=mcp&item=github`), and a search of the settings finds each one. Adding (the overview's button with nothing open, the list's `+` with an item open) opens one search over every kind's offers (`IntegrationCatalog`), each added by picking it, and each kind's own form after them (`Custom MCP server…`). The section's badge counts the items in error.
 
+Icons are images drawn with `<img>`, so nothing in an SVG runs, fetched without telling their host the page they are on; an item with an `iconDark` shows it on a dark theme instead.
+
 ## Extending it
 
 What the contract offers in each of the [five shapes](../../docs/plugins.md#the-five-shapes):
