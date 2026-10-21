@@ -1,10 +1,12 @@
 import { existsSync } from "node:fs";
-import { mkdir, mkdtemp, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, readFile, rm, stat, utimes, writeFile } from "node:fs/promises";
 import { randomBytes } from "node:crypto";
+import { request as httpRequest } from "node:http";
+import type { IncomingHttpHeaders, OutgoingHttpHeaders } from "node:http";
 import { connect as connectTcp, createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { constants as zlibConstants, inflateRawSync } from "node:zlib";
+import { brotliCompressSync, brotliDecompressSync, constants as zlibConstants, gunzipSync, gzipSync, inflateRawSync } from "node:zlib";
 import { describe, expect, test } from "vitest";
 import { Deferred, Duration, Effect, Exit, Fiber, Layer, Option, Queue, Schema, Scope, Stream } from "effect";
 import { Channels, HOST_PROTOCOL, Inspectors, Interaction, InteractionError, InteractionOrigin, serveChannel } from "@lemma/contracts";
@@ -23,6 +25,19 @@ const interactionError = (exit: Exit.Exit<unknown, unknown>): InteractionError =
   if (error instanceof InteractionError) return error;
   throw new Error(`Expected an InteractionError, got ${String(exit)}`);
 };
+
+/** A request with exactly `headers`, and its response's body as it crossed: `fetch` would offer encodings and decode them. */
+const rawGet = (url: string, path: string, headers: OutgoingHttpHeaders, method = "GET", body?: string) =>
+  new Promise<{ readonly status: number; readonly headers: IncomingHttpHeaders; readonly body: Buffer }>((resolve, reject) => {
+    const request = httpRequest(`${url}${path}`, { method, headers }, (response) => {
+      const chunks: Buffer[] = [];
+      response.on("data", (chunk: Buffer) => chunks.push(chunk));
+      response.on("end", () => resolve({ status: response.statusCode!, headers: response.headers, body: Buffer.concat(chunks) }));
+      response.on("error", reject);
+    });
+    request.on("error", reject);
+    request.end(body);
+  });
 
 describe("transport", () => {
   test("requires the token on /rpc and /api, by header or query", () =>
@@ -692,6 +707,81 @@ describe("transport", () => {
     } finally {
       await rm(dir, { recursive: true, force: true });
       await rm(join(tmpdir(), "lemma-secret.txt"), { force: true });
+    }
+  });
+
+  test("sends the build's compressed copy of a file that the request accepts, and caches what assets/ holds for a year", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "lemma-web-"));
+    try {
+      const script = Buffer.from(`console.log(${JSON.stringify("lemma ".repeat(400))});`);
+      const page = Buffer.from(`<!doctype html><title>lemma</title><script src="/assets/app-a1b2c3d4.js"></script>${"<!-- … -->".repeat(200)}`);
+      await mkdir(join(dir, "assets"));
+      for (const [path, data] of [
+        ["assets/app-a1b2c3d4.js", script],
+        ["index.html", page],
+      ] as const) {
+        await writeFile(join(dir, path), data);
+        await writeFile(join(dir, `${path}.br`), brotliCompressSync(data));
+        await writeFile(join(dir, `${path}.gz`), gzipSync(data));
+      }
+      // A copy older than its file was left by another build: never sent.
+      await writeFile(join(dir, "assets", "stale.js"), script);
+      await writeFile(join(dir, "assets", "stale.js.gz"), gzipSync(Buffer.from("old")));
+      const past = new Date(Date.now() - 60_000);
+      await utimes(join(dir, "assets", "stale.js.gz"), past, past);
+      await withHost(
+        (host) =>
+          Effect.promise(async () => {
+            const asset = "/assets/app-a1b2c3d4.js";
+            const br = await rawGet(host.url, asset, { "accept-encoding": "gzip, deflate, br, zstd" });
+            expect(br.status).toBe(200);
+            expect(br.headers["content-encoding"]).toBe("br");
+            expect(br.headers["content-type"]).toContain("javascript");
+            expect(br.headers["cache-control"]).toBe("public, max-age=31536000, immutable");
+            expect(br.headers["vary"]).toBe("accept-encoding");
+            expect(brotliDecompressSync(br.body)).toEqual(script);
+            expect(br.body.length).toBeLessThan(script.length / 10);
+
+            const gzip = await rawGet(host.url, asset, { "accept-encoding": "br;q=0, gzip" });
+            expect(gzip.headers["content-encoding"]).toBe("gzip");
+            expect(gunzipSync(gzip.body)).toEqual(script);
+            expect((await rawGet(host.url, asset, { "accept-encoding": "*" })).headers["content-encoding"]).toBe("br");
+            expect((await rawGet(host.url, asset, { "accept-encoding": "*, br;q=0" })).headers["content-encoding"]).toBe("gzip");
+            const plain = await rawGet(host.url, asset, {});
+            expect(plain.headers["content-encoding"]).toBeUndefined();
+            expect(plain.body).toEqual(script);
+            // Each representation is a tag of its own, so a cache never answers one encoding's request with another's.
+            expect(new Set([br.headers["etag"], gzip.headers["etag"], plain.headers["etag"]]).size).toBe(3);
+
+            const stale = await rawGet(host.url, "/assets/stale.js", { "accept-encoding": "gzip" });
+            expect(stale.headers["content-encoding"]).toBeUndefined();
+            expect(stale.body).toEqual(script);
+
+            // The page, and the client-side routes that fall back to it, are revalidated: unchanged, a 304 with no body.
+            for (const path of ["/", "/index.html", "/threads/t1"]) {
+              const first = await rawGet(host.url, path, { "accept-encoding": "gzip, br" });
+              expect(first.status).toBe(200);
+              expect(first.headers["content-encoding"]).toBe("br");
+              expect(first.headers["cache-control"]).toBe("no-cache");
+              expect(brotliDecompressSync(first.body)).toEqual(page);
+              const etag = first.headers["etag"]!;
+              const again = await rawGet(host.url, path, { "accept-encoding": "gzip, br", "if-none-match": etag });
+              expect(again.status).toBe(304);
+              expect(again.body.length).toBe(0);
+              expect(again.headers["etag"]).toBe(etag);
+              expect(again.headers["cache-control"]).toBe("no-cache");
+              expect(again.headers["content-encoding"]).toBeUndefined();
+              const dated = await rawGet(host.url, path, { "accept-encoding": "gzip, br", "if-modified-since": first.headers["last-modified"]! });
+              expect(dated.status).toBe(304);
+              // Another encoding is another representation: its tag does not match.
+              expect((await rawGet(host.url, path, { "accept-encoding": "gzip", "if-none-match": etag })).status).toBe(200);
+            }
+            expect((await rawGet(host.url, asset, { "if-none-match": '"other"' })).status).toBe(200);
+          }),
+        { staticDir: dir },
+      );
+    } finally {
+      await rm(dir, { recursive: true, force: true });
     }
   });
 

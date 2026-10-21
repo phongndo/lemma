@@ -3,7 +3,7 @@ import { createServer } from "node:http";
 import type { Socket } from "node:net";
 import { readFile } from "node:fs/promises";
 import { stripTypeScriptTypes } from "node:module";
-import { extname, join, relative, resolve } from "node:path";
+import { extname, relative, resolve } from "node:path";
 import { Deferred, Effect, Layer, Scope } from "effect";
 import { HttpServerRequest, HttpServerResponse } from "effect/http";
 import type { HttpServerError } from "effect/http";
@@ -14,7 +14,8 @@ import { RpcSerialization, RpcServer } from "effect/rpc";
 import type { Rpc, RpcGroup } from "effect/rpc";
 import { HOST_PROTOCOL, WEB_IMPORTABLE } from "@lemma/contracts";
 import type { WebComposition, WebFile } from "@lemma/contracts";
-import { isInside, kindOf } from "@lemma/contracts/fs";
+import { isInside } from "@lemma/contracts/fs";
+import { serveStatic } from "./assets.ts";
 import { ServedRpcs } from "./channels.ts";
 import type { ChannelLifetime } from "./channels.ts";
 import { ReplySent } from "./replies.ts";
@@ -105,26 +106,6 @@ const under = (path: string, prefix: string) => path === prefix || path.startsWi
 const COMPRESSION = { threshold: 1024, serverNoContextTakeover: true, zlibDeflateOptions: { level: 1 } } as const;
 
 /**
- * A built web app: existing files are served as is; other extensionless GET
- * paths fall back to `index.html` for client-side routing. Paths cannot
- * escape `root`.
- */
-const serveStatic = (root: string, pathname: string) =>
-  Effect.gen(function* () {
-    const notFound = HttpServerResponse.text("Not found", { status: 404 });
-    const decoded = yield* Effect.try(() => decodeURIComponent(pathname)).pipe(Effect.orElseSucceed(() => undefined));
-    if (decoded === undefined || decoded.includes("\0")) return notFound;
-    const target = resolve(root, `.${decoded}`);
-    if (!isInside(root, target)) return notFound;
-    const isFile = (path: string) => Effect.promise(async () => (await kindOf(path)) === "file");
-    if (yield* isFile(target)) return yield* HttpServerResponse.file(target);
-    const last = decoded.slice(decoded.lastIndexOf("/") + 1);
-    const index = join(root, "index.html");
-    if (last.includes(".") || !(yield* isFile(index))) return notFound;
-    return yield* HttpServerResponse.file(index, { headers: { "cache-control": "no-cache" } });
-  }).pipe(Effect.catch(() => Effect.succeed(HttpServerResponse.text("Cannot read file", { status: 500 }))));
-
-/**
  * Binds the address and serves until the scope closes. `/rpc` (WebSocket,
  * JSON) and `/rpc/http` (streaming HTTP, NDJSON) share one handler set;
  * `/rpc*` and `/api*` require the token, static assets do not. Web halves are
@@ -206,7 +187,7 @@ const serve = (options: ServerOptions, handlers: HostHandlers, node: ReturnType<
       }
       if (request.method !== "GET" && request.method !== "HEAD") return HttpServerResponse.empty({ status: 405 });
       if (root === undefined) return HttpServerResponse.text("No web app is configured (transport config `staticDir`)", { status: 404 });
-      return yield* serveStatic(root, path).pipe(Effect.provide(platform));
+      return yield* serveStatic(request, root, path).pipe(Effect.provide(platform));
     });
 
     const server = yield* NodeHttpServer.make(() => node, {
