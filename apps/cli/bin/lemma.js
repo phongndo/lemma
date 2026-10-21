@@ -30,7 +30,26 @@ const fresh = () => {
   }
 };
 
-const serve = process.argv[2] === "serve";
+/**
+ * The global flags, each whether it takes a value: `GLOBAL_FLAGS` (`@lemma/cli`), which this cannot import without the
+ * type stripper. tests/launch.test.ts holds the two alike.
+ */
+const GLOBALS = { json: false, text: false, env: true, quiet: false, fields: true, questions: true, answer: true, help: false, version: false };
+
+/** The command's first word, as `splitGlobals` (src/cli.ts) reads the line: what is left once the global flags, wherever they are, are out. */
+const commandOf = (argv) => {
+  for (let i = 0; i < argv.length; i++) {
+    const word = argv[i];
+    if (word === "--") return undefined;
+    if (word === "-h" || word === "-q") continue;
+    const long = word.startsWith("--") ? word.slice(2).split("=")[0] : undefined;
+    if (long === undefined || !Object.hasOwn(GLOBALS, long)) return word;
+    if (GLOBALS[long] && !word.includes("=")) i++;
+  }
+  return undefined;
+};
+
+const serve = commandOf(process.argv.slice(2)) === "serve";
 // The host (`serve`) runs in this process, as its launcher starts it (`@lemma/host/launch`): with the host's Node.js
 // flags, started again with them unless it is only starting one in the background, and with Effect from the host's
 // bundle of it, before anything loads Effect.

@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, test } from "vitest";
+import { GLOBAL_FLAGS } from "@lemma/cli";
 import packageJson from "../package.json" with { type: "json" };
 
 const launcher = fileURLToPath(new URL("../bin/lemma.js", import.meta.url));
@@ -79,6 +80,19 @@ describe("bin/lemma.js", () => {
     const root = await layout();
     expect(launch(root, "serve", "--no-open")).toBe("relaunch\neffect\nsources serve --no-open");
     expect(launch(root, "serve", "--detach")).toBe("effect\nsources serve --detach");
+  });
+
+  test("finds `serve` after any of the global flags, and not in one's value", async () => {
+    const root = await layout();
+    for (const [name, flag] of Object.entries(GLOBAL_FLAGS)) {
+      const words = flag.type === "boolean" ? [`--${name}`] : [`--${name}`, "value"];
+      expect(launch(root, ...words, "serve")).toBe(`relaunch\neffect\nsources ${words.join(" ")} serve`);
+      expect(launch(root, `--${name}=${flag.type === "boolean" ? "true" : "value"}`, "serve")).toMatch(/^relaunch\neffect\nsources /);
+    }
+    expect(launch(root, "-q", "serve")).toBe("relaunch\neffect\nsources -q serve");
+    expect(launch(root, "--json", "serve", "--detach")).toBe("effect\nsources --json serve --detach");
+    expect(launch(root, "--env", "serve", "status")).toBe("bundle --env serve status");
+    expect(launch(root, "status", "serve")).toBe("bundle status serve");
   });
 });
 
