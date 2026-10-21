@@ -85,14 +85,21 @@ heap (measured on Linux, Node 24).
   `import { Effect } from "effect"`) is the bundle's object, not the
   namespace of `effect/Effect`, though everything in the two is the same.
 
-`pnpm start` and `pnpm dev` also cap V8's young generation
-(`--max-semi-space-size=16`, in MB). Uncapped, on a machine with memory to
-spare, it grows to 64 MB as the host starts and works, and stays committed
-until the host has idled for minutes: capped, a host holds about 25 MB less
-once started and 65 MB less after a few turns, for the same CPU a turn
-(measured end to end) and a harness benchmark step about 7% slower. It is a
-flag of Node's, which a running process cannot change, so it is each
-launcher's to pass; `lemma serve` and the desktop app do not yet.
+The host runs with Node.js flags of its own (`HOST_FLAGS` in `src/launch.mjs`),
+which each launcher passes: `pnpm dev`, `lemma serve --detach`, a `lemma
+service`, `lemma plugins check`, and the desktop app (as `--js-flags`, which is
+how Electron's utility process takes V8's). A host started without them
+(`pnpm start`, the foreground `lemma serve`, a launcher of your own) starts
+again with them, as the same process (`execve`); on Windows, which has no
+such call, it runs without them. A flag given another value is left as given.
+They are Node's flags, which a running process cannot take on:
+
+- `--max-semi-space-size=16` caps V8's young generation at 16 MB. Uncapped, on
+  a machine with memory to spare, it grows to 64 MB as the host starts and
+  works, and stays committed until the host has idled for minutes: capped, a
+  host holds about 8 MB less once started and 30 MB less after 20 turns, for
+  the same time a turn takes (measured end to end) and a harness benchmark
+  step at 10,000 entries about 5% slower.
 
 ## The host runtime
 

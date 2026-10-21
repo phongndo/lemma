@@ -31,8 +31,13 @@ const fresh = () => {
 };
 
 const serve = process.argv[2] === "serve";
-// The host (`serve`) runs in this process, as its launcher starts it (`@lemma/host/launch`): with Effect from the
-// host's bundle of it, before anything loads Effect.
-if (serve) (await import("@lemma/host/launch")).useEffectBundle();
+// The host (`serve`) runs in this process, as its launcher starts it (`@lemma/host/launch`): with the host's Node.js
+// flags, started again with them unless it is only starting one in the background, and with Effect from the host's
+// bundle of it, before anything loads Effect.
+if (serve) {
+  const { relaunchWithHostFlags, useEffectBundle } = await import("@lemma/host/launch");
+  if (!process.argv.includes("--detach") && !process.argv.includes("-d")) relaunchWithHostFlags();
+  useEffectBundle();
+}
 // It runs from the sources, whose modules it shares: from the bundle it would load a second copy of them.
 await import(!serve && fresh() ? new URL("../dist/lemma.mjs", import.meta.url).href : "../src/main.ts");

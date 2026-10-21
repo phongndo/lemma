@@ -1,4 +1,4 @@
-import { execFile } from "node:child_process";
+import { execFile, spawnSync } from "node:child_process";
 import { readdirSync, readFileSync } from "node:fs";
 import { mkdir, mkdtemp, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
+import { HOST_FLAGS, missingHostFlags } from "../src/launch.mjs";
 
 const run = promisify(execFile);
 const host = fileURLToPath(new URL("..", import.meta.url));
@@ -140,4 +141,30 @@ describe("Effect's bundle", () => {
       runs: 1,
     });
   }, 60_000);
+});
+
+describe("the host's Node.js flags", () => {
+  test("are missing unless given, by any spelling or value", () => {
+    expect(missingHostFlags([])).toEqual(HOST_FLAGS);
+    expect(missingHostFlags(["--conditions=lemma-source", ...HOST_FLAGS])).toEqual([]);
+    expect(missingHostFlags(["--max_semi_space_size=64"])).toEqual([]);
+  });
+
+  test.skipIf(process.platform === "win32")("a process started without them starts again with them: the same process, its arguments kept", () => {
+    const ran = spawnSync(
+      process.execPath,
+      [
+        "--input-type=module",
+        "--eval",
+        `const { relaunchWithHostFlags } = await import(${JSON.stringify(launch)}); relaunchWithHostFlags(); console.log(JSON.stringify({ pid: process.pid, execArgv: process.execArgv, argv: process.argv.slice(1) }));`,
+        "kept",
+      ],
+      { encoding: "utf8", env: { ...process.env, NODE_OPTIONS: "" } },
+    );
+    expect(ran.status, ran.stderr).toBe(0);
+    const after = JSON.parse(ran.stdout.trim()) as { pid: number; execArgv: string[]; argv: string[] };
+    expect(after.pid).toBe(ran.pid);
+    expect(after.execArgv).toEqual(expect.arrayContaining([...HOST_FLAGS]));
+    expect(after.argv).toEqual(["kept"]);
+  });
 });

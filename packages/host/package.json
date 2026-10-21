@@ -10,7 +10,7 @@
     "./launch": "./src/launch.mjs"
   },
   "scripts": {
-    "start": "node --conditions=lemma-source --max-semi-space-size=16 src/start.mjs",
+    "start": "node --conditions=lemma-source src/start.mjs",
     "build": "node --conditions=lemma-source scripts/bundle-effect.ts",
     "check": "tsrs --noEmit",
     "test": "vitest run"

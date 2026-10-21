@@ -12,8 +12,8 @@ const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const BUDGET: Readonly<Record<string, number>> = {
   "packages/core": 5_600,
   "packages/contracts": 2_600,
-  // Its launch is JavaScript (start.mjs, launch.mjs: the compile cache and Effect's bundle), which loads before the
-  // compile cache is on, and is counted with the rest.
+  // Its launch is JavaScript (start.mjs, launch.mjs: the compile cache, Effect's bundle, its Node.js flags), which
+  // loads before the compile cache is on, and is counted with the rest.
   "packages/host": 2_950,
   "packages/composition": 850,
   "packages/web": 2_000,

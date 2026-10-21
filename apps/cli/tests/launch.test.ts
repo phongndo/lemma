@@ -34,7 +34,10 @@ const layout = async () => {
   const hostPackage = join(root, "node_modules/@lemma/host");
   await mkdir(hostPackage, { recursive: true });
   await writeFile(join(hostPackage, "package.json"), JSON.stringify({ name: "@lemma/host", type: "module", exports: { "./launch": "./launch.mjs" } }));
-  await writeFile(join(hostPackage, "launch.mjs"), 'export const useEffectBundle = () => console.log("effect");\n');
+  await writeFile(
+    join(hostPackage, "launch.mjs"),
+    'export const relaunchWithHostFlags = () => console.log("relaunch");\nexport const useEffectBundle = () => console.log("effect");\n',
+  );
   return root;
 };
 
@@ -72,9 +75,10 @@ describe("bin/lemma.js", () => {
     expect(launch(root, "status")).toBe("sources status");
   });
 
-  test("runs a host from the sources, which it shares, started as the host's launch says", async () => {
+  test("runs a host from the sources, which it shares, started as the host's launch says, but for its flags when it only detaches one", async () => {
     const root = await layout();
-    expect(launch(root, "serve", "--no-open")).toBe("effect\nsources serve --no-open");
+    expect(launch(root, "serve", "--no-open")).toBe("relaunch\neffect\nsources serve --no-open");
+    expect(launch(root, "serve", "--detach")).toBe("effect\nsources serve --detach");
   });
 });
 

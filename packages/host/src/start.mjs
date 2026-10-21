@@ -11,9 +11,13 @@ import { fileURLToPath } from "node:url";
  * one module loaded before, TypeScript would load Node's type stripper (~10 MB) on every start, which a warm cache
  * otherwise spares.
  *
- * As the process's entry, it then loads Effect from the host's bundle of it (launch.mjs). Imported (`lemma serve`),
- * what imported it did so, or Effect may have loaded already, whose bundle would then be a second copy.
+ * As the process's entry, it first starts again with the host's Node.js flags when it was started without them, and
+ * loads Effect from the host's bundle of it (launch.mjs). Imported (`lemma serve`), what imported it did both.
  */
 enableCompileCache(fileURLToPath(new URL("../node_modules/.cache/compile", import.meta.url)));
-if (import.meta.main) (await import("./launch.mjs")).useEffectBundle();
+if (import.meta.main) {
+  const { relaunchWithHostFlags, useEffectBundle } = await import("./launch.mjs");
+  relaunchWithHostFlags();
+  useEffectBundle();
+}
 await import("./main.ts");
