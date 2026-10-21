@@ -135,7 +135,7 @@ costs re-reading the files.
   writer laid out otherwise, and the file's last line, the one a power loss can
   leave torn. Reading a head costs a few times less than parsing a short line, and
   a long one (a tool's output) no more: a host whose index is gone lists 500
-  sessions (3.7 GB) in 0.8 to 1.2 s rather than 5.8 s. Sessions
+  sessions (3.7 GB) in 0.7 to 1.1 s rather than 5.4 s. Sessions
   are indexed when created, read, unloaded, and when the plugin stops, those last
   two from memory, so a restarted host reads only what changed since. Sessions
   this process has opened are served from memory. A file that cannot be read is
