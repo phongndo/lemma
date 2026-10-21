@@ -489,9 +489,14 @@ export function makeLlmPlugin(options: Options = {}) {
                 const idleMs = config.streamTimeout * 1000;
                 let stalled = false;
                 let timer: ReturnType<typeof setTimeout> | undefined;
+                // Armed again on every event of the stream: one timer, restarted (`refresh`), rather than a new one each
+                // time. Never once it has fired, as `refresh` would start it again.
                 const arm = () => {
-                  if (idleMs <= 0) return;
-                  clearTimeout(timer);
+                  if (idleMs <= 0 || stalled) return;
+                  if (timer !== undefined) {
+                    timer.refresh();
+                    return;
+                  }
                   timer = setTimeout(() => {
                     stalled = true;
                     close(
