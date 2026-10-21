@@ -1,11 +1,13 @@
 import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
-import { createServer } from "node:net";
+import { randomBytes } from "node:crypto";
+import { connect as connectTcp, createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { constants as zlibConstants, inflateRawSync } from "node:zlib";
 import { describe, expect, test } from "vitest";
-import { Deferred, Duration, Effect, Exit, Fiber, Layer, Option, Queue, Scope, Stream } from "effect";
-import { HOST_PROTOCOL, Inspectors, Interaction, InteractionError, InteractionOrigin } from "@lemma/contracts";
+import { Deferred, Duration, Effect, Exit, Fiber, Layer, Option, Queue, Schema, Scope, Stream } from "effect";
+import { Channels, HOST_PROTOCOL, Inspectors, Interaction, InteractionError, InteractionOrigin, serveChannel } from "@lemma/contracts";
 import { Commands } from "@lemma/commands";
 import type { CommandInfo } from "@lemma/commands";
 import { readDiscovery } from "@lemma/contracts/discovery";
@@ -622,6 +624,43 @@ describe("transport", () => {
     30_000,
   );
 
+  test("compresses a WebSocket message of 1 KiB or more for a client that accepts it, and none smaller; off, it offers none", async () => {
+    const sizes = definePlugin({
+      id: "sizes",
+      layer: Layer.effectDiscard(
+        Effect.flatMap(PluginContext, (owner) =>
+          owner.add(
+            Channels,
+            serveChannel({ kind: "call", id: "sizes.text", payload: Schema.Number, success: Schema.String }, (words) => Effect.succeed("lemma ".repeat(words))),
+          ),
+        ).pipe(Effect.orDie),
+      ),
+    });
+    const call = (id: string, words: number) => ({ _tag: "Request", id, tag: "Channel.Call", payload: { id: "sizes.text", payload: words }, headers: [] });
+    for (const compression of [true, false]) {
+      const { extensions, frames } = await withHost(
+        (host) => Effect.promise(() => exchange(host, [call("1", 2), call("2", 20_000)])),
+        { compression },
+        undefined,
+        [sizes],
+      );
+      const replies = frames.map((frame) => ({ ...frame, reply: JSON.parse(frame.compressed ? inflated(frame.payload) : frame.payload.toString()) }));
+      expect(replies.map(({ reply }) => [reply.requestId, reply.exit.value.length])).toEqual([
+        ["1", 12],
+        ["2", 120_000],
+      ]);
+      if (compression) {
+        // As browsers offer it; without context takeover, which is what makes `ws` keep to the threshold.
+        expect(extensions).toBe("permessage-deflate; server_no_context_takeover");
+        expect(replies.map(({ compressed }) => compressed)).toEqual([false, true]);
+        expect(replies[1]!.payload.length).toBeLessThan(2_000);
+      } else {
+        expect(extensions).toBeUndefined();
+        expect(replies.map(({ compressed }) => compressed)).toEqual([false, false]);
+      }
+    }
+  });
+
   test("serves a static web app with SPA fallback and no token", async () => {
     const dir = await mkdtemp(join(tmpdir(), "lemma-web-"));
     try {
@@ -709,3 +748,70 @@ describe("transport", () => {
     }
   });
 });
+
+/** A frame as the host sent it: whether it is compressed (RSV1), and its payload as it crossed. */
+interface Frame {
+  readonly compressed: boolean;
+  readonly payload: Buffer;
+}
+
+/** A client's text frame: masked, as a client's must be, with a zero key, which leaves the payload as it is. */
+const clientFrame = (text: string): Buffer => {
+  const payload = Buffer.from(text);
+  const length = payload.length < 126 ? Buffer.from([0x80 | payload.length]) : Buffer.from([0x80 | 126, payload.length >> 8, payload.length & 0xff]);
+  return Buffer.concat([Buffer.from([0x81]), length, Buffer.alloc(4), payload]);
+};
+
+/** A compressed frame's payload, inflated (RFC 7692: the tail its sender took off put back). */
+const inflated = (payload: Buffer): string =>
+  inflateRawSync(Buffer.concat([payload, Buffer.from([0x00, 0x00, 0xff, 0xff])]), { finishFlush: zlibConstants.Z_SYNC_FLUSH }).toString();
+
+/**
+ * The host's `/rpc` over a bare TCP socket, offering `permessage-deflate` as a browser does, so what crosses the wire
+ * shows: the extensions it accepted, and its frames, one per request sent.
+ */
+const exchange = (host: { readonly url: string; readonly token: string }, requests: readonly unknown[]) =>
+  new Promise<{ readonly extensions: string | undefined; readonly frames: Frame[] }>((resolve, reject) => {
+    const { hostname, port, host: authority } = new URL(host.url);
+    const socket = connectTcp(Number(port), hostname);
+    socket.on("error", reject);
+    socket.write(
+      [
+        `GET /rpc?token=${encodeURIComponent(host.token)} HTTP/1.1`,
+        `Host: ${authority}`,
+        "Upgrade: websocket",
+        "Connection: Upgrade",
+        "Sec-WebSocket-Version: 13",
+        `Sec-WebSocket-Key: ${randomBytes(16).toString("base64")}`,
+        "Sec-WebSocket-Extensions: permessage-deflate; client_max_window_bits",
+        "",
+        "",
+      ].join("\r\n"),
+    );
+    let buffer = Buffer.alloc(0);
+    let upgraded = false;
+    let extensions: string | undefined;
+    const frames: Frame[] = [];
+    socket.on("data", (data) => {
+      buffer = Buffer.concat([buffer, data]);
+      if (!upgraded) {
+        const end = buffer.indexOf("\r\n\r\n");
+        if (end === -1) return;
+        upgraded = true;
+        extensions = /^sec-websocket-extensions: (.*)$/im.exec(buffer.subarray(0, end).toString())?.[1]?.trim();
+        buffer = buffer.subarray(end + 4);
+        for (const request of requests) socket.write(clientFrame(JSON.stringify(request)));
+      }
+      // The host's frames are unmasked: a header, then the payload.
+      while (buffer.length >= 2) {
+        const short = buffer[1]! & 0x7f;
+        const [length, start] = short === 126 ? [buffer.readUInt16BE(2), 4] : short === 127 ? [Number(buffer.readBigUInt64BE(2)), 10] : [short, 2];
+        if (buffer.length < start + length) break;
+        frames.push({ compressed: (buffer[0]! & 0x40) !== 0, payload: Buffer.from(buffer.subarray(start, start + length)) });
+        buffer = buffer.subarray(start + length);
+      }
+      if (frames.length < requests.length) return;
+      socket.destroy();
+      resolve({ extensions, frames });
+    });
+  });

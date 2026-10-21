@@ -215,6 +215,39 @@ describe("sessions.log", () => {
     );
   });
 
+  test("sends what is appended together as one chunk, which the transport sends as one message", async () => {
+    const log = [titled(1)];
+    const burst = Array.from({ length: 50 }, (_, index) => titled(index + 2));
+    const chunks = await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const events = yield* (yield* makeCore([])).run(Events);
+          const store: Context.Service.Shape<typeof Sessions> = {
+            ...recording().store,
+            events: (_, options) => Effect.sync(() => log.filter((event) => event.seq > (options?.after ?? 0))),
+          };
+          const channel = serveSessions(store, events).find((served) => served.id === "sessions.log") as ChannelStream;
+          const sizes: number[] = [];
+          yield* (elementsOf(channel, { sessionId: "s1" }) as Stream.Stream<SessionLogUpdate, unknown>).pipe(
+            Stream.take(1 + burst.length),
+            Stream.runForEachArray((updates) =>
+              Effect.gen(function* () {
+                sizes.push(updates.length);
+                if (updates[0]?.type !== "subscribed") return;
+                log.push(...burst);
+                for (const event of burst) yield* events.publish(SessionAppended, { sessionId: "s1", event });
+              }),
+            ),
+          );
+          return sizes;
+        }),
+      ),
+    );
+    expect(chunks.reduce((sum, size) => sum + size, 0)).toBe(1 + burst.length);
+    // Each element its own chunk would cost each a round trip to a client across a network.
+    expect(chunks.length).toBeLessThanOrEqual(5);
+  });
+
   test("fails NotFound, naming the session, once the session is deleted, or when it does not exist", async () => {
     const deleted = await follow(
       [titled(1)],

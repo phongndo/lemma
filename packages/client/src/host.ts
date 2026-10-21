@@ -2,7 +2,7 @@ import { Cause, Deferred, Duration, Effect, Exit, Fiber, Schema, Scope, Stream }
 import type { Layer } from "effect";
 import { RpcClientError } from "effect/rpc";
 import type { Socket } from "effect/socket";
-import { HostError, wireCodec } from "@lemma/contracts";
+import { HostError, mapChunks, wireCodec } from "@lemma/contracts";
 import type {
   ChannelDeclaration,
   ChannelInfo,
@@ -242,10 +242,10 @@ const callOver = (rpc: Pick<HostRpcClient, "Channel.Call">, target: string | Cha
   return Effect.flatMap(Effect.flatMap(access.request(payload), rpc["Channel.Call"]), access.read);
 };
 
-/** A channel's stream, by declaration or by id, over an Effect client: what `Host.channel.open` reads. */
+/** A channel's stream, by declaration or by id, over an Effect client: what `Host.channel.open` reads, a chunk at a time as it came. */
 const openOver = (rpc: Pick<RawHostRpcClient, "Channel.Open">, target: string | ChannelDeclaration, payload: unknown) => {
   const access = channelOf(target);
-  return Stream.unwrap(Effect.map(access.request(payload), rpc["Channel.Open"])).pipe(Stream.mapEffect(access.read));
+  return mapChunks(Stream.unwrap(Effect.map(access.request(payload), rpc["Channel.Open"])), (value) => Effect.map(access.read(value), (element) => [element]));
 };
 
 /** How a stream from the host ended: with nothing when it finished, else the host's `HostError` or the connection's failure. */
