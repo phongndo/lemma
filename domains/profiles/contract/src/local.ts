@@ -4,16 +4,16 @@ import { join } from "node:path";
 import { Data, Effect, Schema } from "effect";
 import { readDiscovery } from "@lemma/contracts/discovery";
 import type { Discovery } from "@lemma/contracts/discovery";
-import { errorCode, writeFileAtomic } from "@lemma/contracts/fs";
+import { errorCode, readJsonFile, writeFileAtomic } from "@lemma/contracts/fs";
 import { DEFAULT_PROFILE, profileFilePath, profileHome, profileNameProblem, profilesDir, readProfileFile } from "@lemma/contracts/profiles";
 import type { ProfileFile } from "@lemma/contracts/profiles";
-import { MAX_PICTURE_BYTES } from "./profiles.ts";
+import { MAX_PICTURE_BYTES, titleProblem } from "./profiles.ts";
 import type { AvatarChange, ProfileAvatar } from "./profiles.ts";
 
 /*
  * Node only: `@lemma/profiles/local`. The profiles on this machine, as their folders under the root say
- * (`@lemma/contracts/profiles`): listed, with each one's port and running host, and made, and each one's picture. The
- * CLI's `lemma profile` and the profiles plugin use them alike.
+ * (`@lemma/contracts/profiles`): listed, with each one's port and running host, made, and deleted, and each one's
+ * picture and the name it is shown by. The CLI's `lemma profile` and the profiles plugin use them alike.
  */
 
 /** A profile as it is on this machine. */
@@ -86,23 +86,34 @@ export const freeProfilePort = (root: string): Effect.Effect<number> =>
   });
 
 /**
- * A profile cannot be made, or given a picture: `Name`, its name is none (`profileNameProblem`) or `default`; `Exists`,
- * a folder of the name is there; `Picture`, what was given is no picture it takes; `Write`, a file could not be
- * written.
+ * A profile cannot be made, deleted, renamed, or given a picture: `Name`, its name is none (`profileNameProblem`) or
+ * `default`, which is never made or deleted; `Title`, what it was to be shown by is no name (`titleProblem`);
+ * `Exists`, a folder of the name is there; `Running`, its host runs, so it is not deleted; `Picture`, what was given
+ * is no picture it takes; `Write`, a file could not be written or deleted.
  */
 export class ProfileError extends Data.TaggedError("ProfileError")<{
-  readonly reason: "Name" | "Exists" | "Picture" | "Write";
+  readonly reason: "Name" | "Title" | "Exists" | "Running" | "Picture" | "Write";
   readonly message: string;
 }> {}
 
+const failedWrite = (what: string, cause: unknown) =>
+  new ProfileError({ reason: "Write", message: `${what}: ${cause instanceof Error ? cause.message : String(cause)}` });
+
+/** Why `name` names no profile that can be made or deleted under `root`: none, or the default's, which is `root` itself. */
+const ownNameProblem = (root: string, name: string) =>
+  name === DEFAULT_PROFILE ? `"${DEFAULT_PROFILE}" is the profile ${root} itself` : profileNameProblem(name);
+
 /**
  * Makes the profile `name` under `root`: its home, empty but for a `profile.json` naming a port of its own
- * (`freeProfilePort`). Everything else it gets as a fresh home does, from its first host.
+ * (`freeProfilePort`), and the name it is shown by when it is given `title`. Everything else it gets as a fresh home
+ * does, from its first host.
  */
-export const createProfile = (root: string, name: string): Effect.Effect<ProfileEntry, ProfileError> =>
+export const createProfile = (root: string, name: string, title?: string): Effect.Effect<ProfileEntry, ProfileError> =>
   Effect.gen(function* () {
-    const problem = name === DEFAULT_PROFILE ? `"${DEFAULT_PROFILE}" is the profile ${root} itself` : profileNameProblem(name);
+    const problem = ownNameProblem(root, name);
     if (problem !== undefined) return yield* new ProfileError({ reason: "Name", message: problem });
+    const wrong = title === undefined ? undefined : titleProblem(title);
+    if (wrong !== undefined) return yield* new ProfileError({ reason: "Title", message: wrong });
     const home = profileHome(root, name);
     const port = yield* freeProfilePort(root);
     yield* Effect.tryPromise({
@@ -114,14 +125,60 @@ export const createProfile = (root: string, name: string): Effect.Effect<Profile
       catch: (cause) =>
         errorCode(cause) === "EEXIST"
           ? new ProfileError({ reason: "Exists", message: `A profile "${name}" is there already: ${home}` })
-          : new ProfileError({ reason: "Write", message: `Cannot make ${home}: ${cause instanceof Error ? cause.message : String(cause)}` }),
+          : failedWrite(`Cannot make ${home}`, cause),
     });
     yield* Effect.tryPromise({
       try: () => writeFileAtomic(profileFilePath(home), `${JSON.stringify({ port } satisfies ProfileFile, null, 2)}\n`),
-      catch: (cause) =>
-        new ProfileError({ reason: "Write", message: `Cannot write ${profileFilePath(home)}: ${cause instanceof Error ? cause.message : String(cause)}` }),
+      catch: (cause) => failedWrite(`Cannot write ${profileFilePath(home)}`, cause),
     });
+    if (title !== undefined) yield* writeTitle(home, title);
     return { name, home, port };
+  });
+
+/**
+ * Deletes the profile `name` under `root`, and everything in its home: its threads, config, plugins, and logins. Not
+ * the default, which is `root` itself, and not while its host runs (stop it first). One that is a link to a folder
+ * elsewhere loses the link, and the folder stays. A user service that starts its host (`lemma --profile <name>
+ * service`) stays: uninstall that first. Deleting one that is not there does nothing.
+ */
+export const removeProfile = (root: string, name: string): Effect.Effect<void, ProfileError> =>
+  Effect.gen(function* () {
+    const problem = ownNameProblem(root, name);
+    if (problem !== undefined) return yield* new ProfileError({ reason: "Name", message: problem });
+    const home = profileHome(root, name);
+    const running = yield* readDiscovery(home);
+    if (running !== undefined)
+      return yield* new ProfileError({
+        reason: "Running",
+        message: `The profile "${name}" has a host running (pid ${running.pid}): stop it first, with \`lemma --profile ${name} stop\``,
+      });
+    yield* Effect.tryPromise({
+      try: () => rm(home, { recursive: true, force: true }),
+      catch: (cause) => failedWrite(`Cannot delete ${home}`, cause),
+    });
+  });
+
+/** `<home>/title.json`: the name a profile was given to be shown by; without one, `profileTitle` makes one from its name. */
+const TitleFile = Schema.Struct({ title: Schema.String });
+const titleFile = (home: string) => join(home, "title.json");
+
+/** The name the profile whose home is `home` was given to be shown by, or undefined when it was given none. */
+export const readTitle = (home: string): Effect.Effect<string | undefined> =>
+  Effect.promise(() => readJsonFile(titleFile(home), TitleFile)).pipe(Effect.map((file) => file?.title.trim() || undefined));
+
+/** Gives the profile whose home is `home` the name `title` to be shown by; a blank one gives it back the one its name makes. */
+export const writeTitle = (home: string, title: string): Effect.Effect<void, ProfileError> =>
+  Effect.gen(function* () {
+    const problem = titleProblem(title);
+    if (problem !== undefined) return yield* new ProfileError({ reason: "Title", message: problem });
+    const given = title.trim();
+    yield* Effect.tryPromise({
+      try: async () => {
+        if (given === "") await rm(titleFile(home), { force: true });
+        else await writeFileAtomic(titleFile(home), `${JSON.stringify({ title: given } satisfies typeof TitleFile.Type)}\n`);
+      },
+      catch: (cause) => failedWrite(`Cannot keep the name in ${home}`, cause),
+    });
   });
 
 /** `<home>/avatar.json`: the picture a profile chose, a pattern's seed or its picture's file in its home; none, its name's pattern. */
@@ -183,7 +240,6 @@ export const writeAvatar = (home: string, change: AvatarChange): Effect.Effect<v
         const chosen: typeof AvatarFile.Type = change.kind === "pattern" ? { seed: change.seed } : { picture: picture!.file };
         await writeFileAtomic(avatarFile(home), `${JSON.stringify(chosen)}\n`);
       },
-      catch: (cause) =>
-        new ProfileError({ reason: "Write", message: `Cannot keep the picture in ${home}: ${cause instanceof Error ? cause.message : String(cause)}` }),
+      catch: (cause) => failedWrite(`Cannot keep the picture in ${home}`, cause),
     });
   });

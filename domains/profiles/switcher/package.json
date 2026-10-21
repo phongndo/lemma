@@ -2,7 +2,7 @@
   "name": "@lemma/profiles-switcher",
   "version": "0.1.0",
   "private": true,
-  "description": "The profiles on this machine: listed, opened (their host started when none runs), and made; the web half switches between them once there is more than one",
+  "description": "The profiles on this machine: listed, opened (their host started when none runs), made, renamed, stopped, and deleted; the web half switches between them once there is more than one, and manages them in Settings",
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
@@ -15,6 +15,7 @@
   "dependencies": {
     "@lemma/contracts": "workspace:*",
     "@lemma/core": "workspace:*",
+    "@lemma/frame": "workspace:*",
     "@lemma/look": "workspace:*",
     "@lemma/profiles": "workspace:*",
     "@lemma/settings": "workspace:*",

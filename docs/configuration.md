@@ -158,8 +158,8 @@ look, threads, and logins, in a home of its own, served by a host of its own.
 Make one when what differs is the plugins or the interface, a coding agent
 beside a research desk; when it is the same app with another agent, that is a
 mode ([agent.modes](../domains/agent/modes/README.md)). Until you make one
-there is only the default, `~/.lemma` itself, and nothing about profiles
-shows.
+there is only the default, `~/.lemma` itself, shown as Core, and nothing about
+profiles shows.
 
 ```sh
 lemma profile create research    # an empty home, ~/.lemma/profiles/research, with a port of its own
@@ -185,11 +185,16 @@ lemma profile                    # the profiles, their ports, and which hosts ru
 - **Switching.** Once there is more than one, the web app's sidebar shows the
   profile a page is as an avatar icon, as a browser does: a pattern made from
   its name until you choose another or a picture of your own. Its menu opens
-  another, starting its host when none runs; Settings › Profiles makes one
+  another, starting its host when none runs; Settings › Profiles makes,
+  renames, stops, and deletes them
   ([profiles.switcher](../domains/profiles/switcher/README.md)). A profile on
   a server is reached at its own port ([remote access](remote.md#profiles)).
-- **Removing.** `lemma profile remove <name>` deletes its home, once its host
-  is stopped.
+- **Names.** A profile's name (`research`) is its folder's and what
+  `--profile` takes, and never changes. Settings › Profiles gives it any other
+  name to be shown by, the default's too.
+- **Removing.** Settings › Profiles deletes one, stopping its host first;
+  `lemma profile remove <name>` does once its host is stopped. The default,
+  the home the others live in, is never deleted.
 
 Profiles keep work apart; they do not keep it safe from each other. Every
 host runs as you, so one profile's tools (a shell) can read another's files,

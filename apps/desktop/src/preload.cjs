@@ -10,6 +10,8 @@ contextBridge.exposeInMainWorld("lemmaDesktop", {
   },
   // The profile's window can open another profile's, in a window of its own (`lemma:open-profile`).
   openProfile: (name) => ipcRenderer.invoke("lemma:open-profile", String(name)),
+  // A profile the page deleted: its windows close, and what its pages kept goes (`lemma:profile-removed`).
+  profileRemoved: (name) => ipcRenderer.invoke("lemma:profile-removed", String(name)),
   // The browser view's pages (`src/browser.ts`), in the window's profile's partition.
   browser: {
     partition: process.argv.find((arg) => arg.startsWith("--lemma-browser-partition="))?.slice("--lemma-browser-partition=".length) ?? "persist:lemma-browser",

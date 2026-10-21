@@ -1,8 +1,8 @@
-import { rm } from "node:fs/promises";
 import { Effect } from "effect";
 import { table } from "@lemma/cli";
 import { DEFAULT_PROFILE, profileNameProblem, profileOf } from "@lemma/contracts/profiles";
-import { createProfile, listProfiles, portOf } from "@lemma/profiles/local";
+import { profileTitle } from "@lemma/profiles";
+import { createProfile, listProfiles, portOf, readTitle, removeProfile } from "@lemma/profiles/local";
 import { CliError, defineBuiltin, ExitCode, usage } from "../command.ts";
 import type { Builtin, Io } from "../command.ts";
 import { rootOf } from "../connect.ts";
@@ -29,8 +29,14 @@ const profileList = defineBuiltin({
     Effect.gen(function* () {
       const using = profileOf(io.env) ?? DEFAULT_PROFILE;
       const profiles = yield* listProfiles(rootOf(io));
-      const rows = profiles.map((profile) => ({
+      const titles = yield* Effect.forEach(profiles, (profile) => readTitle(profile.home), { concurrency: "unbounded" });
+      const rows = profiles.map((profile, index) => ({
         name: profile.name,
+        title: profileTitle({
+          name: profile.name,
+          default: profile.name === DEFAULT_PROFILE,
+          ...(titles[index] === undefined ? {} : { title: titles[index] }),
+        }),
         home: profile.home,
         port: portOf(profile) ?? null,
         url: profile.running?.url ?? null,
@@ -41,17 +47,18 @@ const profileList = defineBuiltin({
         json: { profiles: rows, using },
         text: [
           table([
-            ["", "name", "state", "home"],
+            ["", "name", "shown as", "state", "home"],
             ...rows.map((row) => [
               row.using ? "*" : "",
               row.name,
+              row.title,
               row.url === null ? `not running${row.port === null ? "" : ` (port ${row.port})`}` : row.url,
               row.home,
             ]),
           ]),
           "",
           rows.length === 1
-            ? "Only the default. `lemma profile create <name>` makes another."
+            ? `Only the default, ${rows[0]?.title ?? "Core"}. \`lemma profile create <name>\` makes another.`
             : "* the one commands use here. --profile <name> picks another for a command.",
         ].join("\n"),
         ids: rows.map((row) => row.name),
@@ -118,15 +125,11 @@ const profileRemove = defineBuiltin({
           message: `Nothing was deleted; --force deletes "${args.name}" without asking`,
           exit: ExitCode.failed,
         });
-      yield* Effect.tryPromise({
-        try: () => rm(profile.home, { recursive: true, force: true }),
-        catch: (cause) =>
-          new CliError({
-            code: "WriteFailed",
-            message: `Cannot delete ${profile.home}: ${cause instanceof Error ? cause.message : String(cause)}`,
-            exit: ExitCode.failed,
-          }),
-      });
+      yield* removeProfile(rootOf(io), args.name).pipe(
+        Effect.mapError(
+          (error) => new CliError({ code: error.reason === "Write" ? "WriteFailed" : error.reason, message: error.message, exit: ExitCode.failed }),
+        ),
+      );
       return { json: { removed: true, name: args.name, home: profile.home }, text: `Deleted the profile "${args.name}" (${profile.home})` };
     }),
 });

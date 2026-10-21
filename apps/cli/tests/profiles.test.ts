@@ -15,9 +15,9 @@ describe("profiles: separate Lemmas on this machine", () => {
   });
   afterEach(() => rm(root, { recursive: true, force: true }));
 
-  test("profile lists the default alone until another is made; create makes one with a port of its own; remove asks first", async () => {
+  test("profile lists the default, Core, alone until another is made; create makes one with a port of its own; remove asks first", async () => {
     expect(JSON.parse((await invoke(["profile", "--json"], root)).out)).toEqual({
-      profiles: [{ name: "default", home: root, port: null, url: null, running: false, using: true }],
+      profiles: [{ name: "default", title: "Core", home: root, port: null, url: null, running: false, using: true }],
       using: "default",
     });
     const made = JSON.parse((await invoke(["profile", "create", "desk", "--json"], root)).out);
