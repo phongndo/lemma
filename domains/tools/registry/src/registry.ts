@@ -71,22 +71,27 @@ const OUTPUT_MAX_CHARS = 64 * 1024;
  */
 export const outputBatcher = (publish: (chunk: string, offset: number) => void, interval = OUTPUT_INTERVAL_MS) =>
   Effect.map(Queue.dropping<void>(1), (due) => {
-    let pending = "";
+    /** The chunks since the last publish, joined only then: those wholly before its last `OUTPUT_MAX_CHARS` are dropped. */
+    let pending: string[] = [];
+    let pendingChars = 0;
     /** Everything printed so far, the parts a batch dropped included. */
     let printed = 0;
     /** A batch is due: `run` publishes it after the interval. */
     let scheduled = false;
     const flush = () => {
       scheduled = false;
-      if (pending === "") return;
-      const chunk = pending;
-      pending = "";
+      if (pendingChars === 0) return;
+      const joined = pending.join("");
+      const chunk = joined.length > OUTPUT_MAX_CHARS ? joined.slice(-OUTPUT_MAX_CHARS) : joined;
+      pending = [];
+      pendingChars = 0;
       publish(chunk, printed - chunk.length);
     };
     const update = (chunk: string) => {
       printed += chunk.length;
-      pending += chunk;
-      if (pending.length > OUTPUT_MAX_CHARS) pending = pending.slice(-OUTPUT_MAX_CHARS);
+      pending.push(chunk);
+      pendingChars += chunk.length;
+      while (pendingChars - pending[0]!.length >= OUTPUT_MAX_CHARS) pendingChars -= pending.shift()!.length;
       if (scheduled) return;
       scheduled = true;
       Queue.offerUnsafe(due, undefined);

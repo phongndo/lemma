@@ -19,7 +19,7 @@ const ChromiumConfig = Schema.Struct({
     .pipe(Schema.withDecodingDefaultType(Effect.sync(() => 300)))
     .annotate({
       title: "Close when idle after",
-      description: "Seconds after its last call that the browser closes, and every session's tabs with it. 0: it stays open.",
+      description: "Seconds after a session's last call that its tabs close, and after the last call of all that the browser does. 0: they stay open.",
     }),
   headless: Schema.Boolean.pipe(Schema.withDecodingDefaultType(Effect.sync(() => true))).annotate({
     title: "Headless",
