@@ -3,6 +3,8 @@ import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { readTool } from "../src/index.ts";
 import type { ReadDetails } from "../src/index.ts";
+import { readLines } from "../src/lines.ts";
+import { truncateHead } from "@lemma/tools";
 import { attempt, call, context, tempDir, textOf } from "@lemma/tools/testing";
 
 let dir: string;
@@ -40,6 +42,37 @@ describe("read", () => {
     expect(textOf(await call(readTool, { path: "huge-line.txt" }, context(dir)))).toBe(
       "[Line 1 is 60.0KB, exceeds 50.0KB limit. Use bash: sed -n '1p' huge-line.txt | head -c 51200]",
     );
+  });
+
+  it("pages a file larger than what it reads at a time", async () => {
+    await put("big.txt", Array.from({ length: 300_000 }, (_, i) => `line ${i + 1}\n`).join(""));
+    expect(textOf(await call(readTool, { path: "big.txt", offset: 150_000, limit: 2 }, context(dir)))).toBe(
+      "line 150000\nline 150001\n\n[150000 more lines in file. Use offset=150002 to continue.]",
+    );
+    const rest = textOf(await call(readTool, { path: "big.txt", offset: 299_000 }, context(dir)));
+    expect([rest.split("\n").length, rest.startsWith("line 299000\n"), rest.endsWith("line 300000\n")]).toEqual([1002, true, true]);
+  });
+
+  it("reads lines a chunk at a time as splitting the whole file would", async () => {
+    // Characters split between chunks, invalid UTF-8 (each sequence a 3-byte U+FFFD), and an empty last line.
+    const bytes = Buffer.concat([Buffer.from("é€😀\nab\n"), Buffer.from([0xff, 0xe2, 0x82, 0x0a, 0xc3]), Buffer.from("\n\nlong line here\n")]);
+    await put("mixed.txt", bytes);
+    const lines = bytes.toString("utf8").split("\n");
+    const limits = { maxLines: 2, maxBytes: 8 };
+    for (const chunk of [1, 2, 3, 5, 1024])
+      for (const [start, end] of [[0], [1, 3], [3], [4, 6], [6, 9], [7], [9]] as const) {
+        const handle = await fs.open(path.join(dir, "mixed.txt"), "r");
+        const { fileLines, selection } = await readLines(handle, start, end, limits, new AbortController().signal, chunk).finally(() => handle.close());
+        expect(fileLines).toBe(lines.length);
+        if (start >= lines.length) {
+          expect(selection).toBeUndefined();
+          continue;
+        }
+        const whole = truncateHead(lines.slice(start, end).join("\n"), limits);
+        const kept = truncateHead(selection!.head, limits);
+        expect(kept.truncated ? { ...kept, totalLines: selection!.lines, totalBytes: selection!.bytes } : kept).toEqual(whole);
+        expect(selection!.firstLineBytes).toBe(Buffer.byteLength(lines[start]!));
+      }
   });
 
   it("returns images by content, not extension, and reports missing files and directories", async () => {
