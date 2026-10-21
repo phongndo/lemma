@@ -33,7 +33,7 @@ const TransportConfig = Schema.Struct({
   }),
   compression: Schema.Boolean.pipe(Schema.withDecodingDefaultType(Effect.sync(() => true))).annotate({
     description:
-      "Compress WebSocket messages of 1 KiB or more for clients that accept it (browsers and Node do): a long thread's log crosses a network in a sixth of its bytes. Off saves the host that CPU when every client is on this machine.",
+      "Compress WebSocket messages and /rpc/http replies of 1 KiB or more for clients that accept it (browsers, Node, and the CLI do): a long thread's log crosses a network in a sixth of its bytes. Off saves the host that CPU when every client is on this machine.",
   }),
   interactionGraceMs: Schema.Number.check(Schema.isGreaterThanOrEqualTo(0))
     .pipe(Schema.withDecodingDefaultType(Effect.sync(() => 15_000)))

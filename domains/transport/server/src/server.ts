@@ -5,7 +5,7 @@ import { readFile } from "node:fs/promises";
 import { stripTypeScriptTypes } from "node:module";
 import { extname, relative, resolve } from "node:path";
 import { Deferred, Effect, Layer, Scope } from "effect";
-import { HttpServerRequest, HttpServerResponse } from "effect/http";
+import { HttpMiddleware, HttpServerRequest, HttpServerResponse } from "effect/http";
 import type { HttpServerError } from "effect/http";
 // The modules, not the package's index: it loads every platform module, Redis's client among them (~600 modules).
 import * as NodeHttpServer from "@effect/platform-node/NodeHttpServer";
@@ -36,7 +36,7 @@ interface ServerOptions {
   readonly token: string;
   readonly version: string;
   readonly staticDir?: string | undefined;
-  /** Whether WebSocket messages of 1 KiB or more go compressed to a client that accepts it (`COMPRESSION`). */
+  /** Whether WebSocket messages and `/rpc/http` replies of 1 KiB or more go compressed to a client that accepts it (`COMPRESSION`). */
   readonly compression: boolean;
   /**
    * The files the web app loads from the plugin directories, which `/api/web/<source>@<version>/<name>` serves, with
@@ -106,6 +106,18 @@ const under = (path: string, prefix: string) => path === prefix || path.startsWi
 const COMPRESSION = { threshold: 1024, serverNoContextTakeover: true, zlibDeflateOptions: { level: 1 } } as const;
 
 /**
+ * A `/rpc/http` exchange's replies of 1 KiB or more, compressed as the client accepts: brotli at quality 4, else gzip at
+ * its fastest level, which Node's `fetch` (the CLI's) offers. Either makes a log a fifth or less of its bytes at about
+ * 3 ms a megabyte, as the WebSocket's does. A stream's replies go compressed as they come, each flushed at once.
+ */
+const compressReplies = HttpMiddleware.compression({
+  algorithms: ["br", "gzip"],
+  levels: { br: 4, gzip: 1 },
+  minSize: COMPRESSION.threshold,
+  compressible: (type) => type.startsWith("application/ndjson"),
+});
+
+/**
  * Binds the address and serves until the scope closes. `/rpc` (WebSocket,
  * JSON) and `/rpc/http` (streaming HTTP, NDJSON) share one handler set;
  * `/rpc*` and `/api*` require the token, static assets do not. Web halves are
@@ -147,6 +159,7 @@ const serve = (options: ServerOptions, handlers: HostHandlers, node: ReturnType<
       Effect.provide(handlerContext),
     );
     const platform = yield* Layer.build(NodeHttpServer.layerHttpServices);
+    const exchange = options.compression ? compressReplies(http).pipe(Effect.provide(platform)) : http;
     const root = options.staticDir === undefined ? undefined : resolve(options.staticDir);
 
     const app: Effect.Effect<HttpServerResponse.HttpServerResponse, never, HttpServerRequest.HttpServerRequest | Scope.Scope> = Effect.gen(function* () {
@@ -163,7 +176,7 @@ const serve = (options: ServerOptions, handlers: HostHandlers, node: ReturnType<
           // The exchange's replies have left once its response has: until then they wait in the response body's queue.
           const closed = Deferred.makeUnsafe<void>();
           NodeHttpServerRequest.toServerResponse(request).once("close", () => Deferred.doneUnsafe(closed, Effect.void));
-          return yield* Effect.provideService(http, ReplySent, Deferred.await(closed));
+          return yield* Effect.provideService(exchange, ReplySent, Deferred.await(closed));
         }
         if (path === "/api/health") return HttpServerResponse.jsonUnsafe({ ok: true, version: options.version, protocol: HOST_PROTOCOL });
         if (under(path, "/api/web") && options.web !== undefined && (request.method === "GET" || request.method === "HEAD")) {

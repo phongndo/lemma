@@ -6,7 +6,7 @@ import type { IncomingHttpHeaders, OutgoingHttpHeaders } from "node:http";
 import { connect as connectTcp, createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { brotliCompressSync, brotliDecompressSync, constants as zlibConstants, gunzipSync, gzipSync, inflateRawSync } from "node:zlib";
+import { brotliCompressSync, brotliDecompressSync, constants as zlibConstants, createGunzip, gunzipSync, gzipSync, inflateRawSync } from "node:zlib";
 import { describe, expect, test } from "vitest";
 import { Deferred, Duration, Effect, Exit, Fiber, Layer, Option, Queue, Schema, Scope, Stream } from "effect";
 import { Channels, HOST_PROTOCOL, Inspectors, Interaction, InteractionError, InteractionOrigin, serveChannel } from "@lemma/contracts";
@@ -639,19 +639,29 @@ describe("transport", () => {
     30_000,
   );
 
-  test("compresses a WebSocket message of 1 KiB or more for a client that accepts it, and none smaller; off, it offers none", async () => {
-    const sizes = definePlugin({
-      id: "sizes",
-      layer: Layer.effectDiscard(
-        Effect.flatMap(PluginContext, (owner) =>
+  /** `sizes.text`: `words` words; `sizes.words`, a stream: that many words, then nothing more until it is closed. */
+  const sizes = definePlugin({
+    id: "sizes",
+    layer: Layer.effectDiscard(
+      Effect.flatMap(PluginContext, (owner) =>
+        Effect.andThen(
           owner.add(
             Channels,
             serveChannel({ kind: "call", id: "sizes.text", payload: Schema.Number, success: Schema.String }, (words) => Effect.succeed("lemma ".repeat(words))),
           ),
-        ).pipe(Effect.orDie),
-      ),
-    });
-    const call = (id: string, words: number) => ({ _tag: "Request", id, tag: "Channel.Call", payload: { id: "sizes.text", payload: words }, headers: [] });
+          owner.add(
+            Channels,
+            serveChannel({ kind: "stream", id: "sizes.words", payload: Schema.Number, success: Schema.String }, (words) =>
+              Stream.concat(Stream.make("lemma ".repeat(words)), Stream.never),
+            ),
+          ),
+        ),
+      ).pipe(Effect.orDie),
+    ),
+  });
+  const call = (id: string, words: number) => ({ _tag: "Request", id, tag: "Channel.Call", payload: { id: "sizes.text", payload: words }, headers: [] });
+
+  test("compresses a WebSocket message of 1 KiB or more for a client that accepts it, and none smaller; off, it offers none", async () => {
     for (const compression of [true, false]) {
       const { extensions, frames } = await withHost(
         (host) => Effect.promise(() => exchange(host, [call("1", 2), call("2", 20_000)])),
@@ -673,6 +683,78 @@ describe("transport", () => {
         expect(extensions).toBeUndefined();
         expect(replies.map(({ compressed }) => compressed)).toEqual([false, false]);
       }
+    }
+  });
+
+  test("compresses an HTTP exchange's replies of 1 KiB or more as the client accepts, a stream's as each comes; off, none", async () => {
+    /** One exchange of `requests`, its replies decoded from the encoding they came in. */
+    const post = async (host: { readonly url: string; readonly token: string }, accept: string | undefined, requests: readonly object[]) => {
+      const headers = { authorization: `Bearer ${host.token}`, ...(accept === undefined ? {} : { "accept-encoding": accept }) };
+      const response = await rawGet(host.url, "/rpc/http", headers, "POST", requests.map((each) => `${JSON.stringify(each)}\n`).join(""));
+      const encoding = response.headers["content-encoding"];
+      const body = encoding === "gzip" ? gunzipSync(response.body) : encoding === "br" ? brotliDecompressSync(response.body) : response.body;
+      const replies = body
+        .toString()
+        .split("\n")
+        .filter((line) => line !== "")
+        .map((line) => JSON.parse(line) as { readonly _tag: string; readonly exit?: { readonly value: string } });
+      return { encoding, bytes: response.body.length, text: replies.find((reply) => reply._tag === "Exit")?.exit?.value };
+    };
+    for (const compression of [true, false]) {
+      await withHost(
+        (host) =>
+          Effect.gen(function* () {
+            const big = yield* Effect.promise(() => post(host, "gzip, deflate", [call("1", 20_000)]));
+            expect(big.text).toBe("lemma ".repeat(20_000));
+            expect(big.encoding).toBe(compression ? "gzip" : undefined);
+            if (compression) expect(big.bytes).toBeLessThan(2_000);
+            const preferred = yield* Effect.promise(() => post(host, "gzip, br", [call("2", 20_000)]));
+            expect(preferred).toMatchObject({ encoding: compression ? "br" : undefined, text: "lemma ".repeat(20_000) });
+            expect(yield* Effect.promise(() => post(host, undefined, [call("3", 20_000)]))).toMatchObject({ encoding: undefined });
+            // A reply too small to gain goes as it is, however many times it is made.
+            for (let attempt = 0; attempt < 20; attempt++)
+              expect(yield* Effect.promise(() => post(host, "gzip, br", [call(`small-${attempt}`, 2)]))).toMatchObject({
+                encoding: undefined,
+                text: "lemma lemma ",
+              });
+
+            // Effect's client over `fetch`, as the CLI's is: it offers gzip, and reads what comes back.
+            const client = yield* host.connect("http");
+            expect(yield* client["Channel.Call"]({ id: "sizes.text", payload: 50_000 })).toBe("lemma ".repeat(50_000));
+
+            // A stream that has sent one element and waits: the element has arrived, compressed, before it ends.
+            const opened = yield* Effect.promise(
+              () =>
+                new Promise<{ readonly encoding: string | undefined; readonly first: string }>((resolve, reject) => {
+                  const request = httpRequest(
+                    `${host.url}/rpc/http`,
+                    { method: "POST", headers: { authorization: `Bearer ${host.token}`, "accept-encoding": "gzip" } },
+                    (response) => {
+                      const encoding = response.headers["content-encoding"];
+                      const body = encoding === "gzip" ? response.pipe(createGunzip()) : response;
+                      let buffer = "";
+                      body.on("data", (chunk: Buffer) => {
+                        buffer += chunk.toString();
+                        const line = buffer.split("\n").find((each) => each.includes('"Chunk"'));
+                        if (line === undefined) return;
+                        request.destroy();
+                        resolve({ encoding, first: (JSON.parse(line) as { readonly values: readonly string[] }).values[0]! });
+                      });
+                      body.on("error", reject);
+                    },
+                  );
+                  request.on("error", (error) => (request.destroyed ? undefined : reject(error)));
+                  request.end(
+                    `${JSON.stringify({ _tag: "Request", id: "s", tag: "Channel.Open", payload: { id: "sizes.words", payload: 400 }, headers: [] })}\n`,
+                  );
+                }),
+            );
+            expect(opened).toEqual({ encoding: compression ? "gzip" : undefined, first: "lemma ".repeat(400) });
+          }),
+        { compression },
+        undefined,
+        [sizes],
+      );
     }
   });
 

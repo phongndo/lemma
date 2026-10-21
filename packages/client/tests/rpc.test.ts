@@ -1,8 +1,9 @@
 import { describe, expect, test } from "vitest";
 import { Cause, Clock, Duration, Effect, Exit, Fiber, Layer, Stream } from "effect";
+import { RpcSerialization } from "effect/rpc";
 import { Socket } from "effect/socket";
 import { TestClock } from "effect/testing";
-import { makeHostRpc, raw, rpcUrl } from "../src/rpc.ts";
+import { makeHostRpc, ndjson, raw, rpcUrl } from "../src/rpc.ts";
 import type { HostRpcClient } from "../src/rpc.ts";
 
 /** A socket that opens and then goes silent, as a connection does across laptop sleep or a network change. */
@@ -224,5 +225,33 @@ describe("rpcUrl", () => {
   test("maps http(s) origins to ws(s) with the token", () => {
     expect(rpcUrl("http://127.0.0.1:7433/app/", "a b")).toBe("ws://127.0.0.1:7433/rpc?token=a+b");
     expect(rpcUrl("https://example.com", undefined)).toBe("wss://example.com/rpc");
+  });
+});
+
+describe("makeHostRpcHttp's NDJSON", () => {
+  const messages = [
+    { _tag: "Chunk", requestId: "1", values: ["é ü 🙂".repeat(50)] },
+    { _tag: "Exit", requestId: "1", exit: { _tag: "Success", value: "lemma ".repeat(2_000) } },
+    { _tag: "Exit", requestId: "2", exit: { _tag: "Success", value: null } },
+  ];
+  const bytes = new TextEncoder().encode(`${messages.map((message) => JSON.stringify(message)).join("\n")}\nnot json\n`);
+  const read = (size: number) => {
+    const parser = ndjson.makeUnsafe();
+    const lines: unknown[] = [];
+    for (let at = 0; at < bytes.length; at += size) lines.push(...(parser.decode(bytes.subarray(at, at + size)) as unknown[]));
+    return lines;
+  };
+
+  test("reads what Effect's does, however the reply is cut into chunks, a character split across two among them", () => {
+    expect(RpcSerialization.ndjson.makeUnsafe().decode(bytes)).toEqual(messages);
+    for (const size of [1, 3, 7, 1024, 16 * 1024, bytes.length]) expect(read(size)).toEqual(messages);
+    expect(ndjson.makeUnsafe().encode(messages[0] as never)).toBe(RpcSerialization.ndjson.makeUnsafe().encode(messages[0] as never));
+  });
+
+  test("fails a line longer than 16 MiB, as Effect's does", () => {
+    const parser = ndjson.makeUnsafe();
+    const mib = "x".repeat(1024 * 1024);
+    for (let held = 0; held < 16; held++) parser.decode(mib);
+    expect(() => parser.decode(mib)).toThrow(RpcSerialization.MaxBufferSizeExceeded);
   });
 });
