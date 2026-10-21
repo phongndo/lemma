@@ -84,6 +84,11 @@ export default defineConfig({
     host: process.env.LEMMA_DEV_HOST ?? "127.0.0.1",
     proxy: { "/rpc": { target: hostUrl, ws: true, ...auth }, "/api": { target: hostUrl, ...auth } },
   },
-  build: { target: "es2022", sourcemap: true },
+  build: {
+    target: "es2022",
+    sourcemap: true,
+    // An image (a provider's logo) is a file of its own, loaded where it shows, rather than text in the script every page loads.
+    assetsInlineLimit: (file) => (file.endsWith(".svg") ? false : undefined),
+  },
   test: { environment: "node", include: ["tests/**/*.test.ts"] },
 });
