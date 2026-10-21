@@ -639,7 +639,7 @@ export const make = ({
       Effect.gen(function* () {
         const source = yield* opened(sessionId);
         if (!source.byId.has(eventId)) return yield* notFound(sessionId, `Event ${eventId} is not in session ${sessionId}`);
-        const branch = branchOf(source.events, eventId).map((event, index) => ({ ...event, seq: index + 1 }));
+        const branch = pathTo(source.byId, eventId).map((event, index) => ({ ...event, seq: index + 1 }));
         const cwd = source.marks.cwd ?? source.header.cwd;
         const createdAt = yield* Clock.currentTimeMillis;
         let id = randomId(ids, SESSION_ID_BYTES);
