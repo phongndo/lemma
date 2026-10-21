@@ -1,7 +1,7 @@
 import type { ConnectionStatus, Host } from "@lemma/client";
 import { Effect, Schema } from "effect";
 import { HOST_API, HostError, configValues, describeConfig, providerOf, secret, wireCodec, withdrawnFrom } from "@lemma/contracts";
-import { AgentChannels, ProfileChannels } from "@lemma/agent";
+import { AgentChannels, ModeChannels } from "@lemma/agent";
 import { McpChannels } from "@lemma/mcp";
 import { CommandChannels } from "@lemma/commands";
 import { LlmChannels, emptyUsage } from "@lemma/llm";
@@ -560,7 +560,7 @@ export const createMockHost = (): Host => {
     },
     "mcp.servers": { provides: ["lemma/Mcp"], requires: ["lemma/Paths"] },
     "context.compaction": { requires: ["lemma/Sessions", "lemma/Llm"] },
-    "agent.profiles": { requires: ["lemma/Paths"], contributes: [{ name: "lemma/agent.sections", items: 1, keys: ["profile"] }] },
+    "agent.modes": { requires: ["lemma/Paths"], contributes: [{ name: "lemma/agent.sections", items: 1, keys: ["profile"] }] },
     "context.project": { requires: ["lemma/Paths"], contributes: [{ name: "lemma/agent.sections", items: 1, keys: ["project-context"] }] },
     "workspace.local": { provides: ["lemma/Workspace"], requires: ["lemma/Paths"] },
     "workspace.search-fff": { contributes: [{ name: "lemma/file-searchers", items: 1, keys: ["workspace.search-fff"] }] },
@@ -1149,7 +1149,7 @@ export const createMockHost = (): Host => {
         },
         step.id,
       );
-    // As the agent does: the turn logs each plugin's choice for it (a thread's mode, `agent.profiles`).
+    // As the agent does: the turn logs each plugin's choice for it (a thread's mode, `agent.modes`).
     append(sessionId, { type: "turn-start", turnId, model: by.ref, ...(options?.plugins === undefined ? {} : { plugins: options.plugins }) });
     append(sessionId, { type: "message", turnId, message: { role: "user", content, timestamp: started }, ...(requestId === undefined ? {} : { requestId }) });
     running.add(sessionId);
@@ -1580,9 +1580,9 @@ export const createMockHost = (): Host => {
   /** What the bundled plugins serve, as they serve it (`serveSessions`, `serveAgent`, `serveLlm`, `serveWorkspace`, `serveFiles`, `serveCommands`). */
   const integrations = createIntegrationsMock();
   const served: Served[] = [
-    // The bundled modes, as `agent.profiles` lists them for any directory.
-    serveCall("agent.profiles", ProfileChannels.list, async () => ({
-      profiles: [
+    // The bundled modes, as `agent.modes` lists them for any directory.
+    serveCall("agent.modes", ModeChannels.list, async () => ({
+      modes: [
         {
           name: "creator",
           description: "Customize Lemma through conversation, writing plugins that add features or UI, and modes of your own",

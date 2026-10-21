@@ -276,9 +276,9 @@ importers:
       '@lemma/agent-loop':
         specifier: workspace:*
         version: link:../../domains/agent/loop
-      '@lemma/agent-profiles':
+      '@lemma/agent-modes':
         specifier: workspace:*
-        version: link:../../domains/agent/profiles
+        version: link:../../domains/agent/modes
       '@lemma/client':
         specifier: workspace:*
         version: link:../../packages/client
@@ -786,7 +786,7 @@ importers:
         specifier: 5.0.5
         version: 5.0.5(@types/node@24.19.2)(vite@8.3.4(@types/node@24.19.2)(esbuild@0.28.2)(jiti@2.7.0))
 
-  domains/agent/profiles:
+  domains/agent/modes:
     dependencies:
       '@lemma/agent':
         specifier: workspace:*
@@ -3880,9 +3880,9 @@ importers:
       '@lemma/agent-loop':
         specifier: workspace:*
         version: link:../../domains/agent/loop
-      '@lemma/agent-profiles':
+      '@lemma/agent-modes':
         specifier: workspace:*
-        version: link:../../domains/agent/profiles
+        version: link:../../domains/agent/modes
       '@lemma/contracts':
         specifier: workspace:*
         version: link:../../packages/contracts
@@ -3926,9 +3926,9 @@ importers:
       '@lemma/agent-loop':
         specifier: workspace:*
         version: link:../../domains/agent/loop
-      '@lemma/agent-profiles':
+      '@lemma/agent-modes':
         specifier: workspace:*
-        version: link:../../domains/agent/profiles
+        version: link:../../domains/agent/modes
       '@lemma/contracts':
         specifier: workspace:*
         version: link:../../packages/contracts
@@ -3994,9 +3994,9 @@ importers:
       '@lemma/agent-loop':
         specifier: workspace:*
         version: link:../../domains/agent/loop
-      '@lemma/agent-profiles':
+      '@lemma/agent-modes':
         specifier: workspace:*
-        version: link:../../domains/agent/profiles
+        version: link:../../domains/agent/modes
       '@lemma/contracts':
         specifier: workspace:*
         version: link:../../packages/contracts
@@ -4099,9 +4099,9 @@ importers:
       '@lemma/agent-loop':
         specifier: workspace:*
         version: link:../../domains/agent/loop
-      '@lemma/agent-profiles':
+      '@lemma/agent-modes':
         specifier: workspace:*
-        version: link:../../domains/agent/profiles
+        version: link:../../domains/agent/modes
       '@lemma/contracts':
         specifier: workspace:*
         version: link:../../packages/contracts
@@ -4226,9 +4226,9 @@ importers:
       '@lemma/agent-loop':
         specifier: workspace:*
         version: link:../../domains/agent/loop
-      '@lemma/agent-profiles':
+      '@lemma/agent-modes':
         specifier: workspace:*
-        version: link:../../domains/agent/profiles
+        version: link:../../domains/agent/modes
       '@lemma/browser':
         specifier: workspace:*
         version: link:../../domains/browser/contract

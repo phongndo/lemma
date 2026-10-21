@@ -1,3 +1,3 @@
 export * from "./agent.ts";
-export * from "./profiles.ts";
+export * from "./modes.ts";
 export { AGENT_CONTRACT } from "./version.ts";

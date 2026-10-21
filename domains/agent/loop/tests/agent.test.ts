@@ -388,11 +388,11 @@ describe("agent", () => {
     await withAgent({ plugins: [watcher], scripts: [reply("ok")] }, () =>
       Effect.gen(function* () {
         const { id } = yield* newSession;
-        yield* Effect.flatMap(Agent, (a) => a.prompt(id, text("go"), { plugins: { "agent.profiles": "writing" } }));
-        expect(ofType(yield* log(id), "turn-start")[0]).toMatchObject({ plugins: { "agent.profiles": "writing" } });
+        yield* Effect.flatMap(Agent, (a) => a.prompt(id, text("go"), { plugins: { "agent.modes": "writing" } }));
+        expect(ofType(yield* log(id), "turn-start")[0]).toMatchObject({ plugins: { "agent.modes": "writing" } });
         expect(seen).toEqual([
-          ["section", { "agent.profiles": "writing" }],
-          ["request", { "agent.profiles": "writing" }],
+          ["section", { "agent.modes": "writing" }],
+          ["request", { "agent.modes": "writing" }],
         ]);
       }),
     );

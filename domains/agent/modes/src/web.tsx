@@ -6,13 +6,14 @@ import { CheckIcon, ChevronDownIcon, Popover, SettingRow, SlidersIcon } from "@l
 import { SectionIds, SettingsGroups } from "@lemma/settings";
 import { Client, Slots, defineWebPlugin } from "@lemma/web";
 import { load, save } from "@lemma/web/storage";
-import { ProfileChannels, PROFILES_PLUGIN } from "@lemma/agent";
-import type { ProfileInfo } from "@lemma/agent";
-import { firstMode, RENAMED } from "./profile.ts";
+import { ModeChannels, MODES_PLUGIN, MODES_PLUGIN_FORMERLY } from "@lemma/agent";
+import type { ModeInfo } from "@lemma/agent";
+import { firstMode, RENAMED } from "./mode.ts";
 import styles from "./web.css?inline";
 
-/** The mode a new thread starts with, kept in this browser. */
-const NEXT_KEY = "lemma.profiles.next";
+/** The mode a new thread starts with, kept in this browser; before modes were named so, under `lemma.profiles.next`. */
+const NEXT_KEY = "lemma.modes.next";
+const FORMER_NEXT_KEY = "lemma.profiles.next";
 
 /** A mode's name as the picker shows it: `work` is Work. */
 const titled = (name: string) => name.charAt(0).toUpperCase() + name.slice(1);
@@ -20,40 +21,41 @@ const titled = (name: string) => name.charAt(0).toUpperCase() + name.slice(1);
 const isThinking = (value: string | undefined): value is ThinkingLevel => value !== undefined && (ThinkingLevel.literals as readonly string[]).includes(value);
 
 /**
- * The mode picker (a thread's profile), before the model picker. A mode is chosen for a new thread, sent with its
+ * The mode picker, before the model picker. A mode is chosen for a new thread, sent with its
  * first prompt (`TurnOptionSources`), and kept from then on, as the host keeps it: an open thread shows its mode, which
  * no longer picks. A new thread starts with this browser's last pick, else the host's default. Picking one picks its
  * model and reasoning too, which the model picker then shows and can change.
  */
 export default defineWebPlugin({
-  id: PROFILES_PLUGIN,
+  id: MODES_PLUGIN,
+  formerly: [MODES_PLUGIN_FORMERLY],
   styles,
   requires: { client: Client, threads: Threads, models: Models, slots: Slots },
   setup: ({ client, threads, models, slots }, plugin) => {
-    const [profiles, setProfiles] = createSignal<readonly ProfileInfo[]>([]);
+    const [modes, setModes] = createSignal<readonly ModeInfo[]>([]);
     const [fallback, setFallback] = createSignal<string | undefined>(undefined);
-    const [next, setNext] = createSignal<string | undefined>(load(NEXT_KEY));
+    const [next, setNext] = createSignal<string | undefined>(load(NEXT_KEY) ?? load(FORMER_NEXT_KEY));
 
     const cwd = createMemo(() => threads.active()?.cwd ?? threads.pendingCwd());
     createEffect(
       on(cwd, (dir) => {
-        void client.channel.call(ProfileChannels.list, dir === undefined ? {} : { cwd: dir }).then(
+        void client.channel.call(ModeChannels.list, dir === undefined ? {} : { cwd: dir }).then(
           (answer) => {
-            setProfiles(answer.profiles);
+            setModes(answer.modes);
             setFallback(answer.default);
           },
-          () => setProfiles([]),
+          () => setModes([]),
         );
       }),
     );
 
     /** The modes as the menu lists them: the default first, then the rest as the host sorts them. */
-    const ordered = createMemo(() => [...profiles()].sort((a, b) => Number(b.name === fallback()) - Number(a.name === fallback())));
-    const listed = (name: string) => profiles().some((profile) => profile.name === name);
+    const ordered = createMemo(() => [...modes()].sort((a, b) => Number(b.name === fallback()) - Number(a.name === fallback())));
+    const listed = (name: string) => modes().some((mode) => mode.name === name);
     /** The mode a new thread starts with: this browser's pick while the host still offers it, else the default. */
     const forNew = () => {
       const name = next();
-      return name !== undefined && (profiles().length === 0 || listed(name)) ? name : fallback();
+      return name !== undefined && (modes().length === 0 || listed(name)) ? name : fallback();
     };
     /** The open thread's mode once its first turn has logged it (a bundled one since renamed is its successor, as the host has it). */
     const thread = () => {
@@ -62,23 +64,18 @@ export default defineWebPlugin({
       const name = first.name ?? fallback();
       return name === undefined || listed(name) || RENAMED[name] === undefined ? name : RENAMED[name];
     };
-    const describe = (name: string | undefined) => profiles().find((profile) => profile.name === name)?.description;
+    const describe = (name: string | undefined) => modes().find((mode) => mode.name === name)?.description;
 
-    /** Gives `profile` to the next new thread, with its model and reasoning. */
-    const pick = (profile: ProfileInfo) => {
-      setNext(profile.name);
-      save(NEXT_KEY, profile.name);
-      if (profile.model !== undefined) models.choose(profile.model);
-      if (isThinking(profile.thinking)) models.chooseThinking(profile.thinking);
+    /** Gives `mode` to the next new thread, with its model and reasoning. */
+    const pick = (mode: ModeInfo) => {
+      setNext(mode.name);
+      save(NEXT_KEY, mode.name);
+      if (mode.model !== undefined) models.choose(mode.model);
+      if (isThinking(mode.thinking)) models.chooseThinking(mode.thinking);
     };
 
     /** The modes, each named over what it is for, `current` checked. */
-    function ModeMenu(props: {
-      current: string | undefined;
-      onPick: (profile: ProfileInfo) => void;
-      placement: "bottom" | "bottom-end";
-      triggerClass: string;
-    }) {
+    function ModeMenu(props: { current: string | undefined; onPick: (mode: ModeInfo) => void; placement: "bottom" | "bottom-end"; triggerClass: string }) {
       return (
         <Popover
           label="Mode"
@@ -95,27 +92,27 @@ export default defineWebPlugin({
         >
           {(close) => (
             <For each={ordered()}>
-              {(profile) => (
+              {(mode) => (
                 <button
                   class="menu-item agent-mode-item"
                   role="menuitemradio"
-                  aria-checked={props.current === profile.name}
+                  aria-checked={props.current === mode.name}
                   onClick={() => {
-                    props.onPick(profile);
+                    props.onPick(mode);
                     close();
                   }}
                 >
                   <span class="agent-mode-text">
                     <span class="agent-mode-name">
-                      {titled(profile.name)}
-                      <Show when={profile.source !== "bundled"}>
-                        <span class="muted"> · {profile.source}</span>
+                      {titled(mode.name)}
+                      <Show when={mode.source !== "bundled"}>
+                        <span class="muted"> · {mode.source}</span>
                       </Show>
                     </span>
-                    <Show when={profile.description}>{(description) => <span class="agent-mode-description">{description()}</span>}</Show>
+                    <Show when={mode.description}>{(description) => <span class="agent-mode-description">{description()}</span>}</Show>
                   </span>
                   <span class="menu-check">
-                    <Show when={props.current === profile.name}>
+                    <Show when={props.current === mode.name}>
                       <CheckIcon />
                     </Show>
                   </span>
@@ -128,16 +125,16 @@ export default defineWebPlugin({
     }
 
     // Only a new thread's first prompt names a mode: a thread's own is in its log, which the host keeps to.
-    plugin.onCleanup(slots.add(TurnOptionSources, { id: PROFILES_PLUGIN, value: (sessionId) => (sessionId === undefined ? forNew() : undefined) }));
+    plugin.onCleanup(slots.add(TurnOptionSources, { id: MODES_PLUGIN, value: (sessionId) => (sessionId === undefined ? forNew() : undefined) }));
     // An open thread's mode, kept since its first prompt: the thread card's first row, unless it is the default, which goes
     // without saying.
     plugin.onCleanup(
       slots.add(ThreadCard, {
-        id: "profile",
+        id: "mode",
         order: 0,
         group: "thread",
         component: () => (
-          <Show when={profiles().length > 0 && thread() !== fallback() && thread()}>
+          <Show when={modes().length > 0 && thread() !== fallback() && thread()}>
             {(name) => (
               <div class="menu-item" data-tip={`${describe(name()) ?? `${titled(name())} mode`}. Kept for this thread: start a new one for another mode.`}>
                 <span class="menu-check">
@@ -153,10 +150,10 @@ export default defineWebPlugin({
     // A new thread picks its mode first on its start line, before where it works.
     plugin.onCleanup(
       slots.add(ThreadStart, {
-        id: "profile",
+        id: "mode",
         order: -10,
         component: () => (
-          <Show when={profiles().length > 0}>
+          <Show when={modes().length > 0}>
             <ModeMenu current={forNew()} placement="bottom" onPick={pick} triggerClass="agent-mode-chip" />
             <span class="agent-mode-sep" aria-hidden="true">
               ·
@@ -168,17 +165,17 @@ export default defineWebPlugin({
     // The mode a new thread starts with, first among General's settings for new threads.
     plugin.onCleanup(
       slots.add(SettingsGroups, {
-        id: "profiles",
+        id: "modes",
         order: -10,
         section: SectionIds.general,
         title: "New threads",
         entries: () =>
-          profiles().length === 0
+          modes().length === 0
             ? []
             : [
                 {
-                  text: `Mode profile agent role system prompt ${profiles()
-                    .map((profile) => profile.name)
+                  text: `Mode agent role system prompt ${modes()
+                    .map((mode) => mode.name)
                     .join(" ")}`,
                   view: () => (
                     <SettingRow

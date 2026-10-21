@@ -3,4 +3,4 @@
  * (`ContractVersions` in `@lemma/core`). Raised when a change breaks plugins written against it: something removed or
  * renamed, or a meaning changed; never for an addition.
  */
-export const AGENT_CONTRACT = "lemma/agent@1";
+export const AGENT_CONTRACT = "lemma/agent@2";

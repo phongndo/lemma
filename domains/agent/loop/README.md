@@ -49,7 +49,7 @@ The `agent.base` section ([`kit/prompt.ts`](../contract/src/kit/prompt.ts)) says
 works, not how to use any tool: that is in each tool's own description, so a
 replaced or removed tool takes its advice with it, and the section's text is the
 same for every request. What a thread's agent is for (coding, writing) is its
-profile's ([`agent.profiles`](../profiles/README.md)). Every line of a prompt
+mode's ([`agent.modes`](../modes/README.md)). Every line of a prompt
 moves results, either way, so each is worth measuring against the
 [eval](../../../evals/harbor/README.md).
 

@@ -576,11 +576,11 @@ describe("planResume", () => {
 
   it("goes on with the plugins' choices the turn was taken with", () => {
     const events = [
-      event(1, "a", null, { type: "turn-start", turnId: "t", model: "fake/m1", plugins: { "agent.profiles": "writing" } }),
+      event(1, "a", null, { type: "turn-start", turnId: "t", model: "fake/m1", plugins: { "agent.modes": "writing" } }),
       event(2, "b", "a", { type: "message", turnId: "t", requestId: "r", message: { role: "user", content: text("go"), timestamp: 1 } }),
       event(3, "c", "b", { type: "step-start", turnId: "t", stepId: "s" }),
     ];
-    expect(planResume(events, "t")).toMatchObject({ kind: "open", plan: { plugins: { "agent.profiles": "writing" } } });
+    expect(planResume(events, "t")).toMatchObject({ kind: "open", plan: { plugins: { "agent.modes": "writing" } } });
   });
 
   it("answers a steer placed after the last step before the restart, rather than closing the turn", () => {

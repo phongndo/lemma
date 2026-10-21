@@ -4,8 +4,8 @@ import type { ModelRef } from "@lemma/llm";
 
 /**
  * The default base prompt, short and in opencode's shape: how the agent works, with no role line, which the model does
- * not need, and nothing of any one kind of work: what a thread's agent is for (coding, writing) is its profile's
- * (`agent.profiles`). How to use each tool is left to the tool's own description, so replacing or removing a tool
+ * not need, and nothing of any one kind of work: what a thread's agent is for (coding, writing) is its mode's
+ * (`agent.modes`). How to use each tool is left to the tool's own description, so replacing or removing a tool
  * takes its advice with it, and the text stays the same from request to request.
  */
 const BASE_PROMPT = `# Harness

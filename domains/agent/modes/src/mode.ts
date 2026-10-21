@@ -1,9 +1,9 @@
-import { PROFILES_PLUGIN } from "@lemma/agent";
+import { MODES_PLUGIN, MODES_PLUGIN_FORMERLY } from "@lemma/agent";
 import type { SessionEvent } from "@lemma/sessions";
 
 /**
- * A profile: what a thread's agent is for (its mode, as the picker names it), as a Markdown file. Its frontmatter says what it keeps of what plugins
- * offer, and its body is a section of the system prompt:
+ * A mode: what a thread's agent is for, as a Markdown file. Its frontmatter says what it keeps of what plugins offer,
+ * and its body is a section of the system prompt:
  *
  *   ---
  *   description: Drafts and edits prose
@@ -19,18 +19,18 @@ import type { SessionEvent } from "@lemma/sessions";
  * stays. Pure, so it is tested without a host, and shared with the web half (which names, describes, and picks).
  */
 
-export interface Profile {
+export interface Mode {
   /** Its file's name, without `.md`: what a thread chooses it by. */
   readonly name: string;
   readonly description?: string;
-  /** A model to pick when the profile is chosen, as `provider/model`. */
+  /** A model to pick when the mode is chosen, as `provider/model`. */
   readonly model?: string;
   readonly thinking?: string;
   readonly tools?: readonly string[];
   readonly sections?: readonly string[];
   /** Its body: a section of the system prompt; empty adds none. */
   readonly prompt: string;
-  /** Where it was found: `bundled`, `user` (`~/.lemma/profiles`), or `project` (`.lemma/profiles` in the session's directory). */
+  /** Where it was found: `bundled`, `user` (`~/.lemma/modes`), or `project` (`.lemma/modes` in the session's directory). */
   readonly source: "bundled" | "user" | "project";
 }
 
@@ -48,8 +48,8 @@ const listOf = (value: string): string[] =>
     .map(unquote)
     .filter((item) => item !== "");
 
-/** A profile file's fields and body; one with no frontmatter is all body. */
-export const parseProfile = (name: string, text: string, source: Profile["source"]): Profile => {
+/** A mode file's fields and body; one with no frontmatter is all body. */
+export const parseMode = (name: string, text: string, source: Mode["source"]): Mode => {
   const source_ = text.startsWith("﻿") ? text.slice(1) : text;
   const block = /^---[ \t]*\r?\n([\s\S]*?)\r?\n---[ \t]*(?:\r?\n|$)/.exec(source_);
   const fields = new Map<string, string>();
@@ -98,29 +98,30 @@ export const keeps = (patterns: readonly string[] | undefined, name: string): bo
 };
 
 /**
- * The bundled profiles `work` replaced, which older threads logged: a thread taken with one goes on in `work` unless a
- * profile of the old name is found.
+ * The bundled modes `work` replaced, which older threads logged: a thread taken with one goes on in `work` unless a
+ * mode of the old name is found.
  */
 export const RENAMED: Readonly<Record<string, string>> = { coding: "work", general: "work" };
 
 /**
- * A thread's mode, as its first turn logged it (`turn-start`'s `plugins["agent.profiles"]`): it is chosen for the thread
- * and kept from then on. `undefined` before its first turn; no `name` when that turn logged none (a thread from before
- * modes were kept, or a client that sent none), which then has the default.
+ * A thread's mode, as its first turn logged it (`turn-start`'s `plugins["agent.modes"]`, or, in a thread from before
+ * modes were named so, `plugins["agent.profiles"]`): it is chosen for the thread and kept from then on. `undefined`
+ * before its first turn; no `name` when that turn logged none (a thread from before modes were kept, or a client that
+ * sent none), which then has the default.
  */
 export const firstMode = (branch: readonly SessionEvent[]): { readonly name?: string } | undefined => {
   for (const event of branch) {
     if (event.data.type !== "turn-start") continue;
-    const chosen = event.data.plugins?.[PROFILES_PLUGIN];
+    const chosen = event.data.plugins?.[MODES_PLUGIN] ?? event.data.plugins?.[MODES_PLUGIN_FORMERLY];
     return typeof chosen === "string" ? { name: chosen } : {};
   }
   return undefined;
 };
 
-/** Profiles by name, later sources winning: bundled, then the user's, then the project's. */
-export const byName = (profiles: readonly Profile[]): ReadonlyMap<string, Profile> => {
+/** Modes by name, later sources winning: bundled, then the user's, then the project's. */
+export const byName = (modes: readonly Mode[]): ReadonlyMap<string, Mode> => {
   const rank = { bundled: 0, user: 1, project: 2 } as const;
-  const out = new Map<string, Profile>();
-  for (const profile of [...profiles].sort((a, b) => rank[a.source] - rank[b.source])) out.set(profile.name, profile);
+  const out = new Map<string, Mode>();
+  for (const mode of [...modes].sort((a, b) => rank[a.source] - rank[b.source])) out.set(mode.name, mode);
   return out;
 };

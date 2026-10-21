@@ -5,7 +5,7 @@ row turns them on (`"enabled": true`): `context.prune`. `~/.lemma/config.jsonc` 
 `<project>/.lemma/config.jsonc` patch that by plugin id. The project's is the
 one in the directory the host was started in; a session in another project
 with config of its own is told it does not apply there, while that project's
-`AGENTS.md`, skills, and profiles do.
+`AGENTS.md`, skills, and modes do.
 
 ```jsonc
 {
@@ -64,11 +64,11 @@ your plugins. What is there loads by itself, and again when it changes:
 | `ticker/`                              | A folder plugin, its `package.json` naming its halves: `"lemma": { "host": "./ticker.ts", "web": "./web.js", "styles": ["./ticker.css"] }` |
 
 A folder plugin's manifest can also name folders of things other plugins read,
-by kind: `"resources": { "skills": "./skills", "profiles": "./profiles" }`.
+by kind: `"resources": { "skills": "./skills", "modes": "./modes" }`.
 They come and go with its host half's plugins (turned off, failed, a project
 not trusted), and the plugin that reads a kind finds them in plugin status
-(`resourcesOf`): `skills.files` reads `skills`, and `agent.profiles` reads
-`profiles`, each below your own of the same name. A field Lemma does not read
+(`resourcesOf`): `skills.files` reads `skills`, and `agent.modes` reads
+`modes`, each below your own of the same name. A field Lemma does not read
 is reported, which catches a typo.
 
 The host links what a plugin file may import (`effect`, `@lemma/core`,

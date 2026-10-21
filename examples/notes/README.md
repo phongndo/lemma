@@ -10,9 +10,9 @@ the skills, near the end of the prompt, so a new note changes only what
 comes after it.
 
 Its package brings, by naming their folders in its manifest
-(`"resources": { "profiles": "./profiles", "skills": "./skills" }`):
+(`"resources": { "modes": "./modes", "skills": "./skills" }`):
 
-- the `research` profile ([`profiles/research.md`](profiles/research.md)):
+- the `research` mode ([`modes/research.md`](modes/research.md)):
   pick **research** in the composer, and the agent works from its notes,
   keeps each finding with its source, and is offered the note tools and
   those that read the project (`read`, `grep`, `find`) and ask you
@@ -35,4 +35,4 @@ ln -s "$PWD/examples/notes" ~/.lemma/plugins/notes   # or copy the folder
 ```
 
 `nix develop -c pnpm --filter @lemma/example-notes test` runs it in real
-turns, with the profile and the skill found as the host finds them.
+turns, with the mode and the skill found as the host finds them.

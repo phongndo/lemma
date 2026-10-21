@@ -4,7 +4,7 @@ import { shellWord } from "@lemma/contracts";
 import type { Plugin } from "@lemma/core";
 import agentCli from "@lemma/agent-cli";
 import agentLoop from "@lemma/agent-loop";
-import agentProfiles from "@lemma/agent-profiles";
+import agentModes from "@lemma/agent-modes";
 import browserChromium from "@lemma/browser-chromium";
 import browserTools from "@lemma/browser-tools";
 import cliRegistry from "@lemma/cli-registry";
@@ -80,7 +80,7 @@ export const bundled: readonly Plugin[] = [
   mcpServers,
   sessionsFiles,
   agentLoop,
-  agentProfiles,
+  agentModes,
   contextCompaction,
   contextPrune,
   contextProject,
@@ -123,7 +123,7 @@ export const bundledWeb: readonly string[] = [
   "actions.keys-page",
   "actions.palette",
   "agent.loop",
-  "agent.profiles",
+  "agent.modes",
   "commands.client",
   "context.compaction",
   "devtools.dock",
