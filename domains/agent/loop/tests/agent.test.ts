@@ -2,6 +2,7 @@ import { promises } from "node:fs";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { Deferred, Effect, Fiber, Layer, Schema, Stream } from "effect";
+import { TestClock } from "effect/testing";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { definePlugin, Events, PluginContext } from "@lemma/core";
 import type { Handler } from "@lemma/core";
@@ -15,7 +16,7 @@ import { ToolResult } from "@lemma/tools";
 import type { ToolResultMessage, UserMessage } from "@lemma/llm";
 import type { EventData, SessionEvent } from "@lemma/sessions";
 import type { Tool } from "@lemma/tools";
-import sessions from "@lemma/sessions-files";
+import sessions, { makeSessionsPlugin } from "@lemma/sessions-files";
 import { readJournals } from "@lemma/agent/kit";
 import { BRANCHED_CALL, unansweredCalls } from "@lemma/agent/kit";
 import { call, failWith, gated, hang, log, newSession, ofType, reply, runAgent, tempDir, text, types, useTools, waitFor } from "./fakes.ts";
@@ -177,6 +178,38 @@ const expectLogInvariant = (events: readonly SessionEvent[], sessionId: string, 
     expect(rebuilt).toEqual(requests[i]);
   });
 };
+
+describe("a kept branch", () => {
+  it("starts the next turn without reading the session back, until no turn has used it for five minutes", async () => {
+    // The store's reads of a branch, counted: a turn starting from the branch the last one left reads none.
+    let reads = 0;
+    const counting = makeSessionsPlugin({
+      wrap: (store) => ({ ...store, branch: (sessionId, options) => Effect.tap(store.branch(sessionId, options), () => Effect.sync(() => void reads++)) }),
+    });
+    const read = await withAgent({ testClock: true, sessions: counting, scripts: [reply("one"), reply("two"), reply("three")] }, () =>
+      Effect.gen(function* () {
+        const { id } = yield* newSession;
+        const agent = yield* Agent;
+        const counted = (prompt: string) =>
+          Effect.map(
+            Effect.andThen(
+              Effect.sync(() => (reads = 0)),
+              agent.prompt(id, text(prompt)),
+            ),
+            () => reads,
+          );
+        const first = yield* counted("one");
+        const soon = yield* counted("two");
+        // Gone by then, as the store lets the session's events go: the next turn reads its branch back.
+        yield* TestClock.adjust("5 minutes");
+        const later = yield* counted("three");
+        return { first, soon, later };
+      }),
+    );
+    expect(read.soon).toBe(read.first - 1);
+    expect(read.later).toBe(read.first);
+  });
+});
 
 describe("agent", () => {
   it("runs a text-only turn and logs it with timing, title, and usage", async () => {

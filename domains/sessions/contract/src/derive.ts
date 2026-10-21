@@ -30,7 +30,9 @@ export function modelView(branch: readonly SessionEvent[]): { readonly start: nu
   for (let i = branch.length - 1; i >= 0; i--) {
     const data = branch[i]!.data;
     if (data.type !== "compaction") continue;
-    const kept = branch.findIndex((event) => event.id === data.firstKeptId);
+    // The event it keeps first comes before it, usually shortly: looked for from there back, not from the root.
+    let kept = i - 1;
+    while (kept >= 0 && branch[kept]!.id !== data.firstKeptId) kept--;
     return { start: kept === -1 ? i + 1 : kept, compaction: i };
   }
   return { start: 0 };
@@ -158,7 +160,7 @@ export function modelEntries(branch: readonly SessionEvent[], options: ViewOptio
     // A prompt update is the harness's context: after a response's results too, so the calls keep them.
     entries.push(event.data.type === "context" || event.data.type === "prompt-update" ? { message, index, context: true } : { message, index });
   }
-  return inCallOrder(afterResults(edited(branch, entries)));
+  return inCallOrder(afterResults(edited(branch, entries, start)));
 }
 
 type ContextEdit = Extract<SessionEvent["data"], { type: "context-edit" }>;
@@ -179,15 +181,17 @@ function latestApplying(edits: readonly ContextEdit[] | undefined, message: Mess
 
 /**
  * `entries` with the branch's `context-edit`s applied: per target, the latest that applies to it; one that cannot apply
- * changes nothing, and leaves an earlier one in force.
+ * changes nothing, and leaves an earlier one in force. An edit names an earlier event, so one before the view's `start`
+ * names an event out of it, and is not looked at.
  */
-function edited(branch: readonly SessionEvent[], entries: ModelEntry[]): ModelEntry[] {
+function edited(branch: readonly SessionEvent[], entries: ModelEntry[], start: number): ModelEntry[] {
   const edits = new Map<string, ContextEdit[]>();
-  for (const event of branch) {
-    if (event.data.type !== "context-edit") continue;
-    const target = edits.get(event.data.target);
-    if (target === undefined) edits.set(event.data.target, [event.data]);
-    else target.push(event.data);
+  for (let index = start; index < branch.length; index++) {
+    const data = branch[index]!.data;
+    if (data.type !== "context-edit") continue;
+    const target = edits.get(data.target);
+    if (target === undefined) edits.set(data.target, [data]);
+    else target.push(data);
   }
   if (edits.size === 0) return entries;
   const omittedCalls = new Set<string>();
@@ -260,7 +264,11 @@ export interface History {
 
 /** `deriveMessages`, with where the thinking made under another prefix ends (`History.thinkingFrom`). */
 export function deriveHistory(branch: readonly SessionEvent[], options: ViewOptions = {}): History {
-  const entries = modelEntries(branch, options);
+  return historyOf(branch, modelEntries(branch, options), options);
+}
+
+/** `deriveHistory`, for a caller that has the branch's `modelEntries(branch, options)` already. */
+export function historyOf(branch: readonly SessionEvent[], entries: readonly ModelEntry[], options: ViewOptions = {}): History {
   // The latest request that declared the prompt afresh: the messages before it were made under another prefix.
   const declared = options.restart === true ? branch.length : restartedAt(branch);
   const before = entries.filter((entry) => entry.index < declared).length;
@@ -380,20 +388,27 @@ export function requestState(branch: readonly SessionEvent[]): RequestState {
  */
 export function requestFrom(state: RequestState, history: History, logged: SessionEvent, sessionId?: string): LlmRequest {
   const providerOptions = logged.data.type === "request" ? logged.data.providerOptions : undefined;
-  return new LlmRequest(
-    {
-      model: state.model!,
-      messages: history.messages,
-      ...(history.thinkingFrom === undefined ? {} : { thinkingFrom: history.thinkingFrom }),
-      ...(state.system === undefined ? {} : { system: state.system }),
-      ...(state.tools === undefined || state.tools.length === 0 ? {} : { tools: state.tools }),
-      ...(state.thinking === undefined ? {} : { thinking: state.thinking }),
-      ...(sessionId === undefined ? {} : { sessionId }),
-      ...(providerOptions === undefined ? {} : { providerOptions }),
-    },
-    { disableChecks: true },
-  );
+  // In the order of `LlmRequest`'s fields, as its constructor would put them.
+  return checkedRequest({
+    model: state.model!,
+    ...(state.system === undefined ? {} : { system: state.system }),
+    messages: history.messages,
+    ...(history.thinkingFrom === undefined ? {} : { thinkingFrom: history.thinkingFrom }),
+    ...(state.tools === undefined || state.tools.length === 0 ? {} : { tools: state.tools }),
+    ...(state.thinking === undefined ? {} : { thinking: state.thinking }),
+    ...(sessionId === undefined ? {} : { sessionId }),
+    ...(providerOptions === undefined ? {} : { providerOptions }),
+  });
 }
+
+/**
+ * The `LlmRequest` `fields` make, when they are one already: logged events, which the store checked as it logged them
+ * and serves as they read back. The constructor would make a copy of every message and part in walking them, which
+ * `disableChecks` does not skip, on every request of a long session. `tests/derive.test.ts` holds it to the
+ * constructor's result.
+ */
+const checkedRequest = (fields: ConstructorParameters<typeof LlmRequest>[0]): LlmRequest =>
+  Object.assign(Object.create(LlmRequest.prototype) as LlmRequest, fields);
 
 /**
  * The exact request sent for the `request` event `requestId`: its resolved
