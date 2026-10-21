@@ -355,6 +355,7 @@ const MOCK_RELEASE: ReleaseStatus = {
   checks: true,
   newest: "0.2.9",
   newer: true,
+  older: false,
   checkedAt: 1_792_000_000_000,
 };
 

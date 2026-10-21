@@ -37,8 +37,9 @@ export const ReleaseStatus = Schema.Struct({
   checks: Schema.Boolean,
   /** The channel's newest release, as the last check found it. */
   newest: Schema.optional(Schema.String),
-  /** Whether `newest` is newer than this. */
+  /** Whether `newest` is newer than this, or older: the channel went back to it (a stable release rolled back). */
   newer: Schema.Boolean,
+  older: Schema.Boolean,
   /** When the last check answered (epoch ms), and why the last one failed, if it did. */
   checkedAt: Schema.optional(Schema.Number),
   error: Schema.optional(Schema.String),

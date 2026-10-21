@@ -131,7 +131,13 @@ try {
     { version, kind: "release", channel: "nightly", link: lemma, dataDir: data, node: about.node, commit: "string", built: "string", root: "string" },
     "lemma version says what the release is and how it was installed",
   );
-  assert.deepEqual(JSON.parse(await command(lemma, ["update", "--check", "--json"])), { version, channel: "nightly", newest: version, newer: false });
+  assert.deepEqual(JSON.parse(await command(lemma, ["update", "--check", "--json"])), {
+    version,
+    channel: "nightly",
+    newest: version,
+    newer: false,
+    older: false,
+  });
   const before = await realpath(lemma);
   assert.deepEqual(JSON.parse(await command(lemma, ["update", "--channel", "stable", "--json"])), {
     updated: true,

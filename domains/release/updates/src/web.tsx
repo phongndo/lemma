@@ -101,7 +101,7 @@ export default defineWebPlugin({
     /** While updating: what it cuts off, asked first; then what it is doing, until the page reloads on the new release. */
     const UpdateDialog = (props: { readonly step: Updating }) => (
       <Dialog
-        title={`Update to Lemma ${status()?.newest ?? ""}`}
+        title={`${status()?.older ? "Go back to" : "Update to"} Lemma ${status()?.newest ?? ""}`}
         closeOnBackdrop={false}
         onClose={props.step.step === "confirm" ? () => setUpdating(undefined) : undefined}
         footer={
@@ -143,7 +143,7 @@ export default defineWebPlugin({
       order: 95,
       title: "About",
       icon: QuestionIcon,
-      badge: () => (status()?.newer ? "Update" : undefined),
+      badge: () => (status()?.newer || status()?.older ? "Update" : undefined),
     });
 
     const row = (text: string, title: string, value: () => string | undefined, description?: () => string | undefined) => ({
@@ -176,14 +176,16 @@ export default defineWebPlugin({
                       ? "Not installed by the installer, so it cannot replace it."
                       : now.newer
                         ? `Lemma ${now.newest} is out on ${build.channel ?? "its channel"}.`
-                        : now.newest === undefined
-                          ? `On the ${build.channel ?? "stable"} channel.`
-                          : `The newest on ${build.channel ?? "its channel"}.`
+                        : now.older
+                          ? `The ${build.channel ?? "stable"} release went back to ${now.newest}.`
+                          : now.newest === undefined
+                            ? `On the ${build.channel ?? "stable"} channel.`
+                            : `The newest on ${build.channel ?? "its channel"}.`
                 }
               >
                 <Show when={now.updatable}>
                   <Show
-                    when={now.newer}
+                    when={now.newer || now.older}
                     fallback={
                       <button type="button" class="button small" disabled={checking()} onClick={plugin.action("check for updates", checkNow)}>
                         {checking() ? "Checking…" : "Check now"}
@@ -191,7 +193,7 @@ export default defineWebPlugin({
                     }
                   >
                     <button type="button" class="button small button-primary" onClick={plugin.action("ask what updating cuts off", ask)}>
-                      Update to {now.newest}
+                      {now.newer ? "Update to" : "Go back to"} {now.newest}
                     </button>
                   </Show>
                 </Show>

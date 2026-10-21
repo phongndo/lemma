@@ -108,14 +108,18 @@ jobs:
           VERSION: ${{ needs.resolve.outputs.version }}
           TARGET: ${{ matrix.target }}
 
-  # A draft first, published once its files are all there, so the channel never offers a release without them. Then
-  # nightlies older than a month that were not promoted go.
+  # Each archive's build provenance, signed for this workflow (`gh attestation verify`, docs/installation.md); then a
+  # draft, published once its files are all there, so the channel never offers a release without them. Then nightlies
+  # older than a month that were not promoted go.
   publish:
     needs: [resolve, verify]
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
       contents: write
+      id-token: write
+      attestations: write
+      artifact-metadata: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -125,6 +129,9 @@ jobs:
         with:
           name: lemma-archives
           path: dist
+      - uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-path: dist/*.tar.gz
       - shell: bash
         env:
           GH_TOKEN: ${{ github.token }}

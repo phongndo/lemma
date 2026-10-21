@@ -29,6 +29,7 @@ const INSTALLING_MS = 15 * 60_000;
 interface Found {
   readonly newest?: string;
   readonly newer: boolean;
+  readonly older: boolean;
   readonly checkedAt?: number;
   readonly error?: string;
 }
@@ -53,7 +54,7 @@ export default definePlugin({
     const events = yield* Events;
     // Asked once, when first wanted: what this Lemma is does not change while it runs.
     const build = yield* Effect.cached(runLemma(cli, ["version"], Build, ASKING_MS));
-    const found = yield* Ref.make<Found>({ newer: false });
+    const found = yield* Ref.make<Found>({ newer: false, older: false });
     const told = new Set<string>();
     let updating = false;
 
@@ -70,14 +71,16 @@ export default definePlugin({
       const answer = yield* Effect.result(runLemma(cli, ["update", "--check"], CheckAnswer, ASKING_MS));
       if (answer._tag === "Failure") yield* Ref.update(found, (last) => ({ ...last, error: answer.failure.message }));
       else {
-        const { newest, newer, channel } = answer.success;
-        yield* Ref.set(found, { newest, newer, checkedAt: Date.now() });
-        if (newer && !told.has(newest)) {
+        const { newest, newer, older, channel } = answer.success;
+        yield* Ref.set(found, { newest, newer, older, checkedAt: Date.now() });
+        if ((newer || older) && !told.has(newest)) {
           told.add(newest);
           yield* events.publish(Notice, {
             level: "info",
             source: plugin.id,
-            message: `Lemma ${newest} is out on ${channel}, and this is ${about.version}: Settings › About updates to it`,
+            message: newer
+              ? `Lemma ${newest} is out on ${channel}, and this is ${about.version}: Settings › About updates to it`
+              : `The ${channel} release went back to Lemma ${newest}, and this is ${about.version}: Settings › About goes back to it`,
           });
         }
       }
@@ -131,8 +134,14 @@ export default definePlugin({
               }
             : now.error !== undefined
               ? { status: "warn" as const, message: `Could not ask whether a newer release is out: ${now.error}` }
-              : now.newer
-                ? { status: "warn" as const, message: `Lemma ${now.newest} is out, and this is ${now.build.version}`, fix: "lemma update, then lemma restart" }
+              : now.newer || now.older
+                ? {
+                    status: "warn" as const,
+                    message: now.newer
+                      ? `Lemma ${now.newest} is out, and this is ${now.build.version}`
+                      : `The ${now.build.channel ?? "stable"} release went back to ${now.newest}, and this is ${now.build.version}`,
+                    fix: "lemma update, then lemma restart",
+                  }
                 : { status: "ok" as const, message: `Lemma ${now.build.version}, the newest on ${now.build.channel ?? "its channel"}` },
         ),
     });

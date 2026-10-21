@@ -98,6 +98,17 @@ While Lemma is 0.x, a release may change what plugins are written against: a
 plugin written for another version is left out, and `lemma plugins` says why
 ([configuration](configuration.md#when-something-cannot-run)).
 
+## Verifying a release
+
+The installer checks an archive against the `.sha256` beside it, which says it
+arrived whole. That it was built by this repository's Nightly workflow, from
+the commit it names, its build attestation says, which the GitHub CLI checks:
+
+```sh
+gh attestation verify lemma-v0.2.7-linux-x64.tar.gz --repo phongndo/lemma \
+  --signer-workflow phongndo/lemma/.github/workflows/nightly.yml
+```
+
 ## Removing
 
 Stop the host, then remove `~/.local/bin/lemma` and `~/.local/share/lemma`.
