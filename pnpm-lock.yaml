@@ -242,6 +242,9 @@ importers:
       '@lemma/host':
         specifier: workspace:*
         version: link:../../packages/host
+      '@lemma/profiles':
+        specifier: workspace:*
+        version: link:../../domains/profiles/contract
       '@lemma/web':
         specifier: workspace:*
         version: link:../../packages/web

@@ -8,9 +8,11 @@ contextBridge.exposeInMainWorld("lemmaDesktop", {
   titleBar: {
     setColors: (background, symbols) => ipcRenderer.send("lemma:title-bar", String(background), String(symbols)),
   },
-  // The browser view's pages (`src/browser.ts`).
+  // The profile's window can open another profile's, in a window of its own (`lemma:open-profile`).
+  openProfile: (name) => ipcRenderer.invoke("lemma:open-profile", String(name)),
+  // The browser view's pages (`src/browser.ts`), in the window's profile's partition.
   browser: {
-    partition: "persist:lemma-browser",
+    partition: process.argv.find((arg) => arg.startsWith("--lemma-browser-partition="))?.slice("--lemma-browser-partition=".length) ?? "persist:lemma-browser",
     forwardKeys: (bindings) => ipcRenderer.send("lemma:browser-keys", Array.isArray(bindings) ? bindings.filter((binding) => typeof binding === "string") : []),
     onOpen: (listener) => {
       const heard = (_event, page, url, background) => listener(page, url, background);
