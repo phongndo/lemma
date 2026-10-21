@@ -30,6 +30,11 @@ const layout = async () => {
   await writeFile(join(root, "dist/lemma.mjs"), 'console.log(`bundle ${process.argv.slice(2).join(" ")}`);\n');
   const { size, mtimeMs } = await stat(join(root, "src/input.ts"));
   await writeFile(join(root, "dist/lemma.json"), JSON.stringify({ files: { "../src/input.ts": [size, mtimeMs] } }));
+  // The host's launch, saying what `serve` asked of it.
+  const hostPackage = join(root, "node_modules/@lemma/host");
+  await mkdir(hostPackage, { recursive: true });
+  await writeFile(join(hostPackage, "package.json"), JSON.stringify({ name: "@lemma/host", type: "module", exports: { "./launch": "./launch.mjs" } }));
+  await writeFile(join(hostPackage, "launch.mjs"), 'export const useEffectBundle = () => console.log("effect");\n');
   return root;
 };
 
@@ -67,9 +72,9 @@ describe("bin/lemma.js", () => {
     expect(launch(root, "status")).toBe("sources status");
   });
 
-  test("runs a host from the sources, which it shares", async () => {
+  test("runs a host from the sources, which it shares, started as the host's launch says", async () => {
     const root = await layout();
-    expect(launch(root, "serve", "--no-open")).toBe("sources serve --no-open");
+    expect(launch(root, "serve", "--no-open")).toBe("effect\nsources serve --no-open");
   });
 });
 

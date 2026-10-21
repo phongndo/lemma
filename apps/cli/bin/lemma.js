@@ -30,5 +30,9 @@ const fresh = () => {
   }
 };
 
-// The host (`serve`) runs from the sources, whose modules it shares: from the bundle it would load a second copy of them.
-await import(process.argv[2] !== "serve" && fresh() ? new URL("../dist/lemma.mjs", import.meta.url).href : "../src/main.ts");
+const serve = process.argv[2] === "serve";
+// The host (`serve`) runs in this process, as its launcher starts it (`@lemma/host/launch`): with Effect from the
+// host's bundle of it, before anything loads Effect.
+if (serve) (await import("@lemma/host/launch")).useEffectBundle();
+// It runs from the sources, whose modules it shares: from the bundle it would load a second copy of them.
+await import(!serve && fresh() ? new URL("../dist/lemma.mjs", import.meta.url).href : "../src/main.ts");

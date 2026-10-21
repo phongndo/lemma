@@ -108,7 +108,9 @@ plugin shadows one.
   their sizes and modification times), else the sources, so a stale bundle
   never shadows them. `pnpm build` makes the bundle, as `pnpm check`, `pnpm
   test`, and `pnpm start` do, or `pnpm lemma:build` alone; `serve` runs the
-  sources, whose modules the host shares. A command to a host on this machine
+  sources, whose modules the host shares, with Effect from the host's bundle
+  of it ([its start](../../packages/host/README.md#its-start)). A command to a
+  host on this machine
   takes about 80 ms from the bundle and 150 ms from the sources (measured on
   Linux, Node 24), of which Node and one call to the host take 37 ms in any
   client. Most of the sources' time is loading Effect: 286 of their 370

@@ -6,10 +6,12 @@
   "exports": {
     ".": "./src/start.mjs",
     "./paths": "./src/paths.ts",
-    "./limits": "./src/limits.ts"
+    "./limits": "./src/limits.ts",
+    "./launch": "./src/launch.mjs"
   },
   "scripts": {
     "start": "node --conditions=lemma-source --max-semi-space-size=16 src/start.mjs",
+    "build": "node --conditions=lemma-source scripts/bundle-effect.ts",
     "check": "tsrs --noEmit",
     "test": "vitest run"
   },
@@ -74,6 +76,7 @@
   },
   "devDependencies": {
     "@types/node": "24.19.2",
+    "esbuild": "0.28.2",
     "tsrs": "0.18.0-ts7.1.0-dev.20260929",
     "vitest": "5.0.5"
   }
