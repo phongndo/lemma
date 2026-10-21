@@ -3184,6 +3184,12 @@ importers:
         specifier: 1.9.17
         version: 1.9.17
     devDependencies:
+      '@lemma/agent-loop':
+        specifier: workspace:*
+        version: link:../../agent/loop
+      '@lemma/sessions-files':
+        specifier: workspace:*
+        version: link:../../sessions/files
       '@lemma/tools-registry':
         specifier: workspace:*
         version: link:../registry

@@ -26,6 +26,8 @@
     "solid-js": "1.9.17"
   },
   "devDependencies": {
+    "@lemma/agent-loop": "workspace:*",
+    "@lemma/sessions-files": "workspace:*",
     "@lemma/tools-registry": "workspace:*",
     "@types/node": "24.19.2",
     "tsrs": "0.18.0-ts7.1.0-dev.20260929",
