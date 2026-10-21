@@ -114,13 +114,19 @@ mv -f "$temporary/lemma" "$destination"
 installed=$pending
 pending=""
 
-# Keep the release before this one, which a host may still run from, and remove those older.
+# Keep the release before this one, and any a process still runs from (a host not yet restarted, however many updates
+# ago it started), by the paths in its command line; remove the rest.
+running=$(ps -A -o args= 2>/dev/null || true)
 for release in "$data_dir"/releases/*/; do
   release=${release%/}
   case "$release" in
-    "$installed" | "${previous%/bin/lemma}") ;;
-    *) rm -rf "$release" ;;
+    "$installed" | "${previous%/bin/lemma}") continue ;;
   esac
+  physical=$(CDPATH='' cd -- "$release" 2>/dev/null && pwd -P) || physical=$release
+  case "$running" in
+    *"$release/"* | *"$physical/"*) continue ;;
+  esac
+  rm -rf "$release"
 done
 
 printf '\nInstalled Lemma %s: %s\nIn a project, run: lemma serve\n' "$tag" "$destination"

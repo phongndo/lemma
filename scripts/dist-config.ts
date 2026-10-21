@@ -26,7 +26,7 @@ export const targets = {
 } as const;
 export type Target = keyof typeof targets;
 
-export const isTarget = (target: string): target is Target => target in targets;
+export const isTarget = (target: string): target is Target => Object.hasOwn(targets, target);
 
 /** This machine's target, which `pnpm dist` builds unless told another, and the only one `dist-check.ts` can run. */
 export const hostTarget = (): Target => {

@@ -1,5 +1,6 @@
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { shellWord } from "@lemma/contracts";
 import type { Plugin } from "@lemma/core";
 import agentCli from "@lemma/agent-cli";
 import agentLoop from "@lemma/agent-loop";
@@ -47,8 +48,6 @@ export const optIn: ReadonlySet<string> = new Set(["context.prune"]);
 
 /** The web app build the transport serves when no `staticDir` is configured. */
 export const webDist = fileURLToPath(new URL("../../../apps/web/dist", import.meta.url));
-
-const shellWord = (word: string) => (/^[\w@%+=:,./-]+$/.test(word) ? word : `'${word.replaceAll("'", "'\\''")}'`);
 
 /**
  * How the agent, and `release.updates`, run the `lemma` CLI beside this host from a shell: on the Node.js the host runs

@@ -127,11 +127,14 @@ try {
     if (manifest.includes('"./dist/')) builds.push(join(path, "dist"));
   }
   await mkdir(output, { recursive: true });
+  // The workspace once, file by file, then whole for each target: the same for every one until its install.
+  const workspace = join(temporary, "workspace");
+  await copy(workspace, [...sources, ...builds]);
 
   for (const target of chosen) {
     const name = packageName(release, target);
     const stage = join(temporary, name);
-    await copy(stage, [...sources, ...builds]);
+    await cp(workspace, stage, { recursive: true });
     run("pnpm", ["--filter-prod", "@lemma/cli-app...", "install", "--prod", "--frozen-lockfile", "--ignore-scripts", ...platformFlags(target)], stage);
 
     const nodeName = `node-v${nodeVersion}-${target}`;

@@ -30,7 +30,8 @@ loginctl enable-linger $USER   # Linux: keep it running without a login session,
 ```
 
 `lemma service install --print` shows the definition without writing it. It
-names the installed release's `node` and `lemma`: run it again after updating
+names the `lemma` command the installer links, so after an update `lemma
+restart` (or Settings › About's Update) runs the service on the new release
 ([installation](installation.md#updating)). From a checkout, `nix develop -c
 pnpm lemma service install` runs the checkout's home, `~/.lemma-dev`, unless
 `LEMMA_HOME` names another, on a `node` that lives in the Nix store and may be

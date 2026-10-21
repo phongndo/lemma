@@ -143,6 +143,8 @@ export const HostInfo = Schema.Struct({
   startedAt: Schema.optional(Schema.Number),
   /** What started it, as it said (`LEMMA_STARTED_BY`): `cli`, `desktop`, `service`; absent when it was run by hand. */
   startedBy: Schema.optional(Schema.String),
+  /** True when it runs in safe mode (`--safe`): the bundled plugins as shipped, reading no config file or plugin file. */
+  safe: Schema.optional(Schema.Boolean),
 });
 export type HostInfo = typeof HostInfo.Type;
 
@@ -159,6 +161,7 @@ export const runtimeInfo = (
     pid: control.process.pid,
     startedAt: control.process.startedAt,
     ...(control.process.startedBy === undefined ? {} : { startedBy: control.process.startedBy }),
+    ...(control.process.safe ? { safe: true } : {}),
   }));
 
 /**
