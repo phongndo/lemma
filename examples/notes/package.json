@@ -2,7 +2,7 @@
   "name": "@lemma/example-notes",
   "version": "0.1.0",
   "private": true,
-  "description": "Research notes: tools to write, search, and read notes in the project, a prompt section listing them, a research profile, and a skill",
+  "description": "Research notes: tools to write, search, and read notes in the project, a prompt section listing them, a research mode, and a skill",
   "type": "module",
   "scripts": {
     "check": "tsrs --noEmit",
@@ -16,7 +16,7 @@
   },
   "devDependencies": {
     "@lemma/agent-loop": "workspace:*",
-    "@lemma/agent-profiles": "workspace:*",
+    "@lemma/agent-modes": "workspace:*",
     "@lemma/contracts": "workspace:*",
     "@lemma/llm": "workspace:*",
     "@lemma/sessions": "workspace:*",
@@ -30,7 +30,7 @@
   "lemma": {
     "host": "./notes.ts",
     "resources": {
-      "profiles": "./profiles",
+      "modes": "./modes",
       "skills": "./skills"
     }
   }

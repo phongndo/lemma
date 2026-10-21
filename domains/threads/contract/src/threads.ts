@@ -237,7 +237,7 @@ export interface ThreadView {
   readonly component: Component<ThreadViewProps>;
   /** The composer shows over its bottom: it pads its end by `--composer-height` (the composer's height, set on the page) to scroll under it. */
   readonly composer?: boolean;
-  /** The letter that opens it from the pane's + menu and its empty pane (`b` for the browser). */
+  /** The letter that picks it in the menus that open a tab of the pane: its +, and its switch while it has none (`b` for the browser). */
   readonly letter?: string;
   /** A tab's name while it has one of its own (a page's title); its `title` otherwise. */
   readonly label?: (tab: string) => string | undefined;
@@ -497,7 +497,7 @@ export const ComposerControls = defineSlot<Region>("composer.controls");
 
 /**
  * A plugin's choice for the turns a prompt starts, sent with it (the agent's `TurnOptions.plugins`, keyed by `id`,
- * the plugin's id): the thread's profile, for `agent.profiles`. Asked as each prompt is sent, for the thread it goes
+ * the plugin's id): the thread's mode, for `agent.modes`. Asked as each prompt is sent, for the thread it goes
  * to (`undefined` for a new one); `undefined` sends nothing for the plugin.
  */
 export interface TurnOptionSource {
@@ -570,9 +570,49 @@ export interface ToolView {
    * its arguments, only `title` (`Tool.display`). A call it draws nothing for takes no room in the turn.
    */
   readonly display?: Component<ToolBodyProps>;
+  /**
+   * `true`: its `display` is drawn while a call runs too, from its arguments (`result` absent), as an agent's row shows
+   * it working. Absent: only once a call has a result.
+   */
+  readonly live?: true;
+  /**
+   * Several calls of it in a row in one fold, drawn as one where their displays go: a response that started three
+   * agents shows "3 agents", which opens to each. Absent, or for a call alone, each call's `display` is drawn.
+   */
+  readonly displays?: Component<ToolDisplaysProps>;
+}
+
+/** The calls a tool's `displays` draws as one, in order. */
+export interface ToolDisplaysProps {
+  readonly calls: readonly ToolBodyProps[];
 }
 
 export const ToolViews = defineSlot<ToolView>("chat.tools");
+
+/** A `context` event (what a plugin told the model), as the chat shows it. */
+export interface ContextViewProps {
+  readonly id: string;
+  /** The plugin that told the model. */
+  readonly source: string;
+  /** What the model read: the event's content, its text. */
+  readonly content: string;
+  /** What the event says a transcript shows of it (`display`), if it says. */
+  readonly display?: string | undefined;
+  /** Its submission's id, when the agent placed it for the plugin (`ModelNotice`): `<source>:<id>`. */
+  readonly requestId?: string | undefined;
+  /** When it was logged, epoch ms. */
+  readonly at: number;
+}
+
+/**
+ * How the chat shows what a plugin told the model (its `context` events); the item's id is the plugin's. Without one, a
+ * line names the plugin and the first line of what it said. A finished agent's notice shows as the agent.
+ */
+export interface ContextView {
+  readonly component: Component<ContextViewProps>;
+}
+
+export const ContextViews = defineSlot<ContextView>("chat.context");
 
 /** An inspector tab in the trajectory view, for the records `when` picks. */
 export interface TrajectoryTab {

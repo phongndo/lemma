@@ -17,6 +17,15 @@ export const Discovery = Schema.Struct({
   pid: Schema.Number,
   /** Epoch milliseconds. */
   startedAt: Schema.Number,
+  /**
+   * How it runs, as `Host.Info` says, for a client that cannot ask it (one on another protocol, which `lemma restart
+   * --force` starts again as it ran): the project it serves, what started it, whether in safe mode, and the address it
+   * binds. Absent from an entry an older host wrote.
+   */
+  cwd: Schema.optional(Schema.String),
+  startedBy: Schema.optional(Schema.String),
+  safe: Schema.optional(Schema.Boolean),
+  host: Schema.optional(Schema.String),
 });
 export type Discovery = typeof Discovery.Type;
 
@@ -175,11 +184,19 @@ export const localTarget = (home: string): Effect.Effect<Target | undefined> =>
   );
 
 /**
- * The host a client in `home` goes to, or undefined when it is the local one
+ * The host a client in `root` goes to, or undefined when it is the local one
  * and none runs. `name` is the environment a command named (`--env`), which
  * wins over everything; `local` names the local host whatever else is set.
+ * The environments are the root's (`<root>/environments.json`), whatever the
+ * profile; the local host is the one `home` names, a profile's
+ * (`@lemma/contracts/profiles`), the root's own unless said.
  */
-export const findTarget = (env: Readonly<Record<string, string | undefined>>, home: string, name?: string): Effect.Effect<Target | undefined, TargetError> =>
+export const findTarget = (
+  env: Readonly<Record<string, string | undefined>>,
+  root: string,
+  name?: string,
+  home: string = root,
+): Effect.Effect<Target | undefined, TargetError> =>
   Effect.gen(function* () {
     const fromEnv = env.LEMMA_URL?.trim();
     if (name === undefined && fromEnv) {
@@ -195,10 +212,10 @@ export const findTarget = (env: Readonly<Record<string, string | undefined>>, ho
         return yield* new TargetError({ reason: "Environment", message: "LEMMA_URL needs LEMMA_TOKEN, that host's token (`lemma token` prints it there)" });
       return { url, token, source: "env", name: "LEMMA_URL", from: "LEMMA_URL" };
     }
-    const file = yield* readEnvironments(home);
+    const file = yield* readEnvironments(root);
     const envName = env.LEMMA_ENV?.trim() || undefined;
     const chosen = name ?? envName ?? file.default;
-    const from = name !== undefined ? "--env" : envName !== undefined ? "LEMMA_ENV" : environmentsPath(home);
+    const from = name !== undefined ? "--env" : envName !== undefined ? "LEMMA_ENV" : environmentsPath(root);
     if (chosen === undefined || chosen === LOCAL) return yield* localTarget(home);
     const saved = file.environments[chosen];
     if (saved === undefined)

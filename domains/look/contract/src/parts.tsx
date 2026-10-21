@@ -194,7 +194,8 @@ export type IconName =
   | "skip"
   | "maximize"
   | "minimize"
-  | "spinner";
+  | "spinner"
+  | "agent";
 
 export interface IconProps {
   readonly name: IconName;
@@ -224,6 +225,21 @@ export interface FileIconProps {
  */
 export const FileIconPart = definePart<FileIconProps>("file-icon");
 
+export interface AvatarProps {
+  /** What the picture is drawn from: an agent's session id. The same seed draws the same picture everywhere. */
+  readonly seed: string;
+  /** Its width and height in px; 16 when absent. */
+  readonly size?: number;
+  readonly class?: string;
+}
+
+/**
+ * An agent's picture, wherever one is named (the chat, a thread's lineage, the sidebar): `kit`'s default is an
+ * identicon of its seed (`identicon`), as GitHub draws a new account's, so each agent is told apart at a glance with
+ * nothing chosen or stored. A replacement draws them all its own way.
+ */
+export const AvatarPart = definePart<AvatarProps>("avatar");
+
 export const Markdown = partView(MarkdownPart);
 
 export const Dialog = partView(DialogPart);
@@ -252,6 +268,9 @@ export const Icon = partView(IconPart);
 
 /** A file's or folder's icon (the `file-icon` part). */
 export const FileTypeIcon = partView(FileIconPart);
+
+/** An agent's picture (the `avatar` part). */
+export const Avatar = partView(AvatarPart);
 
 // Each icon by name, drawn through the `icon` part.
 export const PlusIcon = () => <Icon name="plus" />;
@@ -361,5 +380,7 @@ export const SkipIcon = () => <Icon name="skip" />;
 export const MaximizeIcon = () => <Icon name="maximize" />;
 
 export const MinimizeIcon = () => <Icon name="minimize" />;
+
+export const AgentIcon = () => <Icon name="agent" />;
 
 export const Spinner = () => <Icon name="spinner" />;

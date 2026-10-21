@@ -10,7 +10,7 @@ import { resolveToCwd } from "@lemma/tools/files";
  * Writing: drafts held to the project's style guide. The guide (`STYLE.md` in the session's directory) is a section of
  * the system prompt, and the `draft_stats` tool measures a draft (words, sentences and their average length, the
  * longest, paragraphs, minutes to read), so the agent checks a draft against the guide's limits instead of guessing.
- * Its package brings the `writing` profile (`"resources"` in its manifest).
+ * Its package brings the `writing` mode (`"resources"` in its manifest).
  *
  * A folder plugin, written the way a user writes one: link or copy the folder into `~/.lemma/plugins/`. It imports
  * only packages the host supplies, and is written with promises (`@lemma/core/plain`).
@@ -76,7 +76,7 @@ export const report = (stats: Stats): string =>
 export default definePlugin({
   id: "writing",
   version: "0.1.0",
-  uses: ["lemma/agent@1", "lemma/tools@1"],
+  uses: ["lemma/agent@2", "lemma/tools@1"],
   config: Config,
   setup: (_deps, { add, config }) => {
     add(Tools, {
@@ -87,7 +87,7 @@ export default definePlugin({
         new ToolResult({ content: [{ type: "text", text: report(measure(await fs.readFile(resolveToCwd(file, cwd), "utf8"))) }] }),
     });
 
-    // Early in the system prompt, after the profile (100) and before the project's instructions (500): it changes
+    // Early in the system prompt, after the mode (100) and before the project's instructions (500): it changes
     // only when the guide does.
     add(
       PromptSections,

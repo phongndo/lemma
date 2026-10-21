@@ -1,0 +1,24 @@
+{
+  "name": "@lemma/profiles",
+  "version": "0.1.0",
+  "private": true,
+  "description": "The profiles domain's contract: the other Lemmas on this machine, each a home and a host of its own, and how a client reaches one",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./local": "./src/local.ts"
+  },
+  "scripts": {
+    "check": "tsrs --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@lemma/contracts": "workspace:*",
+    "effect": "4.0.5"
+  },
+  "devDependencies": {
+    "@types/node": "24.19.2",
+    "tsrs": "0.18.0-ts7.1.0-dev.20260929",
+    "vitest": "5.0.5"
+  }
+}

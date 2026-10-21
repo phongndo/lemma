@@ -25,6 +25,7 @@ describe("resolvePaths", () => {
     const paths = resolvePaths({ env: { HOME: "/home/me" }, cwd: "/work/app" });
     expect(paths).toEqual({
       home: "/home/me/.lemma",
+      root: "/home/me/.lemma",
       userConfig: "/home/me/.lemma/config.jsonc",
       projectConfig: "/work/app/.lemma/config.jsonc",
       cwd: "/work/app",
@@ -36,6 +37,19 @@ describe("resolvePaths", () => {
     expect(paths.home).toBe("/var/lemma");
     expect(paths.userConfig).toBe("/var/lemma/config.jsonc");
     expect(paths.projectConfig).toBe("/work/app/.lemma/config.jsonc");
+  });
+
+  test("LEMMA_PROFILE names a profile, whose home is under the root's profiles", () => {
+    const paths = resolvePaths({ env: { HOME: "/home/me", LEMMA_PROFILE: "desk" }, cwd: "/work/app" });
+    expect(paths).toMatchObject({ home: "/home/me/.lemma/profiles/desk", root: "/home/me/.lemma", profile: "desk" });
+    expect(paths.userConfig).toBe("/home/me/.lemma/profiles/desk/config.jsonc");
+    // The default is the root's own.
+    for (const LEMMA_PROFILE of ["default", "", " "]) {
+      const own = resolvePaths({ env: { HOME: "/home/me", LEMMA_PROFILE }, cwd: "/work/app" });
+      expect(own.home).toBe("/home/me/.lemma");
+      expect(own.profile).toBeUndefined();
+    }
+    expect(() => resolvePaths({ env: { HOME: "/home/me", LEMMA_PROFILE: "../escape" }, cwd: "/work/app" })).toThrow(/no profile name/);
   });
 });
 
@@ -166,6 +180,26 @@ describe("loadComposition", () => {
 });
 
 describe("patchConfig", () => {
+  test("moves a renamed plugin's row from its former id as it writes it, so the change decides alone", () => {
+    const start = `{
+  "plugins": {
+    // from before the rename
+    "agent.profiles": { "enabled": false, "config": { "default": "writing", "other": 1 } },
+  },
+}`;
+    const formerly = { "agent.modes": ["agent.profiles"] };
+    // Turning it on in the user file writes no key: the former row's `enabled: false` must not survive it.
+    expect(parseJsonc(patchConfig(start, { "agent.modes": { enabled: true } }, "user", formerly), [], { allowTrailingComma: true })).toEqual({
+      plugins: { "agent.modes": { config: { default: "writing", other: 1 } } },
+    });
+    // A setting reset comes back as the plugin's default, not the former row's value.
+    expect(parseJsonc(patchConfig(start, { "agent.modes": { values: { default: null } } }, "user", formerly), [], { allowTrailingComma: true })).toEqual({
+      plugins: { "agent.modes": { enabled: false, config: { other: 1 } } },
+    });
+    // Without a former row, nothing moves.
+    expect(patchConfig(`{ "plugins": {} }`, { "agent.modes": { enabled: false } }, "user", formerly)).not.toContain("agent.profiles");
+  });
+
   test("adds rows to an empty file and removes defaults, keeping comments and other rows", () => {
     const empty = patchConfig("", { bash: { enabled: false } });
     expect(parseJsonc(empty)).toEqual({ plugins: { bash: { enabled: false } } });

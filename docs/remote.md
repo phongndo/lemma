@@ -10,31 +10,34 @@ credentials, and tools are the server's, and a client's own host (the desktop
 app's, say) is a separate one. A client reaches several hosts by name: its own
 machine's (`local`) and the servers it has saved (`lemma env`).
 
-Keep the client's checkout at the server's version: the RPC protocol changes
-between versions (`HOST_PROTOCOL` in the transport plugin's
-[README](../domains/transport/server/README.md#use)), and a CLI that finds the
-host on another one says so and asks for it to be restarted from its version.
-The web app comes from the host, so it always matches.
+Keep the client's Lemma at the server's release (`lemma version` on each, and
+`lemma update <version>` to match one): the RPC protocol changes between
+versions ([versioning](versioning.md)), and a CLI that finds the host on
+another one says so and asks for it to be restarted from its version. The web
+app comes from the host, so it always matches.
 
 ## On the server
 
-Build the web app once (and after updating the checkout), then keep the host
-running as a user service, so it comes back after a crash or a reboot. Turns a
-crash or a restart cut off resume when it does, and queued prompts run on (see
-the [agent plugin](../domains/agent/loop/README.md#durability)):
+[Install](installation.md) a release, then keep the host running as a user
+service, so it comes back after a crash or a reboot. Turns a crash or a restart
+cut off resume when it does, and queued prompts run on (see the [agent
+plugin](../domains/agent/loop/README.md#durability)):
 
 ```sh
-nix develop -c pnpm --filter @lemma/web-app build
-nix develop -c pnpm lemma service install   # a systemd user unit, or a launchd agent, running `lemma serve`
-nix develop -c pnpm lemma service           # installed, enabled, running
-loginctl enable-linger $USER                # Linux: keep it running without a login session, from boot
+lemma service install          # a systemd user unit, or a launchd agent, running `lemma serve`
+lemma service                  # installed, enabled, running
+loginctl enable-linger $USER   # Linux: keep it running without a login session, from boot
 ```
 
 `lemma service install --print` shows the definition without writing it. It
-names this checkout's `node` and `lemma`, which under Nix live in the store and
-may be garbage-collected: on NixOS and nix-darwin, declare the service in the
-system configuration instead (`systemd.user.services`, `launchd.user.agents`)
-from what `--print` shows. `lemma stop` stops a host the service runs through
+names the `lemma` command the installer links, so after an update `lemma
+restart` (or Settings › About's Update) runs the service on the new release
+([installation](installation.md#updating)). From a checkout, `nix develop -c
+pnpm lemma service install` runs the checkout's home, `~/.lemma-dev`, unless
+`LEMMA_HOME` names another, on a `node` that lives in the Nix store and may be
+garbage-collected: on NixOS and nix-darwin, declare that service in the system
+configuration instead (`systemd.user.services`, `launchd.user.agents`) from
+what `--print` shows. `lemma stop` stops a host the service runs through
 the service manager; `lemma logs` shows what it printed.
 
 Keep the transport on loopback (its default `host`) and let Tailscale serve it to
@@ -84,6 +87,28 @@ change writes it there.
   directories are server paths, while the CLI's directory defaults are the
   client's current directory: give a server path
   ([directory scope](../apps/cli/README.md#behavior)).
+
+## Profiles
+
+Each [profile](configuration.md#profiles) on the server is a host of its own,
+at its own port, with its own token. A client reaches one at the server's name
+and that port, so serve each profile's port as you serve the default's, at the
+same number (`lemma profile` lists them):
+
+```sh
+tailscale serve --bg --https=7433 7433   # the default's, at its own port too, so another profile can switch back to it
+tailscale serve --bg --https=7434 7434   # https://<machine>.<tailnet>.ts.net:7434 → the profile on 7434
+```
+
+- **Web app.** Its profile menu opens another profile at the page's machine
+  name and that profile's port, starting its host on the server when none
+  runs there ([profiles.switcher](../domains/profiles/switcher/README.md)).
+  A host started so runs until it is stopped; `lemma --profile <name>
+  service install` keeps one running on its own, as a service of its own.
+- **Desktop app.** Showing the server, it opens another profile in a window of
+  its own, through the server's host.
+- **CLI.** `lemma --env box --profile research status` asks the server's host
+  to open the profile, and goes to it at its port.
 
 ## Security
 

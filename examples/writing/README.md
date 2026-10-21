@@ -7,8 +7,8 @@ measures a draft: words, sentences and their average length, the three
 longest, paragraphs, and minutes to read. The agent checks a draft against
 the guide's limits rather than guessing at them.
 
-Its package brings the `writing` profile ([`profiles/writing.md`](profiles/writing.md))
-by naming its folder in its manifest (`"resources": { "profiles": "./profiles" }`):
+Its package brings the `writing` mode ([`modes/writing.md`](modes/writing.md))
+by naming its folder in its manifest (`"resources": { "modes": "./modes" }`):
 pick **writing** in the composer, and the agent drafts to a file, measures,
 and revises, offered only the file tools, `draft_stats`, and `ask_user`.
 
@@ -25,4 +25,4 @@ ln -s "$PWD/examples/writing" ~/.lemma/plugins/writing   # or copy the folder
 ```
 
 `nix develop -c pnpm --filter @lemma/example-writing test` runs it in real
-turns, with the profile found as the host finds it.
+turns, with the mode found as the host finds it.

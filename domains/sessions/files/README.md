@@ -38,7 +38,7 @@ pi-style (`/home/me/app` → `--home-me-app--`); the header's `cwd` is authorita
 
 | Line     | Shape                                                                       |
 | -------- | --------------------------------------------------------------------------- |
-| 1        | `{ "type": "session", "version": 1, id, cwd, createdAt }`                   |
+| 1        | `{ "type": "session", "version": 1, id, cwd, createdAt, parent? }`          |
 | event    | a `SessionEvent` (`seq`, `id`, `parent`, `at`, `data`); no top-level `type` |
 | checkout | `{ "type": "checkout", "leaf": eventId, "at" }`                             |
 | marks    | `{ "type": "marks", "pinned"?, "archived"?, "kept"?, "cwd"?, "at" }`        |
@@ -48,7 +48,8 @@ event appended or the last checkout, whichever is later. The title is the latest
 `title` event; `pinned`, `archived`, and `kept` are the latest value each marks
 line gave, and a marks line's `cwd` (written by `relocate`) moves the session to
 that directory, over the header's (a marks line moves neither the leaf nor
-`updatedAt`: filing a session is not activity in it). Session ids are 12 url-safe random characters; event ids 8.
+`updatedAt`: filing a session is not activity in it). The header's `parent`, on an agent's session, is the session
+that started it (`SessionInfo.parent`), fixed when it is made. Session ids are 12 url-safe random characters; event ids 8.
 
 ### Format versions
 
@@ -57,13 +58,15 @@ another version is refused as `Corrupt` with a message naming both versions,
 never taken for damage. The rules for changing the format, so no change makes a
 user's session unreadable:
 
-- Adding a member to `EventData` (`@lemma/sessions`) is not a new version: old
-  files hold none of it. Nor is making a member's field optional, which old
-  files hold everywhere. Removing a member, narrowing one, or changing a line's
-  shape is, and the store reads every earlier version through migrations, one
-  per version (`vN` to `vN+1`), applied as a file is read. Either change makes
-  an older Lemma read a session written since as damaged where the new data
-  starts (read-only up to there, its file unchanged).
+- Adding a member to `EventData` (`@lemma/sessions`), or an optional field to a
+  line (the header's `parent`), is not a new version: old files hold none of it.
+  Nor is making a member's field optional, which old files hold everywhere.
+  Removing a member, narrowing one, or changing a line's shape is, and the store
+  reads every earlier version through migrations, one per version (`vN` to
+  `vN+1`), applied as a file is read. An older reader ignores a line's field it
+  does not know, but reads a session written since as damaged where an event it
+  cannot decode starts (a new member, or a field left out): read-only up to
+  there, its file unchanged.
 - A migration accepts at least everything the reader of its version accepted:
   it may not refuse a field that reader ignored.
 - `tests/fixtures/v<N>/` holds session files version `N` wrote and how every

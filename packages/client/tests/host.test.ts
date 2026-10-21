@@ -18,7 +18,11 @@ import { makeHostRpc, makeHostRpcHttp, rpcUrl } from "../src/rpc.ts";
 const control = definePlugin({
   id: "host",
   provides: [HostControl],
-  layer: Layer.succeed(HostControl, { composition: Effect.succeed({ id: "test", plugins: [] }), runtime: [] } as never),
+  layer: Layer.succeed(HostControl, {
+    composition: Effect.succeed({ id: "test", plugins: [] }),
+    runtime: [],
+    process: { pid: process.pid, startedAt: 0 },
+  } as never),
 });
 
 // The declarations, as a contract module would export them for clients to import.

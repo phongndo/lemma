@@ -48,7 +48,7 @@ export const summary = (meter: Meter, endedAt: number, totalTokens: number, reas
 export default definePlugin({
   id: "budget",
   version: "0.1.0",
-  uses: ["lemma/agent@1", "lemma/llm@1"],
+  uses: ["lemma/agent@2", "lemma/llm@1"],
   config: Config,
   setup: (_deps, { config, observe, on, publish }) => {
     /** By session: a session runs one turn at a time. */

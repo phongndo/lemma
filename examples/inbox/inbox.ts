@@ -13,7 +13,7 @@ import { ToolResult, Tools } from "@lemma/tools";
  * appended before the request that follows its arrival: the log keeps what the model was shown and when, the
  * transcript shows it where it happened, and the request still rebuilds from the log. A branch shows each message
  * once: a `custom` event records which it showed (`customEvents`). Two tools read a message in full and file it in a
- * folder; the `triage` profile its package brings (`"resources": { "profiles": "./profiles" }`) narrows the agent to
+ * folder; the `triage` mode its package brings (`"resources": { "modes": "./modes" }`) narrows the agent to
  * them.
  *
  * A folder plugin, written the way a user writes one: link or copy the folder into `~/.lemma/plugins/`. It imports
@@ -106,12 +106,12 @@ const text = (value: string) => new ToolResult({ content: [{ type: "text", text:
 export default definePlugin({
   id: "inbox",
   version: "0.1.0",
-  uses: ["lemma/agent@1", "lemma/sessions@1", "lemma/tools@1"],
+  uses: ["lemma/agent@2", "lemma/sessions@1", "lemma/tools@1"],
   config: Config,
   setup: (_deps, { add, on, run, config }) => {
     const inbox = (cwd: string) => path.resolve(cwd, config.dir);
 
-    // Each request, so a message that arrives during a turn is seen at its next step; in `shape`, so a profile's
+    // Each request, so a message that arrives during a turn is seen at its next step; in `shape`, so a mode's
     // `select` and compaction's `fit` see the request it is part of.
     on(
       AgentRequestHook,

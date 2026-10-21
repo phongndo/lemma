@@ -67,7 +67,7 @@ export const toShorten = (branch: readonly SessionEvent[], config: Pick<Config, 
  */
 export default definePlugin({
   id: "context.prune",
-  uses: ["lemma/agent@1", "lemma/sessions@1", "lemma/llm@1"],
+  uses: ["lemma/agent@2", "lemma/sessions@1", "lemma/llm@1"],
   config: Config,
   requires: { llm: Llm },
   setup: function* ({ llm }, owner) {

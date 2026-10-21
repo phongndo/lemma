@@ -32,7 +32,7 @@
   "domains/agent/loop/tests/recovery.test.ts": 4.9,
   "domains/agent/loop/tests/retry.test.ts": 0,
   "domains/agent/loop/tests/simulated.test.ts": 0.7,
-  "domains/agent/profiles/tests/profiles.test.ts": 1.7,
+  "domains/agent/modes/tests/modes.test.ts": 1.7,
   "domains/browser/chromium/tests/chromium.test.ts": 0,
   "domains/browser/chromium/tests/local.test.ts": 0,
   "domains/browser/chromium/tests/lookup.test.ts": 0,

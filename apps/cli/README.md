@@ -19,9 +19,11 @@ nix develop -c pnpm lemma doctor                               # what is wrong h
 A client of a host that holds no domain. Its own commands are the ones no
 plugin could serve:
 
-- **This machine's host and setup:** `serve`, `stop`, `logs`, `service`,
-  `env`, `token`, `config`, `trust`, `doctor`, `plugins check`. They need no
-  host running.
+- **This machine's host and setup:** `serve`, `stop`, `restart`, `logs`,
+  `service`, `env`, `token`, `config`, `trust`, `profile`, `doctor`,
+  `plugins check`. They need no host running.
+- **This lemma:** `version`, and `update`, which installs another release with
+  the installer the release carries ([versioning](../../docs/versioning.md)).
 - **The runtime's:** `status`, `plugins`, `reload`, `kernel`, `inspectors`,
   `channels`, `events`, `questions`, `answer`, `dismiss`, `open`: what the host
   serves itself (`RuntimeRpcs`), whatever plugins run.
@@ -42,13 +44,25 @@ plugin shadows one.
   that needs one fails `NoHost` (exit 3) rather than starting one; `serve` and
   the desktop app start hosts. A target that is set but cannot be used fails
   rather than falling back to another host.
+- **Which profile.** A command goes to the [profile](../../docs/configuration.md#profiles)
+  `--profile` names, else `LEMMA_PROFILE`'s, else the default, the home's own:
+  `serve`, `stop`, `logs`, `token`, `config`, and `trust` act on that profile's
+  home, and `service` installs a service of its own for it (`lemma-<name>`).
+  On another machine (`--env`, `LEMMA_URL`), the host there opens the profile
+  (`profiles.open`, which starts it), and the command goes to it at that
+  machine's name and the profile's port. The environments a client knows are
+  the home's, whichever the profile. `profile` lists the profiles, `profile
+  create` makes one, and `profile remove` deletes one, asking first.
 - **One host per home.** The host takes `<home>/host.lock` as it starts, so a
   second fails at once naming the first; `serve` says so before starting.
   `serve --detach` starts one in the background, marked as the CLI's
   (`LEMMA_STARTED_BY`), and returns once it listens. `stop` asks the host what
   stopping cuts off (`cli.in-progress`, from its plugins' `InProgress`) and asks, or refuses without a terminal
   unless `--force`; a host the desktop app started is the app's to stop, one a
-  service runs is stopped through the service manager. The host writes what it
+  service runs is stopped through the service manager. `restart` stops it as
+  `stop` does and starts it again on this lemma: through the service manager,
+  whose definition names the `lemma` the installer links, or else in the
+  background, for the project and on the port it had. The host writes what it
   prints to `<home>/logs/host.log`, which `logs` reads.
 - **A plugin's command runs on the host.** It outlives a dropped connection
   there for a while (`cli.registry`'s `resumeGraceMs`): the command reconnects
@@ -94,25 +108,26 @@ plugin shadows one.
   give its path (`--cwd`, `--path`).
 - **Pages.** `open` (and a command that opens one, as `sessions open` does)
   shows the web app in the desktop app when it runs here and shows the same
-  host (`<home>/desktop.json`), else in the browser, else prints the address.
+  host (`<home>/desktop.json`, the default profile's home, for every profile),
+  in the window of the command's profile, else in the browser, else prints the address.
   A page elsewhere (a sign-in) opens in the browser where there is one.
 - **Completion.** `lemma completion bash|zsh|fish` prints a script that asks
   `lemma __complete` for the next word: the commands, the host's plugins'
   among them when one answers within 1.5 seconds, their flags, and flag
   values.
 - **Speed.** A command loads only the client, the runtime's contracts, and
-  `@lemma/cli`, never a domain, and the host only for `serve`. What `pnpm
-  lemma`, the `bin`, and the agent's shell run is `bin/lemma.js`: it turns on
-  Node's compile cache, then runs the bundle in `dist/lemma.mjs` while every
-  file it was built from is unchanged (`dist/lemma.json` lists them, with
-  their sizes and modification times), else the sources, so a stale bundle
-  never shadows them. `pnpm build` makes the bundle, as `pnpm check`, `pnpm
-  test`, and `pnpm start` do, or `pnpm lemma:build` alone; `serve` runs the
-  sources, whose modules the host shares, started as the host is (with its
-  Node.js flags and Effect's bundle, [its start](../../packages/host/README.md#its-start)),
-  and a host it starts elsewhere (`--detach`, a service) is given the flags.
-  A command to a host on this machine
-  takes about 80 ms from the bundle and 150 ms from the sources (measured on
-  Linux, Node 24), of which Node and one call to the host take 37 ms in any
-  client. Most of the sources' time is loading Effect: 286 of their 370
-  modules.
+  two domains' contracts (`@lemma/cli`, `@lemma/profiles`), never a plugin,
+  and the host only for `serve`. What `pnpm lemma`, the `bin`, and the agent's shell run is
+  `bin/lemma.js`: it turns on Node's compile cache, then runs the bundle in
+  `dist/lemma.mjs` while every file it was built from is unchanged
+  (`dist/lemma.json` lists them, with their sizes and modification times), else
+  the sources, so a stale bundle never shadows them. `pnpm build` makes the
+  bundle, as `pnpm check`, `pnpm test`, and `pnpm start` do, or `pnpm
+  lemma:build` alone; `serve` runs the sources, whose modules the host shares,
+  started as the host is (with its Node.js flags and Effect's bundle, [its
+  start](../../packages/host/README.md#its-start)), and a host it starts
+  elsewhere (`--detach`, a service) is given the flags. A command to a host on
+  this machine takes about 80 ms from the bundle and 150 ms from the sources
+  (measured on Linux, Node 24), of which Node and one call to the host take
+  37 ms in any client. Most of the sources' time is loading Effect: 286 of
+  their 370 modules.

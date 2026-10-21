@@ -28,6 +28,8 @@ export interface Deadlines {
 export interface Plugin<Provides extends readonly Capability[] = readonly Capability[]> {
   readonly id: string;
   readonly version?: string;
+  /** Ids it had before (see `PluginManifest.formerly`). */
+  readonly formerly?: readonly string[];
   /** The contracts it is written against, as `name@version` (see `ContractVersions`). */
   readonly uses?: readonly string[];
   /** The contracts it implements, as `name@version` (see `ContractVersions`). */
@@ -91,6 +93,11 @@ export interface ContractVersions {
 export interface PluginManifest extends ContractVersions {
   readonly id: string;
   readonly version?: string;
+  /**
+   * Ids it had before a rename. The kernel ignores them: an application that keys settings by plugin id applies those
+   * written under a former id to the plugin, so a rename does not lose them.
+   */
+  readonly formerly?: readonly string[];
   readonly exclusive?: boolean;
   readonly restart?: Schedule.Schedule<unknown, PluginFault>;
   readonly deadlines?: Deadlines;
@@ -191,6 +198,7 @@ export function definePlugin(
   return Object.freeze({
     id: definition.id,
     ...(definition.version === undefined ? {} : { version: definition.version }),
+    ...(definition.formerly === undefined ? {} : { formerly: Object.freeze([...definition.formerly]) }),
     ...(definition.uses === undefined ? {} : { uses: Object.freeze([...definition.uses]) }),
     ...(definition.implements === undefined ? {} : { implements: Object.freeze([...definition.implements]) }),
     ...(config === undefined ? {} : { config }),

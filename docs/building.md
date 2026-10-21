@@ -1,10 +1,10 @@
 # Building on Lemma
 
 This guide builds one plugin in three steps: a tool the model calls, a view
-of what the tool keeps, and a profile that gives a thread an agent built
+of what the tool keeps, and a mode that gives a thread an agent built
 around it. Each step is a few lines, and each links to the reference that
 says more. The plugin is a glossary: when the agent introduces a term, it
-records it, and you can look the terms up beside the chat. With the profile,
+records it, and you can look the terms up beside the chat. With the mode,
 it becomes a tutor. The finished plugin is
 [`examples/glossary`](../examples/glossary/README.md), and its files are the
 ones shown here.
@@ -137,24 +137,24 @@ What the file does:
   template, which is JSX without a compiler
   ([Writing a plugin](../apps/web/README.md#writing-a-plugin)).
 
-## 3. A profile that uses it
+## 3. A mode that uses it
 
-A profile says what a thread's agent is for: a prompt, and which tools and
-prompt sections it keeps. A plugin can bring profiles, so move the two files
+A mode says what a thread's agent is for: a prompt, and which tools and
+prompt sections it keeps. A plugin can bring modes, so move the two files
 into a folder, `~/.lemma/plugins/glossary/`, with a `package.json` that says
-where its halves and its profiles are:
+where its halves and its modes are:
 
 ```json
 {
   "lemma": {
     "host": "./glossary.ts",
     "web": "./glossary.web.js",
-    "resources": { "profiles": "./profiles" }
+    "resources": { "modes": "./modes" }
   }
 }
 ```
 
-and the profile, `profiles/tutor.md`:
+and the mode, `modes/tutor.md`:
 
 ```md
 ---
@@ -183,9 +183,9 @@ What changed:
 - **A folder plugin** is a package: its manifest names its halves, and its
   files can import each other ([Your plugins](configuration.md#your-plugins)).
 - **`resources`** names folders of things other plugins read, by kind. The
-  profiles plugin reads `profiles` while the glossary plugin is on, below
-  your own profiles of the same name
-  ([agent.profiles](../domains/agent/profiles/README.md)); the skills plugin
+  modes plugin reads `modes` while the glossary plugin is on, below
+  your own modes of the same name
+  ([agent.modes](../domains/agent/modes/README.md)); the skills plugin
   reads `skills` the same way.
 
 ## Testing it
@@ -195,7 +195,7 @@ before you rely on it. In this repository, a folder plugin is a workspace
 package with tests of its own. The glossary's run it in real turns: the agent,
 the session log, and the tools, with a scripted model that plays the tool
 calls and answers it is given (`scriptedLlm` from `@lemma/llm/testing`), and
-the profile found as the host finds it
+the mode found as the host finds it
 ([its tests](../examples/glossary/tests/glossary.test.ts),
 [Testing](plugins.md#testing)).
 

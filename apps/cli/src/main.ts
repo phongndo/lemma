@@ -99,9 +99,12 @@ process.exitCode = await run(argv, {
   ...(process.stdout.isTTY ? { columns: process.stdout.columns } : {}),
   interrupt: interrupt.signal,
   // \`lemma serve\` in the foreground: the host runs in this process until SIGINT or SIGTERM, which it handles itself.
-  serve: async (args) => {
+  // The host reads its profile from the process's environment: the one the command names (`--profile`), else none.
+  serve: async (args, profile) => {
     for (const [signal, listener] of stopOn) process.off(signal, listener);
     process.argv = [process.argv[0]!, process.argv[1]!, ...args];
+    if (profile === undefined) delete process.env.LEMMA_PROFILE;
+    else process.env.LEMMA_PROFILE = profile;
     await import(hostModule);
   },
   // The script node started, `bin/lemma.js` when that chose this: a host started again (`serve --detach`, a service) chooses again.

@@ -37,11 +37,11 @@ describe("lemma plugins check", () => {
     const { code, out } = await invoke(["plugins", "check", fixture("good"), "--json"], home);
     expect(code).toBe(0);
     expect(JSON.parse(out)).toMatchObject({
-      plugins: [{ id: "good", state: "active", uses: ["lemma/agent@1"], hooks: ["lemma/agent.request"], warnings: [] }],
+      plugins: [{ id: "good", state: "active", uses: ["lemma/agent@2"], hooks: ["lemma/agent.request"], warnings: [] }],
       problems: [],
     });
     const text = await invoke(["plugins", "check", fixture("good")], home);
-    expect(text.out).toBe("good: active\n  uses lemma/agent@1\n  handles lemma/agent.request\nno problems found");
+    expect(text.out).toBe("good: active\n  uses lemma/agent@2\n  handles lemma/agent.request\nno problems found");
   }, 60_000);
 
   test("reports a plugin that fails to start with its fault, and fails", async () => {

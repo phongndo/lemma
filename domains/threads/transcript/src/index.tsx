@@ -37,6 +37,7 @@ import {
   ChatWorkGroup,
   ChatWorking,
   ToolViews,
+  ContextViews,
 } from "@lemma/threads";
 import type {
   TurnEntry,
@@ -61,11 +62,11 @@ import type {
 } from "@lemma/threads";
 import { errorView } from "./error.ts";
 import { thoughtHeadline } from "./thought.ts";
-import { displayedCalls, workEntries } from "./work.ts";
-import type { WorkEntry, WorkRow } from "./work.ts";
+import { displayedCalls, displayEntries, workEntries } from "./work.ts";
+import type { DisplayEntry, ToolBlock, WorkEntry, WorkRow } from "./work.ts";
 import { JUMP_MARGIN, jumpOver, locate as locatePrompts } from "./prompt-rail.ts";
 import { createNow } from "@lemma/web/now";
-import { Client, Each, Notify, Router, Slots, WebPlugins, defineWebPlugin, usePlugin } from "@lemma/web";
+import { Client, Contained, Each, Notify, Router, Slots, WebPlugins, defineWebPlugin, usePlugin } from "@lemma/web";
 import type { SlotsService, Part } from "@lemma/web";
 import { AlertIcon, ChatIcon, ChevronDownIcon, ChevronIcon, BrainIcon, Icon, Markdown, RedoIcon, SearchIcon, Spinner, CopyButton, XIcon } from "@lemma/look";
 import { Actions } from "@lemma/actions";
@@ -74,7 +75,7 @@ import { ChatConfig } from "./config.ts";
 import type { Chat } from "./config.ts";
 import { PromptRail } from "./rail.tsx";
 import { addSettings } from "./settings.tsx";
-import { Images, ToolCard, ToolDisplay, toolView } from "./tools.tsx";
+import { Images, ToolCard, ToolDisplay, ToolDisplays, toolView } from "./tools.tsx";
 import { FindBar } from "./find-bar.tsx";
 import type { ToolState } from "./tools.tsx";
 
@@ -365,11 +366,33 @@ function ItemView(props: {
       </Match>
       <Match when={props.item.kind === "context" && props.item}>
         {(item) => (
-          <div class="divider" data-tip={item().text}>
-            <span>
-              Context from {item().source}: {item().text.split("\n")[0]}
-            </span>
-          </div>
+          <Show
+            when={props.chat.contextView(item().source)}
+            keyed
+            fallback={
+              <div class="divider" data-tip={item().text}>
+                <span>
+                  Context from {item().source}: {item().text.split("\n")[0]}
+                </span>
+              </div>
+            }
+          >
+            {(view) => (
+              <Contained
+                slot={ContextViews}
+                item={view}
+                component={view.component}
+                props={{
+                  id: item().id,
+                  source: item().source,
+                  content: item().content,
+                  display: item().display,
+                  requestId: item().requestId,
+                  at: item().at,
+                }}
+              />
+            )}
+          </Show>
         )}
       </Match>
       <Match when={props.item.kind === "orphan-result" && props.item}>
@@ -467,10 +490,19 @@ function Keyed<T extends { readonly key: string }>(props: { each: readonly T[]; 
 function WorkFold(props: { chat: Chat; work: Extract<TurnEntry, { kind: "work" }>; drafts: readonly StepDraft[]; running: boolean }) {
   const live = () => props.work.live === true;
   const entries = createMemo(() => workEntries(props.work.items, (name) => props.chat.toolView(name)?.action));
-  // Keyed by call, so a page drawn while the turn ran stays as it is (not loaded again) as the fold is made again.
+  // Keyed by call, so a page drawn while the turn ran stays as it is (not loaded again) as the fold is made again; a
+  // run of one tool's calls its view draws together (`displays`) is one entry.
   const displays = createMemo(() =>
-    displayedCalls(props.work.items, (name) => props.chat.toolView(name)?.display !== undefined).map((block) => ({ key: block.call.id, block })),
+    displayEntries(
+      displayedCalls(props.work.items, (name) => {
+        const view = props.chat.toolView(name);
+        return view?.display === undefined ? undefined : { live: view.live === true };
+      }),
+      (name) => props.chat.toolView(name)?.displays !== undefined,
+    ),
   );
+  const stateOf = (block: ToolBlock): ToolState =>
+    block.result !== undefined ? (block.result.stopped ? "interrupted" : block.result.isError ? "error" : "ok") : props.running ? "running" : "interrupted";
   const duration = () => (live() ? Math.max(0, props.chat.now() - props.work.since) : props.work.duration);
   return (
     <>
@@ -508,14 +540,33 @@ function WorkFold(props: { chat: Chat; work: Extract<TurnEntry, { kind: "work" }
       </ChatWork>
       <Keyed each={displays()}>
         {(entry) => (
-          <ToolDisplay
-            chat={props.chat}
-            id={entry().block.call.id}
-            name={entry().block.call.name}
-            args={entry().block.call.arguments}
-            result={entry().block.result}
-            state={entry().block.result?.isError ? "error" : "ok"}
-          />
+          <Show
+            when={entry().kind === "many" && (entry() as Extract<DisplayEntry, { kind: "many" }>)}
+            fallback={
+              <ToolDisplay
+                chat={props.chat}
+                id={(entry() as Extract<DisplayEntry, { kind: "one" }>).block.call.id}
+                name={(entry() as Extract<DisplayEntry, { kind: "one" }>).block.call.name}
+                args={(entry() as Extract<DisplayEntry, { kind: "one" }>).block.call.arguments}
+                result={(entry() as Extract<DisplayEntry, { kind: "one" }>).block.result}
+                state={stateOf((entry() as Extract<DisplayEntry, { kind: "one" }>).block)}
+              />
+            }
+          >
+            {(many) => (
+              <ToolDisplays
+                chat={props.chat}
+                name={many().name}
+                calls={many().blocks.map((block) => ({
+                  id: block.call.id,
+                  name: block.call.name,
+                  args: block.call.arguments,
+                  result: block.result,
+                  state: stateOf(block),
+                }))}
+              />
+            )}
+          </Show>
         )}
       </Keyed>
     </>
@@ -1080,6 +1131,7 @@ export default defineWebPlugin({
       },
       now,
       toolView: (name) => slots.get(ToolViews, name),
+      contextView: (source) => slots.get(ContextViews, source),
     };
     // Its own parts' defaults, in the phase `default`: any plugin replaces one by adding one of its own.
     const part = <P extends Record<string, any>>(slot: Part<P>, component: Component<P>) =>

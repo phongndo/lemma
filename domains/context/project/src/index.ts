@@ -109,7 +109,7 @@ export default definePlugin({
         events.publish(Notice, {
           level: "info",
           source: owner.id,
-          message: `${dir}/.lemma has config or plugins of its own, which apply only to a host started there (this one started in ${paths.cwd}); its AGENTS.md, skills, and profiles apply here`,
+          message: `${dir}/.lemma has config or plugins of its own, which apply only to a host started there (this one started in ${paths.cwd}); its AGENTS.md, skills, and modes apply here`,
         }),
       );
     };

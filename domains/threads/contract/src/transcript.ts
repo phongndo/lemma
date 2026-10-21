@@ -97,6 +97,11 @@ export interface ContextItem {
   readonly source: string;
   /** The event's `display`, else its content's text. */
   readonly text: string;
+  /** Its content's text: what the model read. */
+  readonly content: string;
+  readonly display?: string | undefined;
+  /** Its submission's id, when the agent placed it for the plugin (`ModelNotice`). */
+  readonly requestId?: string | undefined;
 }
 
 export type Item = UserItem | AssistantItem | AttemptItem | OrphanResultItem | CompactionItem | ContextItem;
@@ -484,8 +489,19 @@ const foldTurns = (cache: Cache, fold: Fold, from: number): void => {
       }
       case "context": {
         const turn = ensure(event, at);
-        const text = data.display ?? data.content.map((part) => (part.type === "text" ? part.text : "[image]")).join("\n");
-        turn.items.push(cache.get(event.id, "", (): ContextItem => ({ kind: "context", id: event.id, at: event.at, source: data.source, text })));
+        const content = data.content.map((part) => (part.type === "text" ? part.text : "[image]")).join("\n");
+        turn.items.push(
+          cache.get(event.id, "", (): ContextItem => ({
+            kind: "context",
+            id: event.id,
+            at: event.at,
+            source: data.source,
+            text: data.display ?? content,
+            content,
+            ...(data.display === undefined ? {} : { display: data.display }),
+            ...(data.requestId === undefined ? {} : { requestId: data.requestId }),
+          })),
+        );
         break;
       }
       case "title":

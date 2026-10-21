@@ -34,7 +34,7 @@ const fresh = () => {
  * The global flags, each whether it takes a value: `GLOBAL_FLAGS` (`@lemma/cli`), which this cannot import without the
  * type stripper. tests/launch.test.ts holds the two alike.
  */
-const GLOBALS = { json: false, text: false, env: true, quiet: false, fields: true, questions: true, answer: true, help: false, version: false };
+const GLOBALS = { json: false, text: false, env: true, profile: true, quiet: false, fields: true, questions: true, answer: true, help: false, version: false };
 
 /** The command's first word, as `splitGlobals` (src/cli.ts) reads the line: what is left once the global flags, wherever they are, are out. */
 const commandOf = (argv) => {

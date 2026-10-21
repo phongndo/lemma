@@ -9,6 +9,7 @@ import {
   dropVerb,
   dropped,
   flagsOf,
+  nestedAgents,
   noMarks,
   runTime,
   sectionIn,
@@ -60,6 +61,52 @@ describe("sections", () => {
     // Activity does not move a thread: `b` ran last, `a` was unarchived later.
     expect(ids(active)).toEqual(["a", "b"]);
     expect(ids(archived)).toEqual(["d", "e"]);
+  });
+
+  test("an agent is listed under the thread that started it, not on its own, while both are there and unarchived", () => {
+    const list = [
+      thread("p", 1),
+      thread("a1", 2, { parent: { sessionId: "p", toolCallId: "c1" } }),
+      thread("a2", 3, { parent: { sessionId: "p" } }),
+      // Its thread is gone: on its own.
+      thread("orphan", 4, { parent: { sessionId: "gone" } }),
+      // Archived apart from its thread: in the archived, on its own.
+      thread("filed", 5, { parent: { sessionId: "p" }, archived: true }),
+      // Its thread is archived: on its own, where it is.
+      thread("q", 6, { archived: true }),
+      thread("a3", 7, { parent: { sessionId: "q" } }),
+    ];
+    const { active, archived } = sections(list, none);
+    expect(ids(active)).toEqual(["a3", "orphan", "p"]);
+    // The latest archived first, as ever.
+    expect(ids(archived)).toEqual(["q", "filed"]);
+    const nested = nestedAgents(list);
+    expect([...nested.keys()]).toEqual(["p"]);
+    expect(nested.get("p")!.map(({ session, level }) => [session.id, level])).toEqual([
+      ["a1", 1],
+      ["a2", 1],
+    ]);
+  });
+
+  test("an agent's own agents are listed under the thread at the top, after the agent that started them", () => {
+    const list = [
+      thread("p", 1),
+      thread("a1", 2, { parent: { sessionId: "p" } }),
+      thread("a2", 3, { parent: { sessionId: "p" } }),
+      thread("a1x", 4, { parent: { sessionId: "a1" } }),
+      thread("a1xy", 5, { parent: { sessionId: "a1x" } }),
+    ];
+    expect(ids(sections(list, none).active)).toEqual(["p"]);
+    expect(
+      nestedAgents(list)
+        .get("p")!
+        .map(({ session, level }) => [session.id, level]),
+    ).toEqual([
+      ["a1", 1],
+      ["a1x", 2],
+      ["a1xy", 3],
+      ["a2", 1],
+    ]);
   });
 
   test("a thread with nothing sent is not listed", () => {

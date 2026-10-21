@@ -103,7 +103,7 @@ export default definePlugin({
       // After the MCP servers' section, before the environment, whose date changes daily.
       { order: 610 },
     );
-    // The section is written for the tools on offer before the request's are chosen (a thread's profile keeps some):
+    // The section is written for the tools on offer before the request's are chosen (a thread's mode keeps some):
     // once they are, it names only the namespaces still offered, and goes with codemode.
     yield* owner.on(
       AgentRequestHook,

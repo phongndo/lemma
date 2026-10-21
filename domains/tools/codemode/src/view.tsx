@@ -66,32 +66,43 @@ function CodemodeBody(props: ToolBodyProps) {
  */
 export const codemodeView = (slots: SlotsService): ToolView => {
   function CodemodeDisplays(props: ToolBodyProps) {
-    const displays = createMemo((): readonly CodemodeDisplay[] => detailsOf(props.result?.details).displays ?? []);
+    /** Each display as the call its tool's view draws, and runs of one tool's its view draws together (`displays`). */
+    const runs = createMemo((): readonly (readonly ToolBodyProps[])[] => {
+      const shown = (detailsOf(props.result?.details).displays ?? []).map((display: CodemodeDisplay, index): ToolBodyProps => ({
+        id: `${props.id}/${index}`,
+        name: display.name,
+        args: display.title === undefined ? undefined : { title: display.title },
+        result: {
+          eventId: props.result!.eventId,
+          content: display.content,
+          isError: false,
+          ...(display.details === undefined ? {} : { details: display.details }),
+        },
+        state: "ok",
+      }));
+      const out: ToolBodyProps[][] = [];
+      for (const call of shown) {
+        const last = out.at(-1);
+        if (last !== undefined && last[0]!.name === call.name && slots.get(ToolViews, call.name)?.displays !== undefined) last.push(call);
+        else out.push([call]);
+      }
+      return out;
+    });
     return (
-      <Index each={displays()}>
-        {(display, index) => {
-          const view = () => slots.get(ToolViews, display().name);
+      <Index each={runs()}>
+        {(run) => {
+          const view = () => slots.get(ToolViews, run()[0]!.name);
           return (
-            <Show when={view()?.display !== undefined ? view() : undefined} keyed>
-              {(item) => (
-                <Contained
-                  slot={ToolViews}
-                  item={item}
-                  component={item.display}
-                  props={{
-                    id: `${props.id}/${index}`,
-                    name: display().name,
-                    args: display().title === undefined ? undefined : { title: display().title },
-                    result: {
-                      eventId: props.result!.eventId,
-                      content: display().content,
-                      isError: false,
-                      ...(display().details === undefined ? {} : { details: display().details }),
-                    },
-                    state: "ok",
-                  }}
-                />
-              )}
+            <Show
+              when={run().length > 1 && view()?.displays !== undefined ? view() : undefined}
+              keyed
+              fallback={
+                <Show when={view()?.display !== undefined ? view() : undefined} keyed>
+                  {(item) => <Contained slot={ToolViews} item={item} component={item.display} props={run()[0]!} />}
+                </Show>
+              }
+            >
+              {(item) => <Contained slot={ToolViews} item={item} component={item.displays} props={{ calls: run() }} />}
             </Show>
           );
         }}

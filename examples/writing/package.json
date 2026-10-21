@@ -2,7 +2,7 @@
   "name": "@lemma/example-writing",
   "version": "0.1.0",
   "private": true,
-  "description": "Writing: the project's style guide in the system prompt, a tool that measures a draft, and a writing profile",
+  "description": "Writing: the project's style guide in the system prompt, a tool that measures a draft, and a writing mode",
   "type": "module",
   "scripts": {
     "check": "tsrs --noEmit",
@@ -16,7 +16,7 @@
   },
   "devDependencies": {
     "@lemma/agent-loop": "workspace:*",
-    "@lemma/agent-profiles": "workspace:*",
+    "@lemma/agent-modes": "workspace:*",
     "@lemma/contracts": "workspace:*",
     "@lemma/llm": "workspace:*",
     "@lemma/sessions": "workspace:*",
@@ -29,7 +29,7 @@
   "lemma": {
     "host": "./writing.ts",
     "resources": {
-      "profiles": "./profiles"
+      "modes": "./modes"
     }
   }
 }

@@ -3,7 +3,8 @@ import { Layer, Schema } from "effect";
 import { definePlugin } from "@lemma/core";
 import type { PluginRow } from "@lemma/contracts";
 import { planComposition } from "@lemma/composition";
-import { existsSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { appDefaults, bundled as shipped, bundledCode, bundledWeb, cliCommand, webDist } from "../src/bundled.ts";
 import { runtimeCapabilities } from "../src/runtime.ts";
@@ -55,6 +56,11 @@ describe("appDefaults", () => {
     expect(entries({ "transport.server": { config: { port: 8000 } } })["transport.server"]).toEqual({ config: { staticDir: webDist, port: 8000 } });
     expect(entries({ "transport.server": { config: { staticDir: "/srv/ui" } } })["transport.server"]).toEqual({ config: { staticDir: "/srv/ui" } });
     expect(entries({ "transport.server": { enabled: false } })["transport.server"]).toEqual({ config: { staticDir: webDist }, enabled: false });
+  });
+
+  test("names the CLI so the agent's shell runs it on the host's Node.js, with none on PATH", () => {
+    const shell = execFileSync("/bin/sh", ["-c", `${cliCommand} --version --text`], { env: { PATH: "/nonexistent" }, encoding: "utf8" });
+    expect(shell.trim()).toBe(JSON.parse(readFileSync(new URL("../../../apps/cli/package.json", import.meta.url), "utf8")).version);
   });
 
   test("an agent config row keeps the CLI unless it sets cli itself", () => {

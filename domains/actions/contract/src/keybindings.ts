@@ -1,4 +1,6 @@
 import type { PluginStatus } from "@lemma/contracts";
+import type { SlotsService } from "@lemma/web";
+import { Actions } from "./actions.ts";
 
 /** Shortcuts the user set, by action id; an empty list unbinds the action. */
 export type KeyOverrides = Readonly<Record<string, readonly string[]>>;
@@ -74,6 +76,12 @@ export const shownKeys = (
   action: { readonly id: string; readonly keys?: string | readonly string[] | undefined },
   plugins: readonly PluginStatus[],
 ): string | undefined => keysFor(action.id, action.keys, overridesFrom(plugins))[0];
+
+/** The binding to show beside the action `id` (in a button's tip), as `shownKeys`; undefined while there is no such action. */
+export const shownKeysOf = (slots: Pick<SlotsService, "get">, plugins: readonly PluginStatus[], id: string): string | undefined => {
+  const action = slots.get(Actions, id);
+  return action === undefined ? undefined : shownKeys(action, plugins);
+};
 
 /** An action as the shortcuts list reads it. */
 export interface Bindable {

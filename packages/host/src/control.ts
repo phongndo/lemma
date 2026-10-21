@@ -55,7 +55,12 @@ export interface ChangesOptions {
   /** A config file's text, undefined for one missing or unreadable. */
   readonly readConfig: (path: string) => Effect.Effect<string | undefined>;
   /** Writes rows into a config file (`updateConfig`). */
-  readonly updateConfig: (path: string, rows: Readonly<Record<string, PluginChange>>, scope: ConfigScope) => Effect.Effect<ConfigUpdate, Diagnostic>;
+  readonly updateConfig: (
+    path: string,
+    rows: Readonly<Record<string, PluginChange>>,
+    scope: ConfigScope,
+    formerly: Readonly<Record<string, readonly string[]>>,
+  ) => Effect.Effect<ConfigUpdate, Diagnostic>;
   /** The web files as they are now (`listWebFiles`). */
   readonly webFiles: (trusted: boolean) => Effect.Effect<WebComposition["files"]>;
   /** Plugins no change may turn off, with the reason clients show; they serve the requests that ask for changes. */
@@ -341,7 +346,9 @@ export const makeHostChanges = (options: ChangesOptions): Effect.Effect<HostChan
     const write = (loader: Loader, rows: Readonly<Record<string, PluginChange>>, scope: ConfigScope) =>
       Effect.gen(function* () {
         const path = scope === "user" ? paths.userConfig : paths.projectConfig;
-        const update = yield* options.updateConfig(path, rows, scope).pipe(Effect.mapError(rejected));
+        // A renamed plugin's row under its former id (`formerly`) moves to its id as it is written.
+        const formerly = Object.fromEntries(applied.known.flatMap(({ plugin }) => (plugin.formerly === undefined ? [] : [[plugin.id, plugin.formerly]])));
+        const update = yield* options.updateConfig(path, rows, scope, formerly).pipe(Effect.mapError(rejected));
         seenConfig.set(path, update.text);
         const undo = putBack(path, update);
         // The written rows are read back like any other change.
@@ -458,12 +465,13 @@ export const makeHostChanges = (options: ChangesOptions): Effect.Effect<HostChan
               for (const [id, row] of Object.entries(requested)) {
                 // An id the host does not know is a web half's, written for the web app; one neither app has is a mistake.
                 if (!known.includes(id)) {
-                  const meant = closestId(id, known);
+                  const renamed = applied.known.find(({ plugin }) => plugin.formerly?.includes(id) === true)?.plugin.id;
+                  const meant = renamed ?? closestId(id, known);
                   return yield* rejected(
                     new Diagnostic({
                       severity: "error",
                       pluginId: id,
-                      message: `No plugin "${id}"`,
+                      message: renamed === undefined ? `No plugin "${id}"` : `No plugin "${id}": it is "${renamed}" since a rename`,
                       suggestion: meant === undefined ? "`lemma plugins` lists them" : `Did you mean "${meant}"?`,
                     }),
                   );

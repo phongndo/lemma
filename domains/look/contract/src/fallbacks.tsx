@@ -174,6 +174,7 @@ const GLYPHS: Readonly<Record<IconName, string>> = {
   maximize: "⤢",
   minimize: "⤡",
   spinner: "…",
+  agent: "◉",
 };
 
 /** The icon as a text glyph (★ for a filled star), hidden from assistive technology as the icons are: the control it marks carries the name. */

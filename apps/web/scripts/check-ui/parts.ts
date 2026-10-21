@@ -495,16 +495,28 @@ export const parts = async (): Promise<string> => {
       { timeout: 5_000 },
     )
     .catch(() => assert.fail("a browser page is not over its place in the pane"));
+  // In a browser, which keeps ⌘T and ⌘L from its pages, they stay the browser's: they are the desktop app's alone.
+  const boundKeys = (id: string) =>
+    page.evaluate(async (id) => {
+      const { Actions } = (await import("/src/ui/api.ts" as string)).api.contracts;
+      const action = (window as any).lemma.slots().get(Actions, id);
+      return action === undefined ? "no action" : (action.keys ?? "no keys");
+    }, id);
+  assert.deepEqual(
+    [await boundKeys("thread.inspect-new-tab"), await boundKeys("browser.address")],
+    ["no keys", "no action"],
+    "the app takes ⌘T or ⌘L from the browser",
+  );
   await page.click(".thread-inspector-head [aria-label='Open a view']");
   await page.click(".popover [role=menuitem] >> text=Trace");
   await page.waitForFunction(() => document.querySelectorAll(".thread-inspector-open").length === 3);
   assert.deepEqual(await titles(), ["Trace", "Browser", "Trace"]);
-  // A tab dragged past its neighbor's middle takes its place on the drop.
+  // A tab dragged by its name past its neighbor's middle takes its place on the drop.
   const [dragged, target] = [
-    await page.locator(".thread-inspector-tab >> nth=1").boundingBox(),
+    await page.locator(".thread-inspector-open >> nth=1").boundingBox(),
     await page.locator(".thread-inspector-tab >> nth=0").boundingBox(),
   ];
-  await page.mouse.move(dragged!.x + dragged!.width - 10, dragged!.y + dragged!.height / 2);
+  await page.mouse.move(dragged!.x + dragged!.width / 2, dragged!.y + dragged!.height / 2);
   await page.mouse.down();
   await page.mouse.move(target!.x + 10, target!.y + target!.height / 2, { steps: 8 });
   await page.mouse.up();
@@ -522,11 +534,50 @@ export const parts = async (): Promise<string> => {
   await page.keyboard.press("ControlOrMeta+w");
   await page.waitForSelector(".thread-inspector", { state: "detached" });
   assert.equal(await where(), thread, "⌘W in the pane closed the thread");
-  // Opened with no tab, it offers the views, by letter too.
+  // With no tab it never opens empty: its switch offers the views, and the tab picked takes focus.
   await page.click("[aria-label='Open inspection pane']");
-  await page.waitForSelector(".thread-inspector-empty >> text=Open a view");
+  await page.click(".popover [role=menuitem] >> text=Trace");
+  await page.waitForSelector(".thread-inspector-view .trj");
+  await page
+    .waitForFunction(() => document.activeElement?.matches(".thread-inspector-tab.shown .thread-inspector-open") === true, undefined, { timeout: 3_000 })
+    .catch(() => assert.fail("a view picked from the pane's switch does not take focus"));
+  // ⌘I offers them too, by letter, and closes its menu again.
+  await page.keyboard.press("ControlOrMeta+w");
+  await page.waitForSelector(".thread-inspector", { state: "detached" });
+  const menuFocused = () => page.waitForFunction(() => document.activeElement?.closest(".popover") != null);
+  await page.keyboard.press("ControlOrMeta+i");
+  await menuFocused();
+  assert.equal(await page.locator(".thread-inspector").count(), 0, "the pane opened with no tab");
+  await page.keyboard.press("ControlOrMeta+i");
+  await page.waitForSelector(".popover", { state: "detached", timeout: 3_000 }).catch(() => assert.fail("⌘I does not close the menu of views it opened"));
+  await page.keyboard.press("ControlOrMeta+i");
+  await menuFocused();
   await page.keyboard.press("t");
   await page.waitForSelector(".thread-inspector-view .trj");
+  // It opens at 40% of the page, no narrower than 480px; dragged, it takes a share of the page, which it keeps as the
+  // window changes; a double-click on its edge gives it its first width.
+  const paneWidth = () => page.evaluate(() => document.querySelector(".thread-inspector")!.getBoundingClientRect().width);
+  const share = () =>
+    page.evaluate(() => {
+      const pane = document.querySelector(".thread-inspector")!.getBoundingClientRect().width;
+      return Math.round((pane / document.querySelector(".main")!.getBoundingClientRect().width) * 100);
+    });
+  assert.equal(await paneWidth(), 480, "the pane does not open at its first width");
+  const edge = (await page.locator(".thread-inspector-edge").boundingBox())!;
+  const main = (await page.locator(".main").boundingBox())!;
+  await page.mouse.move(edge.x + edge.width / 2, edge.y + 200);
+  await page.mouse.down();
+  await page.mouse.move(main.x + main.width * 0.5, edge.y + 200, { steps: 4 });
+  await page.mouse.up();
+  assert.equal(await share(), 50, "dragging the pane's edge does not set its share");
+  await page.setViewportSize({ width: 1500, height: 900 });
+  assert.equal(await share(), 50, "the pane does not keep its share as the window widens");
+  await page.setViewportSize({ width: 1200, height: 900 });
+  await page.dblclick(".thread-inspector-edge");
+  assert.equal(await paneWidth(), 480, "a double-click on the pane's edge does not give it its first width");
+  await page.setViewportSize({ width: 1800, height: 900 });
+  assert.equal(await share(), 40, "the pane does not open at 40% of a wide page");
+  await page.setViewportSize({ width: 1200, height: 900 });
   // Maximized, it fills the page, the chat out of sight; restored, the chat is back.
   await page.click("[aria-label='Maximize inspection pane']");
   await page.waitForFunction(() => document.querySelector(".thread-chat")!.getBoundingClientRect().width === 0);
@@ -561,9 +612,11 @@ export const parts = async (): Promise<string> => {
   await page.click("[aria-label='Close inspection pane']");
   await page.waitForFunction((path) => `${location.pathname}${location.search}` === path, thread);
   await page.waitForSelector(".turn");
-  // Settings reloaded, then another section: closing still returns to the thread.
+  // Settings reloaded, then another section: closing still returns to the thread. Over Settings, the pane's keys leave it
+  // as it was.
   await page.keyboard.press("ControlOrMeta+,");
   await page.waitForFunction(() => location.pathname.startsWith("/settings"));
+  await page.keyboard.press("ControlOrMeta+i");
   await page.reload();
   await page.click(".settings-nav-item >> text=Plugins");
   await page.waitForFunction(() => location.pathname === "/settings/plugins");
@@ -571,6 +624,7 @@ export const parts = async (): Promise<string> => {
   await page
     .waitForFunction((path) => `${location.pathname}${location.search}` === path, thread, { timeout: 5_000 })
     .catch(async () => assert.fail(`closing settings after a reload went to ${await where()}`));
+  assert.equal(await page.locator(".thread-inspector").count(), 0, "⌘I over Settings opened the thread's pane");
   // The sidebar's foot leads to settings (which take the sidebar while open); Escape comes back.
   await page.click(".sidebar-foot [aria-label=Settings]");
   await page.waitForFunction(() => location.pathname.startsWith("/settings"));
@@ -797,12 +851,17 @@ export const parts = async (): Promise<string> => {
   await page.reload();
   await page.waitForSelector(rowOf(pinning));
   assert(await dropped(), `a dragged thread's place is lost on a reload: ${(await sorted()).join(", ")}`);
-  // The sidebar's head: the toggle, and across from it search and a new thread.
+  // The sidebar's head: the toggle, and across from it the palette, search, and a new thread.
   assert.deepEqual(
     await page.$$eval(".sidebar-head button", (buttons) => buttons.map((button) => button.getAttribute("aria-label"))),
-    ["Toggle sidebar", "Search threads", "New thread"],
-    "the sidebar's head is not the toggle, search, and a new thread",
+    ["Toggle sidebar", "Command palette", "Search threads", "New thread"],
+    "the sidebar's head is not the toggle, the palette, search, and a new thread",
   );
+  // Its palette button opens the palette with nothing typed.
+  await page.click(".sidebar-head [aria-label='Command palette']");
+  await page.waitForFunction(() => (document.querySelector(".palette input") as HTMLInputElement | null)?.value === "", undefined, { timeout: 5_000 });
+  await page.keyboard.press("Escape");
+  await page.waitForSelector(".palette input", { state: "detached" });
   // A thread a plugin says waits on the person shows it where its time goes.
   await checkPlugin(page);
   await page.evaluate(async (id) => {

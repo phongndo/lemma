@@ -1,4 +1,4 @@
-import { promises as fs } from "node:fs";
+import { constants as fsConstants, promises as fs } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { Cause, Deferred, Effect, Exit, Fiber, Layer, Stream } from "effect";
@@ -66,15 +66,25 @@ const fileHandles = async () => {
   return Object.getPrototypeOf(probe) as fs.FileHandle;
 };
 
+/** A handle closed: its file, and whether it was opened to write (a session's writer) or to read. */
+interface Closed {
+  readonly file: string;
+  readonly writer: boolean;
+}
+
+/** Whether `flags` open a file to write it as a session's writer does (`ax`, `O_WRONLY | O_APPEND`), not to read. */
+const writes = (flags: unknown) =>
+  typeof flags === "number" ? (flags & (fsConstants.O_WRONLY | fsConstants.O_RDWR)) !== 0 : typeof flags === "string" && /^[aw]/.test(flags);
+
 /** Files closed, among those opened from now on: each handle has its own `close`, not one on the prototype. */
 const watchCloses = () => {
-  const closed: string[] = [];
+  const closed: Closed[] = [];
   const open = fs.open;
   vi.spyOn(fs, "open").mockImplementation(async (file, flags, mode) => {
     const handle = await open(file, flags, mode);
     const close = handle.close;
     handle.close = () => {
-      closed.push(String(file));
+      closed.push({ file: String(file), writer: writes(flags) });
       return close.call(handle);
     };
     return handle;
@@ -83,11 +93,14 @@ const watchCloses = () => {
 };
 
 /** Handles on a session's file closed so far: reading it, and unloading it, each close one. */
-const closesOf = (closed: readonly string[], id: string) => closed.filter((file) => file.endsWith(`_${id}.jsonl`)).length;
+const closesOf = (closed: readonly Closed[], id: string) => closed.filter(({ file }) => file.endsWith(`_${id}.jsonl`)).length;
 
-/** Waits for the sweep to unload a session: closing its file is the last thing it does. */
-const unloaded = (closed: readonly string[], id: string) =>
-  Effect.promise(() => vi.waitFor(() => expect(closed.some((file) => file.endsWith(`_${id}.jsonl`))).toBe(true)));
+/**
+ * Waits for the sweep to unload a session: closing its writer is the last thing it does. Not any close: the store's
+ * startup sweep for empty sessions can list a session's file as it is made, and read it.
+ */
+const unloaded = (closed: readonly Closed[], id: string) =>
+  Effect.promise(() => vi.waitFor(() => expect(closed.some(({ file, writer }) => writer && file.endsWith(`_${id}.jsonl`))).toBe(true)));
 
 const lockPath = () => path.join(dir, "sessions", ".lock");
 
@@ -608,6 +621,51 @@ describe("sessions", () => {
         expect(yield* store.get(before.id)).toEqual(listed);
         const next = yield* store.append(before.id, custom(2));
         expect(next.parent).toBe(before.leaf);
+      }),
+    );
+  });
+
+  it("keeps an agent's parent in its header, across a restart, whether it was listed from the index or read again", async () => {
+    const { parent, agent } = await run(
+      Effect.gen(function* () {
+        const store = yield* Sessions;
+        const parent = yield* store.create();
+        const agent = yield* store.create({ parent: { sessionId: parent.id, toolCallId: "call-1" } });
+        yield* store.append(agent.id, custom(1));
+        return { parent, agent };
+      }),
+    );
+    const header = JSON.parse(
+      (
+        await fs.readFile(
+          (await sessionFiles()).find((file) => file.endsWith(`_${agent.id}.jsonl`))!,
+          "utf8",
+        )
+      ).split("\n")[0]!,
+    );
+    expect(header).toMatchObject({ type: "session", version: 1, id: agent.id, parent: { sessionId: parent.id, toolCallId: "call-1" } });
+    await run(
+      Effect.gen(function* () {
+        const store = yield* Sessions;
+        const listed = (yield* store.list()).find((info) => info.id === agent.id)!;
+        expect(listed.parent).toEqual({ sessionId: parent.id, toolCallId: "call-1" });
+        expect((yield* store.get(parent.id)).parent).toBeUndefined();
+        // Another writer appends: the file is read on from the last scan, which keeps the header's parent.
+        const file = (yield* Effect.promise(sessionFiles)).find((name) => name.endsWith(`_${agent.id}.jsonl`))!;
+        const line = { seq: 2, id: "x2", parent: listed.leaf, at: Date.now() + 1000, data: title("external") };
+        yield* Effect.promise(() => fs.appendFile(file, `${JSON.stringify(line)}\n`));
+        expect((yield* store.list()).find((info) => info.id === agent.id)).toMatchObject({
+          title: "external",
+          parent: { sessionId: parent.id, toolCallId: "call-1" },
+        });
+      }),
+    );
+    // Without the index, read from the file alone.
+    await fs.rm(path.join(dir, "sessions", ".index.json"), { force: true });
+    await run(
+      Effect.gen(function* () {
+        const store = yield* Sessions;
+        expect((yield* store.get(agent.id)).parent).toEqual({ sessionId: parent.id, toolCallId: "call-1" });
       }),
     );
   });

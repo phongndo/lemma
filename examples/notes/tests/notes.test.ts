@@ -9,7 +9,7 @@ import type { PluginInfo } from "@lemma/contracts";
 import { hostControlPlugin, pathsPlugin } from "@lemma/contracts/testing";
 import { Agent } from "@lemma/agent";
 import agent from "@lemma/agent-loop";
-import profiles from "@lemma/agent-profiles";
+import modes from "@lemma/agent-modes";
 import { callTools, reply, scriptedLlm, SCRIPTED_MODEL, toolCall } from "@lemma/llm/testing";
 import type { Script } from "@lemma/llm/testing";
 import { Sessions } from "@lemma/sessions";
@@ -54,28 +54,24 @@ describe("in a turn", () => {
       state: "active",
       provides: [],
       requires: [],
-      resources: { profiles: [fileURLToPath(new URL("../profiles", import.meta.url))], skills: [fileURLToPath(new URL("../skills", import.meta.url))] },
+      resources: { modes: [fileURLToPath(new URL("../modes", import.meta.url))], skills: [fileURLToPath(new URL("../skills", import.meta.url))] },
     },
   ];
-  const run = (turns: readonly (readonly Script[])[], profile?: string) => {
+  const run = (turns: readonly (readonly Script[])[], mode?: string) => {
     const llm = scriptedLlm(turns.flat());
     const project = path.join(dir, "project");
     return Effect.runPromise(
       Effect.scoped(
         Effect.gen(function* () {
           const core = yield* makeCore(
-            [pathsPlugin(path.join(dir, "home"), { cwd: project }), hostControlPlugin(known), sessions, tools, agent, profiles, skills, llm.plugin, notes],
+            [pathsPlugin(path.join(dir, "home"), { cwd: project }), hostControlPlugin(known), sessions, tools, agent, modes, skills, llm.plugin, notes],
             { configs: { "agent.loop": { defaultModel: SCRIPTED_MODEL.ref } } },
           );
           return yield* core.run(
             Effect.gen(function* () {
               const { id } = yield* (yield* Sessions).create({ cwd: project });
               for (const _ of turns) {
-                yield* (yield* Agent).prompt(
-                  id,
-                  [{ type: "text", text: "look into it" }],
-                  profile === undefined ? {} : { plugins: { "agent.profiles": profile } },
-                );
+                yield* (yield* Agent).prompt(id, [{ type: "text", text: "look into it" }], mode === undefined ? {} : { plugins: { "agent.modes": mode } });
               }
               return llm.requests;
             }),
@@ -104,7 +100,7 @@ describe("in a turn", () => {
     expect(JSON.stringify(requests[4]!.messages)).toContain("cache-misses:3: - The date in the prompt changes daily (agent.ts)");
   });
 
-  it("brings the research profile and the cite skill", async () => {
+  it("brings the research mode and the cite skill", async () => {
     const [request] = await run([[reply("ok")]], "research");
     expect((request!.tools ?? []).map((tool) => tool.name).sort()).toEqual(["note_read", "note_search", "note_write"]);
     expect(request!.system).toContain("# Research");

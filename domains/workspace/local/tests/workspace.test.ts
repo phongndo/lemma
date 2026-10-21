@@ -228,11 +228,18 @@ describe("plugin", () => {
   });
 });
 
-/** What the host provides the transport besides `Paths`; these tests reach only `HostControl.composition`, the client's probe. */
+/**
+ * What the host provides the transport besides `Paths`; these tests reach only `HostControl.composition`, the client's
+ * probe, and its process, which the transport writes to transport.json.
+ */
 const control = definePlugin({
   id: "host",
   provides: [HostControl],
-  layer: Layer.succeed(HostControl, { composition: Effect.succeed({ id: "test", plugins: [] }), runtime: [] } as never),
+  layer: Layer.succeed(HostControl, {
+    composition: Effect.succeed({ id: "test", plugins: [] }),
+    runtime: [],
+    process: { pid: process.pid, startedAt: 0 },
+  } as never),
 });
 
 /** The plugin behind a real transport, with `extra` beside it, and `body` given a client of that host. */

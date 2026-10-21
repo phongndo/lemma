@@ -34,7 +34,7 @@ const withCore = <A>(
       Effect.gen(function* () {
         const home = yield* Effect.promise(() => mkdtemp(join(tmpdir(), "lemma-mcp-")));
         yield* Effect.promise(() => writeFile(join(home, "mcp.json"), JSON.stringify({ mcpServers: servers })));
-        const paths = { home, userConfig: join(home, "config.jsonc"), projectConfig: join(home, "project.jsonc"), cwd: home };
+        const paths = { home, root: home, userConfig: join(home, "config.jsonc"), projectConfig: join(home, "project.jsonc"), cwd: home };
         const core = yield* makeCore([registry, mcpServers, ...extra], { configs, provide: { provides: [Paths], layer: Layer.succeed(Paths, paths) } });
         return yield* body(core as never, home);
       }),

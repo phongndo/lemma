@@ -462,7 +462,16 @@ export function scan(fs: FileSystem, file: string, sessionId: string, prior?: Sc
 /** `scan` from `from` (or the start): the scan, or why the file is not a session. */
 async function scanFrom(fs: FileSystem, file: string, from: Scanned | undefined): Promise<Scanned | string> {
   let header: Header | undefined =
-    from === undefined ? undefined : { type: "session", version: FORMAT_VERSION, id: from.info.id, cwd: from.info.cwd, createdAt: from.info.createdAt };
+    from === undefined
+      ? undefined
+      : {
+          type: "session",
+          version: FORMAT_VERSION,
+          id: from.info.id,
+          cwd: from.info.cwd,
+          createdAt: from.info.createdAt,
+          ...(from.info.parent === undefined ? {} : { parent: from.info.parent }),
+        };
   let leaf = from?.info.leaf;
   let title = from?.info.title;
   // A moved session's directory is already the header's here (`info.cwd`).
@@ -655,6 +664,7 @@ export const infoOf = (
 ): SessionInfo => ({
   id: header.id,
   cwd: state.marks.cwd ?? header.cwd,
+  ...(header.parent === undefined ? {} : { parent: header.parent }),
   createdAt: header.createdAt,
   updatedAt: state.updatedAt,
   ...(state.title === undefined ? {} : { title: state.title }),

@@ -18,8 +18,9 @@ Use:
 - [Kernel design](packages/core/DESIGN.md) and the [core README](packages/core/README.md) when changing `packages/core`;
 - a plugin's README for its contract and rationale when changing that plugin;
 - [the web app's AGENTS.md](apps/web/AGENTS.md) when changing the web app;
-- [Configuration](docs/configuration.md) for config files, turning plugins on and off, and project trust; and
-- [Development](docs/development.md) for the dev shell, checks, and git hooks.
+- [Configuration](docs/configuration.md) for config files, turning plugins on and off, project trust, and profiles;
+- [Development](docs/development.md) for the dev shell, checks, git hooks, and releases; and
+- [Versioning](docs/versioning.md) for what each version means and when it goes up.
 
 ## Design
 

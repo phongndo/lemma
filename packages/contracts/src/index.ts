@@ -16,6 +16,7 @@ export * from "./config.ts";
 export * from "./credit.ts";
 export * from "./host.ts";
 export * from "./ids.ts";
+export * from "./shell.ts";
 export * from "./clients.ts";
 export * from "./inspectors.ts";
 export * from "./interaction.ts";

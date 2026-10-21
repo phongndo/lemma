@@ -45,7 +45,8 @@ interface Watched {
 }
 
 const launch = (name: string, args: readonly string[], env: Readonly<Record<string, string>>): Watched => {
-  const child = spawn(process.execPath, args, { env: { ...process.env, ...env }, stdio: "pipe" });
+  // A test's host is its home's default profile, whatever profile the shell running the tests names.
+  const child = spawn(process.execPath, args, { env: { ...process.env, LEMMA_PROFILE: undefined, ...env }, stdio: "pipe" });
   const lines: string[] = [];
   let ended = false;
   const listeners = new Set<() => void>();

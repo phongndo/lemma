@@ -11,7 +11,7 @@ import type { PluginInfo } from "@lemma/contracts";
 import { hostControlPlugin, pathsPlugin } from "@lemma/contracts/testing";
 import { Agent, AgentRequestHook } from "@lemma/agent";
 import agent from "@lemma/agent-loop";
-import profiles from "@lemma/agent-profiles";
+import modes from "@lemma/agent-modes";
 import { callTools, reply, scriptedLlm, SCRIPTED_MODEL, toolCall } from "@lemma/llm/testing";
 import type { Script } from "@lemma/llm/testing";
 import { Sessions } from "@lemma/sessions";
@@ -61,10 +61,10 @@ describe("in a turn", () => {
   /** Prompts once per entry of `turns` (each played by its scripts), and returns the requests and the session's log. */
   const run = (
     turns: readonly { readonly before?: () => Promise<void>; readonly scripts: readonly Script[] }[],
-    profile?: string,
+    mode?: string,
     extra: readonly Plugin[] = [],
   ) => {
-    // As the host lists this package when it is in a plugins directory: its profiles folder in its status.
+    // As the host lists this package when it is in a plugins directory: its modes folder in its status.
     const known: PluginInfo[] = [
       {
         id: "inbox",
@@ -73,7 +73,7 @@ describe("in a turn", () => {
         state: "active",
         provides: [],
         requires: [],
-        resources: { profiles: [fileURLToPath(new URL("../profiles", import.meta.url))] },
+        resources: { modes: [fileURLToPath(new URL("../modes", import.meta.url))] },
       },
     ];
     const llm = scriptedLlm(turns.flatMap((turn) => turn.scripts));
@@ -87,7 +87,7 @@ describe("in a turn", () => {
               sessions,
               tools,
               agent,
-              profiles,
+              modes,
               llm.plugin,
               inbox,
               ...extra,
@@ -99,7 +99,7 @@ describe("in a turn", () => {
               const { id } = yield* (yield* Sessions).create({ cwd: path.join(dir, "project") });
               for (const turn of turns) {
                 if (turn.before !== undefined) yield* Effect.promise(turn.before);
-                yield* (yield* Agent).prompt(id, [{ type: "text", text: "triage" }], profile === undefined ? {} : { plugins: { "agent.profiles": profile } });
+                yield* (yield* Agent).prompt(id, [{ type: "text", text: "triage" }], mode === undefined ? {} : { plugins: { "agent.modes": mode } });
               }
               return { requests: llm.requests, log: yield* (yield* Sessions).events(id) };
             }),
@@ -151,7 +151,7 @@ describe("in a turn", () => {
     expect(seen[0]).toContain('<message id=\\"1.md\\"');
   });
 
-  it("brings the triage profile, which narrows the agent to the inbox's tools", async () => {
+  it("brings the triage mode, which narrows the agent to the inbox's tools", async () => {
     const { requests } = await run([{ scripts: [reply("Nothing new.")] }], "triage");
     expect((requests[0]!.tools ?? []).map((tool) => tool.name).sort()).toEqual(["inbox_file", "inbox_read"]);
     expect(requests[0]!.system).toContain("# Triage");

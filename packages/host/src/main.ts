@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { spawn } from "node:child_process";
+import { existsSync } from "node:fs";
 import { flushCompileCache, getCompileCacheDir } from "node:module";
 import { dirname } from "node:path";
 import { Cause, Duration, Effect, Exit, Option, Stream } from "effect";
@@ -9,6 +10,7 @@ import type { ReportedFault } from "@lemma/core";
 import { compositionHistory, faultHistory, planComposition } from "@lemma/composition";
 import type { PluginRow, WebComposition } from "@lemma/contracts";
 import { readDiscovery } from "@lemma/contracts/discovery";
+import { profileNameProblem, profileOf, readProfileFile } from "@lemma/contracts/profiles";
 import { appDefaults, bundled, bundledCode, bundledWeb, optIn } from "./bundled.ts";
 import { loadComposition, projectPluginsDir, readConfigText, updateConfig } from "./config.ts";
 import { makeHostChanges } from "./control.ts";
@@ -101,10 +103,19 @@ const launch = {
   pid: process.pid,
   startedAt: Date.now(),
   ...(process.env.LEMMA_STARTED_BY?.trim() ? { startedBy: process.env.LEMMA_STARTED_BY.trim() } : {}),
+  ...(safe ? { safe: true } : {}),
 };
 delete process.env.LEMMA_STARTED_BY;
+// The profile it runs for (`LEMMA_PROFILE`), said before anything starts when it is no name, or one never made (a typo,
+// one removed), whose home it would make with no port of its own, taking the default profile's.
+const profile = profileOf(process.env);
+const profileProblem = profile === undefined ? undefined : profileNameProblem(profile);
 // `pnpm start` runs from packages/host; INIT_CWD is where the user invoked it.
-const paths = resolvePaths({ env: process.env, cwd: process.env.INIT_CWD ?? process.cwd() });
+const paths = resolvePaths({ env: profileProblem === undefined ? process.env : {}, cwd: process.env.INIT_CWD ?? process.cwd() });
+if (profileProblem !== undefined || (paths.profile !== undefined && !existsSync(paths.home))) {
+  console.error(`lemma: LEMMA_PROFILE: ${profileProblem ?? `there is no profile "${profile}"; \`lemma profile create ${profile}\` makes one`}`);
+  process.exit(1);
+}
 // One host per home, said before anything starts: a second would break the sessions store's single writer.
 const holder = holdHostLock(paths.home);
 if (holder !== undefined) {
@@ -116,9 +127,12 @@ teeLog(
   paths.home,
   `lemma: --- ${new Date(launch.startedAt).toISOString()} pid ${launch.pid}${launch.startedBy === undefined ? "" : `, started by ${launch.startedBy}`} ---`,
 );
-// What the host's tools run reaches this host: a \`lemma\` command the agent runs finds it in this home, whatever the
-// environment the host was started in names (another host's LEMMA_URL, a default environment), and prints JSON.
-process.env.LEMMA_HOME = paths.home;
+// What the host's tools run reaches this host: a \`lemma\` command the agent runs finds it in this home and profile,
+// whatever the environment the host was started in names (another host's LEMMA_URL, a default environment), and prints
+// JSON.
+process.env.LEMMA_HOME = paths.root;
+if (paths.profile === undefined) delete process.env.LEMMA_PROFILE;
+else process.env.LEMMA_PROFILE = paths.profile;
 process.env.LEMMA_ENV = "local";
 process.env.LEMMA_AGENT = "1";
 delete process.env.LEMMA_URL;
@@ -126,6 +140,9 @@ delete process.env.LEMMA_TOKEN;
 // Consumed here: tools inherit this environment, and a CLI the agent runs must use its own directory, not ours.
 delete process.env.INIT_CWD;
 const userPluginsDir = pluginsDirOf(paths);
+// The config the app supplies beneath the rows, with the port the profile keeps (`profile.json`) beneath the transport's.
+const profilePort = (await Effect.runPromise(readProfileFile(paths.home)))?.port;
+const defaults = profilePort === undefined ? appDefaults : { ...appDefaults, "transport.server": { ...appDefaults["transport.server"], port: profilePort } };
 
 /** Plugins no config change may turn off, with the reason clients show. Everything they need is locked with them. */
 const pinned: Readonly<Record<string, string>> = {
@@ -158,7 +175,7 @@ const EMPTY_WEB: WebComposition = { plugins: {}, enabledIn: {}, configIn: {}, fi
 
 /** Reads config files and local plugins into the next composition (see `planComposition`), with every diagnostic. */
 const read: Effect.Effect<Read, ReloadError> = Effect.gen(function* () {
-  const input = { bundled, optIn, pinned: Object.keys(pinned), defaults: appDefaults, provided, localRequired: true };
+  const input = { bundled, optIn, pinned: Object.keys(pinned), defaults, provided, localRequired: true };
   if (safe) {
     const planned = planComposition({ ...input, local: [], rows: withOverrides({}) });
     // The bundled plugins as shipped: only an error in them is said, as it stops the start.
@@ -313,7 +330,7 @@ const program = Effect.gen(function* () {
       .map((plugin) => plugin.id)
       .join(", ")}`,
   );
-  yield* log(`home ${paths.home}, project ${paths.cwd}`);
+  yield* log(`home ${paths.home}${paths.profile === undefined ? "" : ` (profile ${paths.profile})`}, project ${paths.cwd}`);
 
   // In safe mode the files are not read, so their changes are nothing to apply.
   yield* Effect.forkScoped(Stream.runForEach(safe ? Stream.empty : watchConfig(paths), () => host.configChanged));

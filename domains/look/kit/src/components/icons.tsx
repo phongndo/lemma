@@ -354,6 +354,14 @@ const MinimizeIcon = (props: GlyphProps) => (
   </Icon>
 );
 
+/** A small robot's head: an agent, a session working for another. */
+const AgentIcon = (props: GlyphProps) => (
+  <Icon class={props.class}>
+    <rect x="3" y="5" width="10" height="8" rx="2" />
+    <path d="M8 2.5V5M6.2 8.5v1M9.8 8.5v1M1.5 9v1.5M14.5 9v1.5" />
+  </Icon>
+);
+
 /** The default icons by name. */
 export const icons: Readonly<Record<IconName, Component<GlyphProps>>> = {
   plus: PlusIcon,
@@ -412,6 +420,7 @@ export const icons: Readonly<Record<IconName, Component<GlyphProps>>> = {
   maximize: MaximizeIcon,
   minimize: MinimizeIcon,
   spinner: Spinner,
+  agent: AgentIcon,
 };
 
 /** The default `icon` part. */

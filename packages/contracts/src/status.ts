@@ -134,6 +134,8 @@ export const HostInfo = Schema.Struct({
   version: Schema.String,
   cwd: Schema.String,
   home: Schema.String,
+  /** The profile it runs for (`Paths.profile`); absent for the default. */
+  profile: Schema.optional(Schema.String),
   composition: CompositionInfo,
   /** What the host provides itself, by capability key (`HostControl.runtime`): a plugin requiring one needs no plugin for it. */
   runtime: Schema.Array(Schema.String),
@@ -143,6 +145,8 @@ export const HostInfo = Schema.Struct({
   startedAt: Schema.optional(Schema.Number),
   /** What started it, as it said (`LEMMA_STARTED_BY`): `cli`, `desktop`, `service`; absent when it was run by hand. */
   startedBy: Schema.optional(Schema.String),
+  /** True when it runs in safe mode (`--safe`): the bundled plugins as shipped, reading no config file or plugin file. */
+  safe: Schema.optional(Schema.Boolean),
 });
 export type HostInfo = typeof HostInfo.Type;
 
@@ -154,11 +158,13 @@ export const runtimeInfo = (
   Effect.map(control.composition, (composition) => ({
     cwd: paths.cwd,
     home: paths.home,
+    ...(paths.profile === undefined ? {} : { profile: paths.profile }),
     composition,
     runtime: control.runtime,
     pid: control.process.pid,
     startedAt: control.process.startedAt,
     ...(control.process.startedBy === undefined ? {} : { startedBy: control.process.startedBy }),
+    ...(control.process.safe ? { safe: true } : {}),
   }));
 
 /**

@@ -1,9 +1,10 @@
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { shellWord } from "@lemma/contracts";
 import type { Plugin } from "@lemma/core";
 import agentCli from "@lemma/agent-cli";
 import agentLoop from "@lemma/agent-loop";
-import agentProfiles from "@lemma/agent-profiles";
+import agentModes from "@lemma/agent-modes";
 import browserChromium from "@lemma/browser-chromium";
 import browserTools from "@lemma/browser-tools";
 import cliRegistry from "@lemma/cli-registry";
@@ -21,11 +22,14 @@ import llmCli from "@lemma/llm-cli";
 import llmCommands from "@lemma/llm-commands";
 import llmPiAi from "@lemma/llm-pi-ai";
 import mcpServers from "@lemma/mcp-servers";
+import profilesSwitcher from "@lemma/profiles-switcher";
+import releaseUpdates from "@lemma/release-updates";
 import sessionsCli from "@lemma/sessions-cli";
 import sessionsFiles from "@lemma/sessions-files";
 import toolsAsk from "@lemma/tools-ask";
 import toolsBash from "@lemma/tools-bash";
 import toolsCodemode from "@lemma/tools-codemode";
+import toolsDelegate from "@lemma/tools-delegate";
 import toolsEdit from "@lemma/tools-edit";
 import toolsHtml from "@lemma/tools-html";
 import toolsLemma from "@lemma/tools-lemma";
@@ -47,8 +51,12 @@ export const optIn: ReadonlySet<string> = new Set(["context.prune"]);
 /** The web app build the transport serves when no `staticDir` is configured. */
 export const webDist = fileURLToPath(new URL("../../../apps/web/dist", import.meta.url));
 
-/** How the agent runs this checkout's `lemma` CLI from its shell (its bundle when built, see apps/cli); `node` is on PATH wherever the host runs. */
-export const cliCommand = `node --conditions=lemma-source ${fileURLToPath(new URL("../../../apps/cli/bin/lemma.js", import.meta.url))}`;
+/**
+ * How the agent, and `release.updates`, run the `lemma` CLI beside this host from a shell (its bundle when built, see
+ * apps/cli): on the Node.js the host runs on, which a release carries and need not put on PATH; a host in the desktop
+ * app runs on Electron, so they use the `node` on PATH.
+ */
+export const cliCommand = `${process.versions.electron === undefined ? shellWord(process.execPath) : "node"} --conditions=lemma-source ${shellWord(fileURLToPath(new URL("../../../apps/cli/bin/lemma.js", import.meta.url)))}`;
 
 /**
  * Everything a fresh install runs. What the host provides itself (`Paths`,
@@ -71,10 +79,11 @@ export const bundled: readonly Plugin[] = [
   browserTools,
   toolsHtml,
   toolsLemma,
+  toolsDelegate,
   mcpServers,
   sessionsFiles,
   agentLoop,
-  agentProfiles,
+  agentModes,
   contextCompaction,
   contextPrune,
   contextProject,
@@ -87,6 +96,8 @@ export const bundled: readonly Plugin[] = [
   commandsHost,
   devtoolsTrace,
   devtoolsHost,
+  profilesSwitcher,
+  releaseUpdates,
   // The lemma command's: the commands and checks plugins add, then each domain's.
   cliRegistry,
   llmCli,
@@ -116,7 +127,7 @@ export const bundledWeb: readonly string[] = [
   "actions.keys-page",
   "actions.palette",
   "agent.loop",
-  "agent.profiles",
+  "agent.modes",
   "commands.client",
   "context.compaction",
   "devtools.dock",
@@ -141,6 +152,8 @@ export const bundledWeb: readonly string[] = [
   "look.highlight",
   "look.kit",
   "mcp.servers",
+  "profiles.switcher",
+  "release.updates",
   "settings.page",
   "settings.plugins",
   "skills.files",
@@ -154,6 +167,7 @@ export const bundledWeb: readonly string[] = [
   "tools.ask",
   "tools.bash",
   "tools.codemode",
+  "tools.delegate",
   "tools.edit",
   "tools.html",
   "tools.patch",
@@ -176,4 +190,7 @@ export const bundledWeb: readonly string[] = [
 export const appDefaults: Readonly<Record<string, Readonly<Record<string, unknown>>>> = {
   "transport.server": { staticDir: webDist },
   "agent.loop": { cli: cliCommand },
+  // How it starts another profile's host: this checkout's `lemma serve --detach`.
+  "profiles.switcher": { cli: cliCommand },
+  "release.updates": { cli: cliCommand },
 };

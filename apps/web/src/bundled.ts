@@ -23,9 +23,10 @@ import keymap from "@lemma/actions-keymap";
 import keysPage from "@lemma/actions-keys-page";
 import kit from "@lemma/look-kit";
 import mcp from "@lemma/mcp-servers/web";
+import profiles from "@lemma/profiles-switcher/web";
 import skills from "@lemma/skills-files/web";
 import modelPicker from "@lemma/llm-model-picker";
-import profiles from "@lemma/agent-profiles/web";
+import modes from "@lemma/agent-modes/web";
 import models from "@lemma/llm-client";
 import pages from "@lemma/frame-pages";
 import palette from "@lemma/actions-palette";
@@ -33,10 +34,12 @@ import pluginsPage from "@lemma/settings-plugins";
 import projectsPage from "@lemma/workspace-projects";
 import providers from "@lemma/llm-providers";
 import reload from "@lemma/frame-reload";
+import release from "@lemma/release-updates/web";
 import threadView from "@lemma/threads-view";
 import ask from "@lemma/tools-ask/web";
 import bash from "@lemma/tools-bash/web";
 import codemode from "@lemma/tools-codemode/web";
+import delegate from "@lemma/tools-delegate/web";
 import edit from "@lemma/tools-edit/web";
 import html from "@lemma/tools-html/web";
 import patch from "@lemma/tools-patch/web";
@@ -89,6 +92,7 @@ export const bundled: readonly Plugin[] = [
   patch,
   bash,
   codemode,
+  delegate,
   search,
   ask,
   html,
@@ -96,7 +100,7 @@ export const bundled: readonly Plugin[] = [
   promptCommands,
   fileMentions,
   skills,
-  profiles,
+  modes,
   agentLoop,
   modelPicker,
   compaction,
@@ -114,6 +118,8 @@ export const bundled: readonly Plugin[] = [
   appearancePage,
   projectsPage,
   addProject,
+  release,
+  profiles,
   devtools,
   trace,
   interactionDialog,

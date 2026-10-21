@@ -17,9 +17,22 @@ nix develop -c pnpm dev:desktop   # the window again while `pnpm dev` runs, as a
   the default environment names ([remote access](../../docs/remote.md)), or of
   a running local one. With
   neither, it starts a host with Electron's Node, for the directory
-  `pnpm desktop` ran from (else `~`). Never two: the sessions store has a
-  single writer.
-- **A host it started stops when it quits.** One it attached to keeps running.
+  `pnpm desktop` ran from (else `~`). Never two for one profile: the sessions
+  store has a single writer.
+- **A window per profile.** It starts on `LEMMA_PROFILE`'s
+  [profile](../../docs/configuration.md#profiles) (the default when unset;
+  showing a server, the server's host's own), and opens another in a window of
+  its own when a page's profile menu asks (`lemmaDesktop.openProfile(name)`)
+  or a link names one (`?profile=<name>`): on this machine, the profile's
+  running host, else one it starts, refusing a profile never made; showing a
+  server, through the server's host (`profiles.open`), at the server's name
+  and the profile's port, never through a loopback address, which may be a
+  tunnel carrying one port. A link to a profile it cannot open is said so, and
+  the first profile's window opens instead.
+  Another profile's window says whose it is in its title, and its browser pages keep their
+  sign-ins in the profile's own partition (`persist:lemma-browser-<name>`; the
+  default's is `persist:lemma-browser`).
+- **A host it started stops when it quits,** every profile's. One it attached to keeps running.
   On macOS, closing the last window leaves the app (and its host) running until
   you quit it. Before stopping its host, quitting asks the host what that cuts
   off (`cli.in-progress`: turns running, prompts queued) and, when there is
@@ -29,13 +42,14 @@ nix develop -c pnpm dev:desktop   # the window again while `pnpm dev` runs, as a
   stop` leaves it to the app.
 - **The CLI reaches it.** While it runs it writes `<home>/desktop.json` (its
   process, and the command that hands it a `lemma://` link), so `lemma open`
-  shows a page here rather than in a browser. It writes what it says of its own
+  shows a page here rather than in a browser, in the window of the profile the
+  command names (`lemma://threads/<id>?profile=<name>`). It writes what it says of its own
   running (a host it started that exited, a start that failed) to
   `<home>/logs/desktop.log` (`lemma logs --desktop`); the host's own log is
   `lemma logs`.
-- **Reload** (the button beside the connection dot) restarts a host the app
-  started, loading changed code (a turn it cuts off resumes), then reloads
-  each window at its address. Any other host keeps running and re-reads its
+- **Reload** (the button beside the connection dot) restarts the window's
+  profile's host when the app started it, loading changed code (a turn it cuts
+  off resumes), then reloads that profile's windows at their addresses. Any other host keeps running and re-reads its
   config and plugin files. Neither rebuilds the web app for `pnpm desktop` nor
   reloads the desktop's own main process.
 - **No title bar of its own.** The page's heads (`--head-height`, 48px) are
@@ -45,7 +59,7 @@ nix develop -c pnpm dev:desktop   # the window again while `pnpm dev` runs, as a
 - **Links open in the system browser.** Navigation stays within the host's
   origin.
 - **The browser view's pages are Chromium's** (`src/browser.ts`): a
-  `<webview>` each, in their own partition (`persist:lemma-browser`, so
+  `<webview>` each, in their own partition (the profile's, so
   sign-ins last), with no Node, no preload, and the sandbox, whatever the
   element asks for. A page may write to the clipboard and go fullscreen, and
   is refused the rest (reading the clipboard, location, notifications). A
@@ -64,7 +78,8 @@ nix develop -c pnpm dev:desktop   # the window again while `pnpm dev` runs, as a
   them (`@lemma/web/keys`).
 - **`lemma://` links open in the app.** `lemma://threads/<id>` shows that
   thread (any of the web app's [addresses](../web/README.md#addresses) works):
-  in the open window, without a reload, or in a new one. The app registers
+  in the open window, without a reload, or in a new one; `?profile=<name>`
+  shows it in that profile's window. The app registers
   itself as the scheme's handler when it starts. Run from source on macOS,
   that registers Electron itself: a link reaches the app while it runs, and
   with it closed opens Electron's default app instead.

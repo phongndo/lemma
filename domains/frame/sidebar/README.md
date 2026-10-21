@@ -4,8 +4,9 @@ Every thread down the side (in `SidebarRegion`): new threads left mid-prompt
 on top, then the pinned and the active ones in an order dragged into, and the
 archived folded away below. Its head has the toggle, and across from it the
 `SidebarActions` ([`@lemma/frame`](../contract/src/index.ts)), whose defaults
-it adds: Search, which opens the palette's thread search
-(`ActionIds.searchThreads`, while a plugin offers it), and New thread. Its foot
+it adds: the command palette (`ActionIds.palette`) and Search, which opens
+the palette's thread search (`ActionIds.searchThreads`), each while a plugin
+offers it, and New thread. Its foot
 has the `SidebarFooter`. Each thread is a `SidebarRowPart` and its menu the
 `ThreadActions` ([`@lemma/threads`](../../threads/contract/src/index.ts)).
 Adds to `ThreadWaits` the threads a host question waits in (`Interactions`,
@@ -22,6 +23,14 @@ asked from a turn): `Needs approval`, or `Needs input` for a value. Requires
   one when opened, and a thread with nothing sent and nothing written is not
   listed. A listed thread with a prompt unsent in it (not the one shown) is
   tinted and marked with a pen.
+- **Agents** (sessions a thread started with `delegate`, `SessionInfo.parent`)
+  are listed under the thread that started them, not on their own, while it is
+  there and neither is archived, and an agent's own agents under it, stepped
+  in, below the same thread: a line of how many, open while one works or
+  waits on the person, or it or one of them is shown, unless folded; each a
+  slim row of its picture (`AvatarPart`), its title, and its state, which
+  opens it. One archived apart, or whose thread is gone or archived, is a
+  thread of its own.
 - **Pinned threads** come first, in the order they were dragged into; a thread
   newly pinned, here or elsewhere (its menu, `mod+alt+p`), goes on top of them.
 - **Active threads** follow: new and unarchived ones on top, newest first,

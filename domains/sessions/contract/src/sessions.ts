@@ -276,9 +276,23 @@ export const SessionEvent = Schema.Struct({
 });
 export type SessionEvent = typeof SessionEvent.Type;
 
+/**
+ * The session that started this one, as an agent of its own (`tools.delegate`): its id, and the tool call that started
+ * it. Fixed when the session is made (`Sessions.create`, `Sessions.fork`), so what lists sessions (the sidebar, a
+ * thread's lineage) groups an agent under the thread it works for without reading either log.
+ */
+export const SessionParent = Schema.Struct({
+  sessionId: Schema.String,
+  /** The parent's call that started it; a call a script made is `<call>/<n>`. */
+  toolCallId: Schema.optional(Schema.String),
+});
+export type SessionParent = typeof SessionParent.Type;
+
 export const SessionInfo = Schema.Struct({
   id: Schema.String,
   cwd: Schema.String,
+  /** Present on an agent's session: the session that started it (see `SessionParent`). */
+  parent: Schema.optional(SessionParent),
   createdAt: Schema.Number,
   updatedAt: Schema.Number,
   title: Schema.optional(Schema.String),
@@ -388,8 +402,8 @@ export interface SessionMarks {
 export class Sessions extends Context.Service<
   Sessions,
   {
-    /** A new, empty session in `cwd`, the host's (`Paths.cwd`) when absent. */
-    readonly create: (options?: { readonly cwd?: string }) => Effect.Effect<SessionInfo, SessionError>;
+    /** A new, empty session in `cwd`, the host's (`Paths.cwd`) when absent; with `parent`, an agent of that session. */
+    readonly create: (options?: { readonly cwd?: string; readonly parent?: SessionParent }) => Effect.Effect<SessionInfo, SessionError>;
     /** Most recently updated first. */
     readonly list: (options?: { readonly cwd?: string }) => Effect.Effect<readonly SessionInfo[], SessionError>;
     readonly get: (sessionId: string) => Effect.Effect<SessionInfo, SessionError>;
@@ -424,10 +438,11 @@ export class Sessions extends Context.Service<
     /**
      * A new session in the same directory holding the branch that ends at `eventId`, as it reads: the same events,
      * ids, and times, numbered from 1, its leaf at `eventId`, filed as new (no marks). How a session goes on from a
-     * point without changing it: one that is damaged (`SessionInfo.damaged`), from its last event that reads. Fails
-     * `NotFound` for an event not in the session.
+     * point without changing it: one that is damaged (`SessionInfo.damaged`), from its last event that reads. With
+     * `parent`, an agent of that session, starting from what it holds (a fork of its finished turns). Fails `NotFound`
+     * for an event not in the session.
      */
-    readonly fork: (sessionId: string, eventId: string) => Effect.Effect<SessionInfo, SessionError>;
+    readonly fork: (sessionId: string, eventId: string, options?: { readonly parent?: SessionParent }) => Effect.Effect<SessionInfo, SessionError>;
     /**
      * Holds the session while the scope lasts, so it is not removed: work that
      * writes to it holds it from before it starts until it has stopped, as the
@@ -503,8 +518,8 @@ export const SessionChannels = {
     id: "sessions.create",
     access: "operate",
     title: "Create a session",
-    description: "A new, empty session in a directory (cwd), the host's when absent",
-    payload: optionalPayload({ cwd: Schema.optional(Schema.String) }),
+    description: "A new, empty session in a directory (cwd), the host's when absent; with parent, an agent of that session",
+    payload: optionalPayload({ cwd: Schema.optional(Schema.String), parent: Schema.optional(SessionParent) }),
     success: SessionInfo,
   }),
   /**
@@ -588,8 +603,9 @@ export const SessionChannels = {
     id: "sessions.fork",
     access: "operate",
     title: "Fork a session",
-    description: "A new session holding the branch that ends at an event (eventId), as it reads; how a damaged session goes on",
-    payload: Schema.Struct({ ...sessionField, eventId: Schema.String }),
+    description:
+      "A new session holding the branch that ends at an event (eventId), as it reads; how a damaged session goes on. With parent, an agent of that session",
+    payload: Schema.Struct({ ...sessionField, eventId: Schema.String, parent: Schema.optional(SessionParent) }),
     success: SessionInfo,
   }),
   /** `Sessions.search`: what was said in sessions. It reads sessions' logs, so a client asks once the query has settled. */
@@ -738,7 +754,11 @@ const follow = (
 export const serveSessions = (sessions: Context.Service.Shape<typeof Sessions>, events: Context.Service.Shape<typeof Events>): readonly Channel[] => [
   serveChannel(SessionChannels.list, ({ cwd }) => sessions.list(cwd === undefined ? undefined : { cwd })),
   serveChannel(SessionChannels.get, ({ sessionId }) => sessions.get(sessionId)),
-  serveChannel(SessionChannels.create, ({ cwd }) => sessions.create(cwd === undefined ? undefined : { cwd })),
+  serveChannel(SessionChannels.create, ({ cwd, parent }) =>
+    sessions.create(
+      cwd === undefined && parent === undefined ? undefined : { ...(cwd === undefined ? {} : { cwd }), ...(parent === undefined ? {} : { parent }) },
+    ),
+  ),
   serveChannel(SessionChannels.events, ({ sessionId, after }) => sessions.events(sessionId, after === undefined ? undefined : { after })),
   serveChannel(SessionChannels.log, ({ sessionId, after }) => follow(sessions, events, sessionId, after ?? 0)),
   serveChannel(SessionChannels.checkout, ({ sessionId, eventId }) => sessions.checkout(sessionId, eventId)),
@@ -753,7 +773,9 @@ export const serveSessions = (sessions: Context.Service.Shape<typeof Sessions>, 
     }),
   ),
   serveChannel(SessionChannels.relocate, ({ sessionId, cwd }) => sessions.relocate(sessionId, cwd)),
-  serveChannel(SessionChannels.fork, ({ sessionId, eventId }) => sessions.fork(sessionId, eventId)),
+  serveChannel(SessionChannels.fork, ({ sessionId, eventId, parent }) =>
+    parent === undefined ? sessions.fork(sessionId, eventId) : sessions.fork(sessionId, eventId, { parent }),
+  ),
   serveChannel(SessionChannels.search, ({ query, limit }) => sessions.search(query, limit === undefined ? undefined : { limit })),
   serveChannel(SessionChannels.records, ({ sessionId, filter }) => Effect.map(sessions.branch(sessionId), (branch) => recordsOf(trajectory(branch), filter))),
   serveChannel(SessionChannels.request, ({ sessionId, request, rebuilt }) =>

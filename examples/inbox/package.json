@@ -2,7 +2,7 @@
   "name": "@lemma/example-inbox",
   "version": "0.1.0",
   "private": true,
-  "description": "Inbox triage: new messages reach the model as context events, two tools read and file them, and a profile narrows the agent to them",
+  "description": "Inbox triage: new messages reach the model as context events, two tools read and file them, and a mode narrows the agent to them",
   "type": "module",
   "scripts": {
     "check": "tsrs --noEmit",
@@ -17,7 +17,7 @@
   },
   "devDependencies": {
     "@lemma/agent-loop": "workspace:*",
-    "@lemma/agent-profiles": "workspace:*",
+    "@lemma/agent-modes": "workspace:*",
     "@lemma/contracts": "workspace:*",
     "@lemma/llm": "workspace:*",
     "@lemma/sessions-files": "workspace:*",
@@ -29,7 +29,7 @@
   "lemma": {
     "host": "./inbox.ts",
     "resources": {
-      "profiles": "./profiles"
+      "modes": "./modes"
     }
   }
 }

@@ -33,7 +33,7 @@ export const TurnOptions = Schema.Struct({
   model: Schema.optional(ModelRef),
   thinking: Schema.optional(ThinkingLevel),
   /**
-   * Choices for plugins, by plugin id, that the turn is taken with (the thread's profile, for `agent.profiles`):
+   * Choices for plugins, by plugin id, that the turn is taken with (the thread's mode, for `agent.modes`):
    * logged with the turn (`turn-start`), so a turn resumed after a restart goes on with them and a request rebuilds
    * from the log, and handed to its prompt sections and `AgentRequestHook` (`plugins`). Each plugin checks its own.
    */
@@ -306,7 +306,7 @@ export const AgentInputHook = Hook.make<PromptInput, PromptDecision, AgentError>
 /**
  * Runs before every model call. Skills, project context, and prompt plugins contribute here. Its phases are `shape`
  * (where a handler naming no phase goes: it adds and changes sections and tools), `select` (after every `shape` handler:
- * it chooses among what they offered, as a thread's profile keeps the tools and sections it allows), and `fit` (after
+ * it chooses among what they offered, as a thread's mode keeps the tools and sections it allows), and `fit` (after
  * both, so it sees the request as it will be: compaction sizes it against the model's window).
  *
  * @composition a chain in phase order (`shape`, `select`, then `fit`): each handler changes the draft it hands `next` and sees

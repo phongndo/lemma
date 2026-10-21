@@ -573,3 +573,93 @@
     display: inline-flex;
   }
 }
+
+/* A thread's agents, under its card: a line of how many, opening to a slim row each. */
+.thread-agents {
+  display: flex;
+  flex-direction: column;
+  margin: 0 0 2px 14px;
+}
+
+.thread-agents-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  align-self: flex-start;
+  padding: 1px 6px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--text-3);
+  font: inherit;
+  font-size: calc(11.5px * var(--text-scale));
+  cursor: pointer;
+}
+
+.thread-agents-toggle:hover {
+  color: var(--text-2);
+}
+
+.thread-agents-chevron {
+  display: inline-flex;
+  transform: rotate(-90deg);
+  transition: transform 120ms ease;
+}
+
+.thread-agents-chevron .icon {
+  width: 12px;
+  height: 12px;
+}
+
+.thread-agents-toggle[aria-expanded="true"] .thread-agents-chevron {
+  transform: none;
+}
+
+.thread-agents-working {
+  color: var(--accent-text);
+}
+
+.thread-agents-rows {
+  display: flex;
+  flex-direction: column;
+  margin: 0;
+  padding: 0 0 0 8px;
+  border-left: 1px solid var(--border);
+  list-style: none;
+}
+
+.thread-agent {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-height: 26px;
+  /* An agent's own agents step in under it. */
+  padding: 0 8px 0 calc(8px + var(--agent-level, 0) * 14px);
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--text-2);
+  font: inherit;
+  font-size: calc(12.5px * var(--text-scale));
+  text-align: left;
+  cursor: pointer;
+}
+
+.thread-agent:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+
+.thread-agent.active {
+  background: var(--bg-active);
+  color: var(--text);
+}
+
+.thread-agent-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

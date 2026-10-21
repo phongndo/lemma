@@ -3,20 +3,25 @@ import type { Scope } from "effect";
 import { CliChannels, closest, columns, GLOBAL_FLAGS, inputJsonSchema, parseInput, renderGlobalFlags, renderHelp, usageLine } from "@lemma/cli";
 import type { CliCommandInfo, CommandSpec } from "@lemma/cli";
 import { callChannel } from "@lemma/client";
+import { shellWord } from "@lemma/contracts";
 import { readEnvironments } from "@lemma/contracts/discovery";
+import { DEFAULT_PROFILE, profileNameProblem, profileOf } from "@lemma/contracts/profiles";
+import { listProfiles } from "@lemma/profiles/local";
 import packageJson from "../package.json" with { type: "json" };
 import { hostCommands } from "./commands/host.ts";
 import { lifecycleCommands } from "./commands/lifecycle.ts";
+import { profileCommands } from "./commands/profiles.ts";
+import { releaseCommands } from "./commands/release.ts";
 import { setupCommands } from "./commands/setup.ts";
 import { CliError, ExitCode, usage } from "./command.ts";
 import type { Builtin, Connection, Failure, Globals, Io, Output, QuestionPolicy } from "./command.ts";
-import { connect, homeOf, otherProtocol, toCliError } from "./connect.ts";
+import { connect, otherProtocol, rootOf, toCliError } from "./connect.ts";
 import { groupHelp, hostedCommand, leadingWords, match } from "./hosted.ts";
 
 export { ExitCode } from "./command.ts";
 
 /** The `lemma` command's own commands, in the order `lemma help` lists their groups. */
-export const builtins: readonly Builtin[] = [...lifecycleCommands, ...hostCommands, ...setupCommands];
+export const builtins: readonly Builtin[] = [...lifecycleCommands, ...hostCommands, ...setupCommands, ...releaseCommands, ...profileCommands];
 
 export const VERSION: string = packageJson.version;
 
@@ -83,6 +88,7 @@ export const splitGlobals = (
       json: values.json === true || (values.text !== true && jsonByDefault(env)),
       quiet: values.quiet === true,
       env: values.env as string | undefined,
+      profile: values.profile as string | undefined,
       fields,
       questions: questions as QuestionPolicy | undefined,
       answers: values.answer as string[],
@@ -102,9 +108,6 @@ const project = (value: unknown, fields: readonly string[] | undefined): unknown
       : item;
   return Array.isArray(value) ? value.map(pick) : pick(value);
 };
-
-/** A word as a POSIX shell reads it back. */
-const shellWord = (word: string): string => (/^[\w@%+=:,./-]+$/.test(word) ? word : `'${word.replaceAll("'", "'\\''")}'`);
 
 const report = (io: Io, json: boolean, error: CliError): number => {
   if (json) {
@@ -132,8 +135,9 @@ const report = (io: Io, json: boolean, error: CliError): number => {
 const hostedSoon = (io: Io, globals: Globals): Effect.Effect<{ readonly name: string; readonly commands: readonly CliCommandInfo[] } | undefined> =>
   Effect.scoped(
     Effect.gen(function* () {
-      const connection = yield* connect(io, globals);
-      // One call, so over HTTP: no WebSocket to open, subscribe, and probe first. Nothing serving them lists none, as no host does.
+      // Without `--profile` on another machine: listing commands never starts a profile's host there. One call, so over
+      // HTTP: no WebSocket to open, subscribe, and probe first. Nothing serving them lists none, as no host does.
+      const connection = yield* connect(io, { env: globals.env });
       const commands = yield* callChannel(connection.rpc, CliChannels.commands, undefined);
       return { name: connection.target.name, commands };
     }),
@@ -158,7 +162,7 @@ const topHelp = (hosted: { readonly name: string; readonly commands: readonly Cl
   return [
     "Usage: lemma <command> [options]",
     "",
-    "Start and keep hosts, set them up, look inside them, and use what their plugins add. A command goes to the host --env names, else LEMMA_URL, LEMMA_ENV, the default environment (lemma env), else this machine's.",
+    "Start and keep hosts, set them up, look inside them, and use what their plugins add. A command goes to the host --env names, else LEMMA_URL, LEMMA_ENV, the default environment (lemma env), else this machine's; and to the profile --profile names there, else LEMMA_PROFILE's, else the default (lemma profile).",
     ...[...groups].flatMap(([group, commands]) => ["", group, listing(commands)]),
     "",
     hosted === undefined
@@ -250,9 +254,10 @@ const complete = (io: Io, globals: Globals, words: readonly string[]): Effect.Ef
     const before = words.slice(0, -1);
     const previous = before.at(-1);
     if (previous === "--env") {
-      const file = yield* readEnvironments(homeOf(io)).pipe(Effect.orElseSucceed(() => ({ environments: {} })));
+      const file = yield* readEnvironments(rootOf(io)).pipe(Effect.orElseSucceed(() => ({ environments: {} })));
       return ["local", ...Object.keys(file.environments)].filter((name) => name.startsWith(current));
     }
+    if (previous === "--profile") return (yield* listProfiles(rootOf(io))).map((profile) => profile.name).filter((name) => name.startsWith(current));
     const hosted = yield* hostedSoon(io, globals);
     const commands: readonly CommandSpec[] = [...builtins, ...(hosted?.commands ?? [])];
     const path = leadingWords(before);
@@ -275,24 +280,41 @@ const complete = (io: Io, globals: Globals, words: readonly string[]): Effect.Ef
 
 // ------------------------------------------------------------------ run
 
+/**
+ * `io` for the profile the command line names: `--profile` over `LEMMA_PROFILE`, which every command reads, as the host
+ * does (`@lemma/contracts/profiles`). A usage error when it is no profile's name.
+ */
+const withProfile = (io: Io, globals: Pick<Globals, "profile">): Io | CliError => {
+  const profile = globals.profile ?? profileOf(io.env);
+  const problem = profile === undefined || profile === DEFAULT_PROFILE ? undefined : profileNameProblem(profile);
+  if (problem !== undefined) return usage(`${globals.profile === undefined ? "LEMMA_PROFILE: " : "--profile: "}${problem}`);
+  return globals.profile === undefined ? io : { ...io, env: { ...io.env, LEMMA_PROFILE: globals.profile } };
+};
+
 /** Runs one command line and returns the exit code. */
-export async function run(argv: readonly string[], io: Io): Promise<number> {
+export async function run(argv: readonly string[], given: Io): Promise<number> {
   if (argv[0] === "__complete") {
     // The words as typed: a global flag among them is completed (`--env <name>`), not read. Those before the last pick the host.
     const words = argv.slice(1);
-    const split = splitGlobals(words.slice(0, -1), io.env);
+    const split = splitGlobals(words.slice(0, -1), given.env);
     const done = split instanceof CliError ? undefined : split;
-    const globals = done?.globals ?? (splitGlobals([], io.env) as Exclude<typeof split, CliError>).globals;
+    const globals = done?.globals ?? (splitGlobals([], given.env) as Exclude<typeof split, CliError>).globals;
     const line = [...(done?.rest ?? words.slice(0, -1)), words.at(-1) ?? ""];
+    const scoped = withProfile(given, globals);
+    // A profile no name can be is left out: completing words needs none.
+    const io = scoped instanceof CliError ? { ...given, env: { ...given.env, LEMMA_PROFILE: undefined } } : scoped;
     for (const candidate of await Effect.runPromise(complete(io, globals, line))) io.out(candidate);
     return ExitCode.ok;
   }
-  const split = splitGlobals(argv, io.env);
+  const split = splitGlobals(argv, given.env);
   // For an error splitGlobals gives before it decides: --json or --text as given (the later, when both are the error), else the environment.
   const asked = argv.filter((word) => word === "--json" || word === "--text").at(-1);
-  const wantsJson = asked === undefined ? jsonByDefault(io.env) : asked === "--json";
-  if (split instanceof CliError) return report(io, wantsJson, split);
+  const wantsJson = asked === undefined ? jsonByDefault(given.env) : asked === "--json";
+  if (split instanceof CliError) return report(given, wantsJson, split);
   const { globals, rest } = split;
+  const scoped = withProfile(given, globals);
+  if (scoped instanceof CliError) return report(given, globals.json, scoped);
+  const io = scoped;
   const words = leadingWords(rest);
   if (globals.version && words.length === 0) {
     io.out(globals.json ? JSON.stringify({ version: VERSION }) : VERSION);

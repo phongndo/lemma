@@ -1,0 +1,161 @@
+name: Nightly
+
+# Publishes the newest commit on main that passed Check as the next release in its line (docs/development.md#releases):
+# `v0.2.7` after `v0.2.6`, a GitHub prerelease, which the installer's nightly channel installs. Every platform's
+# archive is built on one runner, then installed and run on its own platform (scripts/dist-check.ts). The Promote
+# workflow makes a nightly the stable release. Daily, and by hand; a day with nothing new on main publishes nothing.
+on:
+  schedule:
+    - cron: "41 5 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: nightly
+  cancel-in-progress: false
+
+# Actions are pinned by commit, their version in the comment.
+jobs:
+  # The commit, its version, and the release before it; no version when there is nothing new to publish.
+  resolve:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      actions: read
+      contents: read
+    outputs:
+      sha: ${{ steps.resolve.outputs.sha }}
+      version: ${{ steps.resolve.outputs.version }}
+      previous: ${{ steps.resolve.outputs.previous }}
+    steps:
+      - id: resolve
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          # A push's run: a pull request's from a fork's own `main` names that branch too, and its commit is not main's.
+          sha=$(gh run list --workflow check.yml --branch main --event push --status success --limit 1 --json headSha --jq '.[0].headSha // empty')
+          [[ -n "$sha" ]] || { echo "::error::No commit on main has passed Check"; exit 1; }
+          on_main=$(gh api "repos/$GH_REPO/compare/$sha...main" --jq .status)
+          [[ "$on_main" == ahead || "$on_main" == identical ]] || { echo "::error::$sha passed Check but is not on main ($on_main)"; exit 1; }
+          previous=$(gh release list --exclude-drafts --limit 1 --json tagName --jq '.[0].tagName // empty')
+          if [[ -n "$previous" ]]; then
+            # A rerun of an older commit's Check can pass after a newer one's: only a commit after the last release is new.
+            status=$(gh api "repos/$GH_REPO/compare/$previous...$sha" --jq .status)
+            [[ "$status" == ahead ]] || { echo "::notice::Nothing on main that passed Check is newer than $previous"; exit 0; }
+          fi
+          line=$(gh api "repos/$GH_REPO/contents/apps/cli/package.json?ref=$sha" --jq .content | base64 -d | jq -r .version | cut -d. -f1,2)
+          [[ "$line" =~ ^[0-9]+\.[0-9]+$ ]] || { echo "::error::apps/cli/package.json has no version line"; exit 1; }
+          last=$(gh api --paginate "repos/$GH_REPO/git/matching-refs/tags/v$line." --jq '.[].ref' | sed -n "s|^refs/tags/v$line\.\([0-9][0-9]*\)$|\1|p" | sort -n | tail -n 1)
+          version="$line.$((${last:--1} + 1))"
+          { echo "sha=$sha"; echo "version=$version"; echo "previous=$previous"; } >> "$GITHUB_OUTPUT"
+          echo "::notice::Nightly $version from $sha"
+
+  # Every target's archive, in the development shell as Check builds its own.
+  build:
+    needs: resolve
+    if: needs.resolve.outputs.version != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.resolve.outputs.sha }}
+          persist-credentials: false
+      - uses: ./.github/actions/dev-shell
+      - run: nix develop -c node scripts/dist.ts --version "$VERSION" --target all
+        env:
+          VERSION: ${{ needs.resolve.outputs.version }}
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: lemma-archives
+          path: dist/
+          if-no-files-found: error
+          retention-days: 7
+
+  # Each archive installed and run on its platform, on plain Node.js (which runs the check, not Lemma): a user's machine
+  # has neither Nix nor the dev shell, and the archive brings its own Node.js.
+  verify:
+    name: verify (${{ matrix.target }})
+    needs: [resolve, build]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: darwin-arm64
+            os: macos-latest
+          - target: linux-arm64
+            os: ubuntu-24.04-arm
+          - target: linux-x64
+            os: ubuntu-latest
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.resolve.outputs.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: lemma-archives
+          path: dist
+      - run: node scripts/dist-check.ts "dist/lemma-v$VERSION-$TARGET.tar.gz"
+        env:
+          VERSION: ${{ needs.resolve.outputs.version }}
+          TARGET: ${{ matrix.target }}
+
+  # Each archive's build provenance, signed for this workflow (`gh attestation verify`, docs/installation.md); then a
+  # draft, published once its files are all there, so the channel never offers a release without them. Then nightlies
+  # older than a month that were not promoted go.
+  publish:
+    needs: [resolve, verify]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+      artifact-metadata: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.resolve.outputs.sha }}
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: lemma-archives
+          path: dist
+      - uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-path: dist/*.tar.gz
+      - shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: v${{ needs.resolve.outputs.version }}
+          SHA: ${{ needs.resolve.outputs.sha }}
+          PREVIOUS: ${{ needs.resolve.outputs.previous }}
+        run: |
+          set -euo pipefail
+          (cd dist && sha256sum --check ./*.sha256)
+          # A run that failed partway left its draft, which has no tag yet, so this run took the same version.
+          gh api --paginate "repos/$GH_REPO/releases" --jq ".[] | select(.draft and .tag_name == \"$TAG\") | .id" |
+            while read -r id; do gh api --method DELETE "repos/$GH_REPO/releases/$id"; done
+          notes=(--generate-notes)
+          if [[ -n "$PREVIOUS" ]]; then notes+=(--notes-start-tag "$PREVIOUS"); fi
+          gh release create "$TAG" --draft --prerelease --target "$SHA" --title "Lemma $TAG" "${notes[@]}"
+          gh release upload "$TAG" dist/*.tar.gz dist/*.sha256 scripts/install.sh
+          gh release edit "$TAG" --draft=false
+
+          cutoff=$(date -u -d '30 days ago' +%s)
+          gh release list --exclude-drafts --limit 1000 --json tagName,isPrerelease,publishedAt --jq '.[] | select(.isPrerelease) | "\(.tagName) \(.publishedAt)"' |
+            while read -r tag published; do
+              if [[ "$tag" != "$TAG" ]] && (($(date -u -d "$published" +%s) < cutoff)); then gh release delete "$tag" --cleanup-tag --yes; fi
+            done

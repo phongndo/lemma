@@ -78,7 +78,21 @@ Ctrl+C stops everything.
 ```sh
 nix develop -c pnpm dev            # host (restarting on edits), dev server, and window; prints a browser link too
 nix develop -c pnpm dev:desktop    # the window again, while `pnpm dev` runs
+nix develop -c pnpm lemma status   # the CLI from the checkout, on the host `pnpm dev` runs
 ```
+
+What runs from the checkout (`pnpm dev`, `dev:desktop`, `dev:web`, `desktop`,
+`start`, `lemma`) uses its own home, `~/.lemma-dev`, unless `LEMMA_HOME` names
+another, and `pnpm dev`'s host listens on port 7434: a Lemma you
+[installed](installation.md) runs beside it, on `~/.lemma` and port 7433, its
+sessions and settings out of a development build's reach. `pnpm dev:web` alone
+proxies to the host running on that home, else to 7434, unless
+`LEMMA_HOST_URL` names another. Log in to a provider
+there once. Every checkout shares `~/.lemma-dev`, which has one host at a
+time; another host from the checkout (`pnpm desktop`, `pnpm lemma serve`)
+beside an installed one needs a port of its own, which
+`~/.lemma-dev/config.jsonc` can give every one:
+`{ "plugins": { "transport.server": { "config": { "port": 7434 } } } }`.
 
 Browser checks (the web app's `ui:check`, the core's `browser:check`) run in
 the `browser` shell, which supplies pinned Chromium on Linux. On macOS, install
@@ -151,3 +165,58 @@ fails when a fault's focused test no longer fails with an assertion
 
 The web app's conventions are in [its AGENTS.md](../apps/web/AGENTS.md), and
 the core's checks and benchmarks in [its README](../packages/core/README.md#develop).
+
+## Releases
+
+A release is an archive for each platform with the `lemma` command, the host,
+the built web app, their production dependencies, and the Node.js they run on
+([installation](installation.md)). `nix develop -c pnpm dist` builds this
+platform's into `dist/` at the checkout's version (`scripts/dist.ts`;
+`--target all` builds every platform's, `--version` sets the version).
+`nix develop -c pnpm dist:check` installs it with `scripts/install.sh`, outside
+the checkout and with a `node` on PATH that fails, and runs it: the host and
+its plugins, the web app, a TypeScript plugin file, the file search, the CLI
+the agent is told of, and a turn on the scripted provider. CI's `dist` job
+runs both for Linux on x64.
+
+An archive says what it is in `release.json` (its version, the commit it was
+built from, and when), and carries the installer, which `lemma update` runs
+([versioning](versioning.md)). The archive keeps the workspace's layout, as
+Lemma runs its TypeScript sources: Node.js strips types only outside `node_modules`, and the host finds
+the web app and each bundled plugin by its path in the workspace. One machine
+builds every platform's, as pnpm installs another platform's prebuilt packages
+when told it (`--os`, `--cpu`, `--libc`); nothing compiles at install, so a
+dependency that must would fail that platform's check. `scripts/dist-config.ts`
+pins the Node.js an archive carries, by version and checksum; update them
+together.
+
+Every build is a release, and stable is the one marked latest:
+
+- **Nightly** (`.github/workflows/nightly.yml`), daily and by hand, takes the
+  newest commit on `main` whose Check run passed, unless the last release has
+  it already. It numbers it the next patch in the line `apps/cli/package.json`
+  names (`0.2.0` is the line `0.2`: `v0.2.0`, `v0.2.1`, …), builds every
+  platform's archive on one runner, installs and runs each on its platform,
+  and publishes them as a GitHub prerelease with the installer, its notes
+  listing the pull requests since the release before. Nightlies a month old
+  that were not promoted are deleted, with their tags.
+- **Promote** (`.github/workflows/promote.yml`), by hand, makes a nightly (the
+  newest, or the version you give) the stable release: it marks it latest and
+  not a prerelease, and rewrites its notes to cover everything since the last
+  stable release. Nothing is rebuilt. It refuses a release older than the
+  stable one unless asked to roll back: then that release is the stable one
+  again, and `lemma update` and Settings › About take stable users back to it.
+
+To ship a change: merge it, let a nightly carry it (or run the Nightly
+workflow), use that nightly yourself, then promote it:
+`gh workflow run promote.yml -f version=0.2.7`. To start a new line, set
+`apps/cli/package.json`'s version (`0.3.0`) in a pull request; the next
+nightly is `v0.3.0`. A run that fails publishes nothing and is safe to run
+again. A published release's files are never changed; a fix is the next
+nightly. When a stable release turns out bad and the fix is not ready, put the
+one before back: `gh workflow run promote.yml -f version=0.2.5 -f rollback=true`.
+
+The Nightly workflow attests each archive's build provenance before
+publishing it (`actions/attest`): a signed statement, kept by GitHub, that the
+archive was built by that workflow, in this repository, from the commit it
+names ([verifying](installation.md#verifying-a-release)).

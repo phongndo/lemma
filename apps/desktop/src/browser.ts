@@ -9,8 +9,12 @@ import { matchesKeys } from "@lemma/web/keys";
  * app.
  */
 
-/** Every page's partition: their cookies and storage, kept across restarts, apart from the app's. */
-export const BROWSER_PARTITION = "persist:lemma-browser";
+/**
+ * A profile's pages' partition: their cookies and storage, kept across restarts, apart from the app's and from every
+ * other profile's (`@lemma/contracts/profiles`). The default profile's is the one pages had before there were profiles.
+ */
+export const browserPartition = (profile: string | undefined): string =>
+  profile === undefined || profile === "default" ? "persist:lemma-browser" : `persist:lemma-browser-${profile}`;
 
 /** What a page may use without asking: the rest (the clipboard's contents, location, notifications) is refused. */
 const ALLOWED = new Set(["clipboard-sanitized-write", "fullscreen"]);
@@ -153,12 +157,12 @@ const guest = (host: WebContents, page: WebContents) => {
   page.on("context-menu", (_event, params) => contextMenu(host, page, params));
 };
 
-let sessionReady = false;
-/** The pages' partition asks for little: what a page may use is `ALLOWED`. */
-const readySession = () => {
-  if (sessionReady) return;
-  sessionReady = true;
-  const pages = session.fromPartition(BROWSER_PARTITION);
+const readySessions = new Set<string>();
+/** A partition's pages ask for little: what a page may use is `ALLOWED`. */
+const readySession = (partition: string) => {
+  if (readySessions.has(partition)) return;
+  readySessions.add(partition);
+  const pages = session.fromPartition(partition);
   pages.setPermissionRequestHandler((_contents, permission, callback) => callback(ALLOWED.has(permission)));
   pages.setPermissionCheckHandler((_contents, permission) => ALLOWED.has(permission));
 };
@@ -169,19 +173,19 @@ ipcMain.on("lemma:browser-keys", (event, bindings: unknown) => {
   forwarded.set(event.sender, bindings.filter((binding): binding is string => typeof binding === "string").slice(0, 500));
 });
 
-/** Lets `window`'s page hold browser pages: `webviewTag` is on in its preferences. */
-export const hostBrowser = (window: BrowserWindow) => {
-  readySession();
+/** Lets `window`'s page hold browser pages, in `partition` (`browserPartition`): `webviewTag` is on in its preferences. */
+export const hostBrowser = (window: BrowserWindow, partition: string) => {
+  readySession(partition);
   const host = window.webContents;
   host.on("will-attach-webview", (event, preferences, params) => {
-    if (params.partition !== BROWSER_PARTITION) return event.preventDefault();
+    if (params.partition !== partition) return event.preventDefault();
     // An address a page may not start at (a `blob:`, a `file:`) starts blank.
     if (!(params.src === undefined || params.src === "" || params.src === "about:blank" || web(params.src))) params.src = "about:blank";
     // What the page sees is set here, whatever its element asked for (`webpreferences` included).
     delete preferences.preload;
     delete preferences.enableBlinkFeatures;
     Object.assign(preferences, {
-      partition: BROWSER_PARTITION,
+      partition,
       nodeIntegration: false,
       nodeIntegrationInSubFrames: false,
       nodeIntegrationInWorker: false,

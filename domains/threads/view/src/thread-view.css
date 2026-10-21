@@ -15,16 +15,27 @@
   position: relative;
 }
 
-/* Beside the chat, another view of the thread, at the width its edge was dragged to. */
+/*
+ * Beside the chat, another view of the thread, leaving the chat its least: at the share of the page its edge was dragged
+ * to (`--pane-width`), and until then at 40% of it, no narrower than the trace's details need.
+ */
 .thread-inspector {
   flex: none;
-  min-width: 0;
-  max-width: calc(100% - 360px);
+  width: var(--pane-width, max(480px, 40%));
+  min-width: var(--pane-least);
+  max-width: calc(100% - var(--chat-least));
   min-height: 0;
   display: flex;
   flex-direction: column;
   position: relative;
   border-left: 1px solid var(--border);
+}
+
+/* To a whole pixel, as the page a view draws over it (the browser's) lies on whole pixels: its edge then meets the pane's. */
+@supports (width: round(1px, 1px)) {
+  .thread-inspector {
+    width: round(var(--pane-width, max(480px, 40%)), 1px);
+  }
 }
 
 /* Its left edge, with room either side of the hairline to take the pointer: over a page a view draws on the pane (the browser's, at 8). */
@@ -66,15 +77,15 @@
   scrollbar-width: none;
 }
 
-/* A view open in the pane: its icon, which is its × under the pointer, then its name. Pressing and dragging it moves it, not a text selection. */
+/* A view open in the pane: its icon and name, then its ×. Pressing and dragging it moves it, not a text selection. */
 .thread-inspector-tab {
   position: relative;
   flex: none;
   display: flex;
   align-items: center;
-  max-width: 160px;
+  max-width: 180px;
   height: 26px;
-  padding-left: 3px;
+  padding-right: 3px;
   border-radius: var(--radius-sm);
   color: var(--text-3);
   user-select: none;
@@ -96,6 +107,35 @@
   background: var(--bg-active);
 }
 
+/* Its icon and name: a click shows it, a press drags it. */
+.thread-inspector-open {
+  min-width: 0;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 4px 0 8px;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: calc(13px * var(--text-scale));
+}
+
+.thread-inspector-kind {
+  flex: none;
+  display: grid;
+  place-items: center;
+}
+
+.thread-inspector-label {
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Its ×, where a browser's is: on the tab shown, under the pointer, and with focus, its room kept so the tabs do not move. Unseen, it still takes focus. */
 .thread-inspector-close {
   flex: none;
   display: grid;
@@ -107,6 +147,7 @@
   border-radius: var(--radius-xs);
   background: transparent;
   color: inherit;
+  opacity: 0;
 }
 
 .thread-inspector-close .icon {
@@ -114,38 +155,14 @@
   height: 14px;
 }
 
+.thread-inspector-tab.shown .thread-inspector-close,
+.thread-inspector-tab:hover .thread-inspector-close,
+.thread-inspector-close:focus-visible {
+  opacity: 1;
+}
+
 .thread-inspector-close:hover {
   background: var(--bg-active);
-}
-
-.thread-inspector-close > .icon,
-.thread-inspector-tab:hover .thread-inspector-kind,
-.thread-inspector-close:focus-visible .thread-inspector-kind {
-  display: none;
-}
-
-.thread-inspector-tab:hover .thread-inspector-close > .icon,
-.thread-inspector-close:focus-visible > .icon {
-  display: block;
-}
-
-.thread-inspector-kind {
-  display: grid;
-  place-items: center;
-}
-
-.thread-inspector-open {
-  min-width: 0;
-  height: 100%;
-  padding: 0 10px 0 4px;
-  border: 0;
-  background: transparent;
-  color: inherit;
-  font: inherit;
-  font-size: calc(13px * var(--text-scale));
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
 }
 
 /* Its right-click menu opens from here; the trigger is never seen. */
@@ -169,31 +186,7 @@
   flex-direction: column;
 }
 
-/* With no tab, the views it can open, by letter too. */
-.thread-inspector-empty {
-  flex: 1;
-  min-height: 0;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 10px;
-  padding: 16px;
-}
-
-.thread-inspector-empty h2 {
-  font-size: calc(14px * var(--text-scale));
-  font-weight: 500;
-}
-
-.thread-inspector-choices {
-  width: min(260px, 100%);
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  outline: none;
-}
-
+/* A view's letter in a menu of views, which picks it while the menu is open. */
 .thread-inspector-key {
   margin-left: auto;
   padding-left: 10px;
@@ -428,7 +421,8 @@
     position: absolute;
     inset: 0;
     z-index: 7;
-    width: auto !important;
+    width: auto;
+    min-width: 0;
     max-width: none;
     border-left: 0;
     background: var(--bg);

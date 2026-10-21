@@ -123,6 +123,7 @@ export function fakeHost(options: { readonly configScope?: ConfigScope } = {}) {
   const home = mkdtempSync(join(tmpdir(), "lemma-llm-home-"));
   const paths = {
     home,
+    root: home,
     userConfig: join(home, "config.jsonc"),
     projectConfig: join(home, "project.jsonc"),
     cwd: home,

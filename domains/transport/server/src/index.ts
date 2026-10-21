@@ -91,7 +91,16 @@ export default definePlugin({
     );
     const url = `http://${clientHost(address.hostname)}:${address.port}`;
     // Before the composition is up, which waits on this setup: requests for channels and inspectors wait at the startup gate meanwhile.
-    yield* publishDiscovery(paths.home, { url, token, pid: process.pid, startedAt: Date.now() });
+    yield* publishDiscovery(paths.home, {
+      url,
+      token,
+      pid: process.pid,
+      startedAt: Date.now(),
+      cwd: paths.cwd,
+      host: config.host,
+      ...(control.process.startedBy === undefined ? {} : { startedBy: control.process.startedBy }),
+      ...(control.process.safe ? { safe: true } : {}),
+    });
     yield* events.publish(Notice, {
       level: "info",
       source: owner.id,

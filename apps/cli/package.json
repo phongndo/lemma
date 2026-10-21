@@ -1,6 +1,6 @@
 {
   "name": "@lemma/cli-app",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "description": "The lemma command: start and keep hosts, set them up, look inside them, and use what their plugins add",
   "bin": {
@@ -17,6 +17,7 @@
     "@lemma/client": "workspace:*",
     "@lemma/contracts": "workspace:*",
     "@lemma/host": "workspace:*",
+    "@lemma/profiles": "workspace:*",
     "effect": "4.0.5",
     "jsonc-parser": "3.3.1"
   },

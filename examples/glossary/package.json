@@ -2,7 +2,7 @@
   "name": "@lemma/example-glossary",
   "version": "0.1.0",
   "private": true,
-  "description": "The plugin docs/building.md builds: a tool, a view of what it keeps, and a profile that uses it",
+  "description": "The plugin docs/building.md builds: a tool, a view of what it keeps, and a mode that uses it",
   "type": "module",
   "scripts": {
     "check": "tsrs --noEmit",
@@ -17,7 +17,7 @@
   "devDependencies": {
     "@lemma/agent": "workspace:*",
     "@lemma/agent-loop": "workspace:*",
-    "@lemma/agent-profiles": "workspace:*",
+    "@lemma/agent-modes": "workspace:*",
     "@lemma/contracts": "workspace:*",
     "@lemma/llm": "workspace:*",
     "@lemma/sessions-files": "workspace:*",
@@ -30,7 +30,7 @@
     "host": "./glossary.ts",
     "web": "./glossary.web.js",
     "resources": {
-      "profiles": "./profiles"
+      "modes": "./modes"
     }
   }
 }

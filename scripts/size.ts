@@ -11,10 +11,16 @@ const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 /** Lines of `src` per runtime package, at most: TypeScript and JavaScript alike. */
 const BUDGET: Readonly<Record<string, number>> = {
   "packages/core": 5_600,
-  "packages/contracts": 2_600,
+  // Raised from 2,600 for profiles: which home a host runs for, and the port it keeps, are decided before any plugin
+  // runs (`@lemma/contracts/profiles`, `Paths.root` and `Paths.profile`), so they cannot be a plugin's. And for how every
+  // channel answers (channels.ts): a stream's elements sent a chunk at a time, and a request's errors made only when it
+  // fails, which no plugin could do for the others.
+  "packages/contracts": 2_700,
+  // Raised from 2,800 for profiles (a host refuses a profile never made, and keeps its port) and renamed plugins (a row
+  // under a former id moves to the plugin's as it is written): both are the host's own, before or beneath any plugin.
   // Its launch is JavaScript (start.mjs, launch.mjs: the compile cache, Effect's bundle, its Node.js flags), which
   // loads before the compile cache is on, and is counted with the rest.
-  "packages/host": 2_950,
+  "packages/host": 3_000,
   "packages/composition": 850,
   "packages/web": 2_000,
   "packages/client": 800,

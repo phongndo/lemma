@@ -23,7 +23,6 @@ import {
   formatStatus,
   formatWebHalves,
 } from "../format.ts";
-import { homeOf } from "../connect.ts";
 import { openWebPath } from "../open.ts";
 import { answering, hearing, hostEvents, noticeLine, questionHandler, toAnswer } from "../questions.ts";
 
@@ -504,7 +503,7 @@ const open = defineBuiltin({
       const path = args.path ?? "/";
       if (!path.startsWith("/")) return yield* usage(`An address of the web app starts with /, as /threads/<id> does, not "${path}"`);
       const url = appUrl(target.url, path, target.token);
-      if (!globals.json) openWebPath(io, homeOf(io), target, path);
+      if (!globals.json) openWebPath(io, target, path);
       return { json: { url }, text: url };
     }),
 });

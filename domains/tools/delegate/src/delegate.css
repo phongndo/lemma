@@ -1,0 +1,421 @@
+/* Agents: as rows in the chat and the thread card's lineage, stacked in groups and above the composer. */
+:root {
+  /* What each state's dot and words are drawn in. */
+  --agent-working: var(--accent-text);
+  --agent-waiting: var(--warn);
+  --agent-done: var(--ok);
+  --agent-failed: var(--err);
+  --agent-stopped: var(--text-3);
+}
+
+/* A picture with its state's dot at its corner. */
+.agent-avatar {
+  position: relative;
+  display: inline-flex;
+  flex: none;
+}
+
+.agent-avatar-blank {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border-radius: var(--radius-xs);
+  background: var(--bg-sunk);
+  color: var(--text-3);
+}
+
+.agent-dot {
+  position: absolute;
+  right: -2px;
+  bottom: -2px;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  border: 2px solid var(--bg);
+  background: var(--agent-stopped);
+}
+
+.agent-avatar[data-state="working"] .agent-dot,
+.agent-avatar[data-state="queued"] .agent-dot {
+  background: var(--agent-working);
+}
+
+.agent-avatar[data-state="waiting"] .agent-dot {
+  background: var(--agent-waiting);
+}
+
+.agent-avatar[data-state="done"] .agent-dot {
+  background: var(--agent-done);
+}
+
+.agent-avatar[data-state="failed"] .agent-dot {
+  background: var(--agent-failed);
+}
+
+/* A row: the picture, the name and state over a line of what it said, its time, a chevron; Stop beside it at work. */
+.agent-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+}
+
+.agent-open {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex: 1;
+  min-width: 0;
+  padding: 6px 8px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.agent-open:hover:not(:disabled) {
+  background: var(--bg-hover);
+}
+
+.agent-open:disabled {
+  cursor: default;
+}
+
+.agent-text {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;
+}
+
+.agent-line {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+}
+
+.agent-title {
+  overflow: hidden;
+  color: var(--text);
+  font-size: calc(13px * var(--text-scale));
+  font-weight: 500;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.agent-state {
+  flex: none;
+  color: var(--text-3);
+  font-size: calc(11.5px * var(--text-scale));
+}
+
+.agent-row[data-state="working"] .agent-state,
+.agent-row[data-state="queued"] .agent-state {
+  color: var(--agent-working);
+}
+
+.agent-row[data-state="waiting"] .agent-state {
+  color: var(--agent-waiting);
+}
+
+.agent-row[data-state="failed"] .agent-state,
+.agent-row[data-state="failed"] .agent-detail {
+  color: var(--agent-failed);
+}
+
+.agent-detail {
+  overflow: hidden;
+  color: var(--text-3);
+  font-size: calc(12px * var(--text-scale));
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.agent-time {
+  flex: none;
+  color: var(--text-3);
+  font-size: calc(12px * var(--text-scale));
+  font-variant-numeric: tabular-nums;
+}
+
+.agent-chevron {
+  display: inline-flex;
+  flex: none;
+  color: var(--text-3);
+}
+
+.agent-open:hover .agent-chevron {
+  color: var(--text);
+}
+
+.agent-stop {
+  flex: none;
+  opacity: 0;
+}
+
+.agent-row:hover .agent-stop,
+.agent-stop:focus-visible {
+  opacity: 1;
+}
+
+/* In the thread card: tighter, the card's own size. */
+.agent-row.compact .agent-open {
+  gap: 8px;
+  padding: 4px 8px;
+}
+
+.agent-row.compact .agent-title {
+  font-size: calc(12.5px * var(--text-scale));
+}
+
+.agent-row.compact .agent-detail,
+.agent-row.compact .agent-time {
+  font-size: calc(11.5px * var(--text-scale));
+}
+
+/* Several agents: their pictures stacked, how many and what they are doing, the time, opening to each. */
+.agent-group {
+  display: flex;
+  flex-direction: column;
+}
+
+.agent-group-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 8px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.agent-group-head:hover {
+  background: var(--bg-hover);
+}
+
+.agent-group-status {
+  color: var(--text-3);
+  font-size: calc(12px * var(--text-scale));
+}
+
+.agent-group-status.active {
+  color: var(--agent-working);
+}
+
+.agent-group-chevron {
+  display: inline-flex;
+  color: var(--text-3);
+  transition: transform 120ms ease;
+}
+
+.agent-group-head[aria-expanded="true"] .agent-group-chevron {
+  transform: rotate(180deg);
+}
+
+.agent-group-rows {
+  display: flex;
+  flex-direction: column;
+  margin-left: 18px;
+  padding-left: 8px;
+  border-left: 1px solid var(--border);
+}
+
+.agent-stack {
+  display: inline-flex;
+  align-items: center;
+  flex: none;
+}
+
+.agent-stack > * + * {
+  margin-left: -4px;
+}
+
+.agent-stack .avatar {
+  outline: 2px solid var(--bg);
+}
+
+.agent-stack-more {
+  margin-left: 4px;
+  color: var(--text-3);
+  font-size: calc(11px * var(--text-scale));
+}
+
+.agent-stack-button {
+  display: inline-flex;
+  padding: 0;
+  border: 0;
+  background: none;
+  cursor: pointer;
+}
+
+/* The thread card's lineage: its head, the parent, the agents at work, and the previous ones folded. */
+.lineage {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.lineage-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 28px;
+  padding: 0 4px 0 8px;
+  color: var(--text-2);
+  font-size: calc(12.5px * var(--text-scale));
+}
+
+.lineage-title {
+  font-weight: 500;
+}
+
+.lineage-count {
+  color: var(--agent-working);
+}
+
+.lineage-spacer {
+  flex: 1;
+}
+
+.lineage-parent {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 28px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--text-2);
+  font: inherit;
+  font-size: calc(12.5px * var(--text-scale));
+  text-align: left;
+  cursor: pointer;
+}
+
+.lineage-parent:hover:not(:disabled) {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+
+.lineage-parent-icon {
+  display: inline-flex;
+  color: var(--text-3);
+}
+
+.lineage-parent-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.lineage-parent-hint {
+  color: var(--text-3);
+  font-size: calc(11.5px * var(--text-scale));
+}
+
+.lineage-fold {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 28px;
+  padding: 0 8px;
+  border: 0;
+  background: none;
+  color: var(--text-3);
+  font: inherit;
+  font-size: calc(12px * var(--text-scale));
+  cursor: pointer;
+}
+
+.lineage-fold:hover {
+  color: var(--text-2);
+}
+
+.lineage-rule {
+  flex: 1;
+  height: 1px;
+  background: var(--border);
+}
+
+.lineage-chevron {
+  display: inline-flex;
+  transition: transform 120ms ease;
+}
+
+.lineage-fold[aria-expanded="true"] .lineage-chevron {
+  transform: rotate(180deg);
+}
+
+.lineage-more-rows {
+  align-self: flex-start;
+  margin: 2px 8px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--text-3);
+  font: inherit;
+  font-size: calc(11.5px * var(--text-scale));
+  cursor: pointer;
+}
+
+.lineage-more-rows:hover {
+  color: var(--text);
+}
+
+/* Above the composer: the agents at work, as a bubble. */
+.agents-notice {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--text-2);
+  font-size: calc(12.5px * var(--text-scale));
+}
+
+.agents-notice-text {
+  flex: 1;
+}
+
+/* An agent's thread's header: the thread it works for, then its own title. */
+.agent-crumb {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  max-width: 220px;
+  padding: 2px 6px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--text-3);
+  font: inherit;
+  font-size: calc(12.5px * var(--text-scale));
+  cursor: pointer;
+}
+
+.agent-crumb:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+
+.agent-crumb-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.agent-crumb-sep {
+  color: var(--text-3);
+}

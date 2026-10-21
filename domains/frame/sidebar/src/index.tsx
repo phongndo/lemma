@@ -9,7 +9,7 @@ import type { SessionInfo, SessionMarks } from "@lemma/sessions";
 import { withKeys } from "@lemma/web/keys";
 import { loadJson, recordOf, save } from "@lemma/web/storage";
 import { dragEdge } from "@lemma/web/drag";
-import { ActionIds, Actions, shownKeys } from "@lemma/actions";
+import { ActionIds, Actions, shownKeysOf } from "@lemma/actions";
 import { sessionTitle, ThreadActions, Threads, ThreadWaits, SidebarRowPart, SidebarRow, waitingOn } from "@lemma/threads";
 import { ActionMenu, Layout, SidebarActions, SidebarFooter, SidebarRegion } from "@lemma/frame";
 import type { LayoutService } from "@lemma/frame";
@@ -21,8 +21,10 @@ import type { SidebarRowProps, ThreadDraft, ThreadsService } from "@lemma/thread
 import type { SlotsService, WebPluginsService } from "@lemma/web";
 import {
   ArchiveIcon,
+  Avatar,
   CheckIcon,
   ChevronDownIcon,
+  CommandIcon,
   GitBranchIcon,
   PenSquareIcon,
   PinIcon,
@@ -45,6 +47,7 @@ import {
   dropVerb,
   dropped,
   flagsOf,
+  nestedAgents,
   runTime,
   sectionIn,
   sections,
@@ -52,7 +55,7 @@ import {
   stepFrom,
   transitioned,
 } from "./list.ts";
-import type { DropVerb, Flags, Marks, Section } from "./list.ts";
+import type { DropVerb, Flags, Marks, NestedAgent, Section } from "./list.ts";
 import styles from "./sidebar.css?inline";
 
 const MARKS_KEY = "lemma.frame.sidebar.marks";
@@ -336,6 +339,8 @@ interface Deps {
   readonly workspace: WorkspaceService;
   readonly now: () => number;
   readonly lists: () => ReturnType<typeof sections>;
+  /** Each thread's agents, and theirs, listed under it (`nestedAgents`). */
+  readonly agents: () => ReadonlyMap<string, readonly NestedAgent[]>;
   readonly unread: () => ReadonlySet<string>;
   readonly runningSince: (id: string) => number | undefined;
   /** What the folder `cwd` has checked out, once asked. */
@@ -414,6 +419,82 @@ const verbs: Readonly<Record<DropVerb, () => JSX.Element>> = {
     </>
   ),
 };
+
+/**
+ * The agents a thread started, under its card (`nestedAgents`): a line of how many, open while one works or waits on the
+ * person, or it or one of them is shown, unless the person folded it; each a slim row of its picture, its title (its
+ * name), and its state, which opens the agent's thread.
+ */
+function NestedAgents(props: { deps: Deps; parent: SessionInfo; onPick: () => void }) {
+  const { threads, slots } = props.deps;
+  const plugin = usePlugin();
+  const openAgent = plugin.action("open an agent's thread", (id: string) => threads.select(id));
+  const rows = () => props.deps.agents().get(props.parent.id) ?? [];
+  const agents = () => rows().map((row) => row.session);
+  const [chosen, setChosen] = createSignal<boolean>();
+  const waiting = (id: string) => waitingOn(slots.list(ThreadWaits), id);
+  const working = () => agents().filter((agent) => threads.running().includes(agent.id) || waiting(agent.id) !== undefined).length;
+  const near = () => threads.activeId() === props.parent.id || agents().some((agent) => agent.id === threads.activeId());
+  const open = () => chosen() ?? (working() > 0 || near());
+  return (
+    <Show when={agents().length > 0}>
+      <div class="thread-agents">
+        <button type="button" class="thread-agents-toggle" aria-expanded={open()} onClick={() => setChosen(!open())}>
+          <span class="thread-agents-chevron" aria-hidden="true">
+            <ChevronDownIcon />
+          </span>
+          <span>
+            {agents().length} {agents().length === 1 ? "agent" : "agents"}
+          </span>
+          <Show when={working() > 0}>
+            <span class="thread-agents-working">· {working()} working</span>
+          </Show>
+        </button>
+        <Show when={open()}>
+          <ul class="thread-agents-rows">
+            <For each={rows()}>
+              {({ session: agent, level }) => (
+                <li style={{ "--agent-level": level - 1 }}>
+                  <button
+                    type="button"
+                    class="thread-agent"
+                    classList={{ active: threads.activeId() === agent.id }}
+                    aria-current={threads.activeId() === agent.id ? "page" : undefined}
+                    data-session-row
+                    data-tip={sessionTitle(agent)}
+                    onPointerEnter={() => threads.preload(agent.id)}
+                    onClick={() => {
+                      openAgent(agent.id);
+                      props.onPick();
+                    }}
+                  >
+                    <Avatar seed={agent.id} size={16} />
+                    <span class="thread-agent-title">{sessionTitle(agent)}</span>
+                    <Status
+                      session={agent}
+                      active={threads.activeId() === agent.id}
+                      running={threads.running().includes(agent.id)}
+                      runningSince={props.deps.runningSince(agent.id)}
+                      unread={props.deps.unread().has(agent.id)}
+                      waiting={waiting(agent.id)}
+                      drafted={false}
+                      now={props.deps.now()}
+                      href={threads.href(agent.id)}
+                      select={() => void threads.select(agent.id)}
+                      rename={() => {}}
+                      actions={[]}
+                      project=""
+                    />
+                  </button>
+                </li>
+              )}
+            </For>
+          </ul>
+        </Show>
+      </div>
+    </Show>
+  );
+}
 
 /** An item of the list drag and drop arranges: a thread, which drags, or a section's head, which stays. */
 function SortableItem(props: { id: string; index: number; section: Section | undefined; head?: boolean; class?: string; children: JSX.Element }) {
@@ -570,10 +651,7 @@ function SortableThreads(props: {
 
 function Sidebar(props: { deps: Deps; onPick: () => void }) {
   const { threads, slots, webPlugins, layout } = props.deps;
-  const keysOf = (id: string) => {
-    const action = slots.get(Actions, id);
-    return action === undefined ? undefined : shownKeys(action, webPlugins.list());
-  };
+  const keysOf = (id: string) => shownKeysOf(slots, webPlugins.list(), id);
   const row = rowOf(props.deps, props.onPick);
   const [archivedOpen, setArchivedOpen] = createSignal(loadJson(ARCHIVED_OPEN_KEY, false, (value): value is boolean => typeof value === "boolean"));
   const toggleArchived = () => {
@@ -779,6 +857,7 @@ function Sidebar(props: { deps: Deps; onPick: () => void }) {
                         {(session) => (
                           <SortableItem id={id} index={index()} section={sectionsOf().get(id)}>
                             {row(session)}
+                            <NestedAgents deps={props.deps} parent={session()} onPick={props.onPick} />
                             <Show when={drag()?.id === id ? verb() : undefined}>{(word) => <span class="drop-verb">{verbs[word()]()}</span>}</Show>
                           </SortableItem>
                         )}
@@ -934,6 +1013,7 @@ export default defineWebPlugin({
       workspace,
       now,
       lists,
+      agents: createMemo(() => nestedAgents(threads.list())),
       unread,
       runningSince: (id) => since()[id],
       place,
@@ -958,12 +1038,30 @@ export default defineWebPlugin({
       },
     });
 
-    // Its head's buttons, across from the toggle: search, in the palette's thread search, and a new thread.
-    const keysOf = (id: string) => {
-      const action = slots.get(Actions, id);
-      return action === undefined ? undefined : shownKeys(action, webPlugins.list());
-    };
+    // Its head's buttons, across from the toggle: the palette, search in the palette's thread search, and a new thread.
+    const keysOf = (id: string) => shownKeysOf(slots, webPlugins.list(), id);
     const newThread = plugin.action("start a new thread", () => threads.newThread());
+    slots.add(SidebarActions, {
+      id: "sidebar.palette",
+      order: 5,
+      component: (props) => (
+        <Show when={slots.get(Actions, ActionIds.palette)}>
+          {(palette) => (
+            <button
+              class="icon-button"
+              aria-label="Command palette"
+              data-tip={withKeys("Command palette", keysOf(ActionIds.palette))}
+              onClick={() => {
+                palette().run();
+                props.onPick();
+              }}
+            >
+              <CommandIcon />
+            </button>
+          )}
+        </Show>
+      ),
+    });
     slots.add(SidebarActions, {
       id: "sidebar.search",
       order: 10,

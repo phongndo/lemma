@@ -1,15 +1,19 @@
 import type { ConnectionStatus, Host } from "@lemma/client";
 import { Effect, Schema } from "effect";
 import { HOST_API, HostError, configValues, describeConfig, providerOf, secret, wireCodec, withdrawnFrom } from "@lemma/contracts";
-import { AgentChannels, ProfileChannels } from "@lemma/agent";
+import { AgentChannels, ModeChannels } from "@lemma/agent";
 import { McpChannels } from "@lemma/mcp";
 import { CommandChannels } from "@lemma/commands";
 import { LlmChannels, emptyUsage } from "@lemma/llm";
 import { branchOf, cacheReport, recordsOf, requestOf, SessionChannels, searchLog, searchWords, trajectory } from "@lemma/sessions";
 import { HostChannels, matches, redactJson, redactTexts, selectSpans, TraceChannels } from "@lemma/devtools";
+import { ReleaseChannels } from "@lemma/release";
+import type { ReleaseStatus } from "@lemma/release";
 import { compositionHistory } from "@lemma/composition";
 import { FileChannels, WorkspaceChannels } from "@lemma/workspace";
 import { SkillChannels } from "@lemma/skills";
+import { ProfileChannels } from "@lemma/profiles";
+import type { ProfileInfo } from "@lemma/profiles";
 import { fuzzy } from "@lemma/web/match";
 import { createIntegrationsMock } from "./mock-integrations.ts";
 import type {
@@ -26,7 +30,7 @@ import type {
 } from "@lemma/contracts";
 import type { AgentActivity, AgentView, PromptContent, PromptOutcome, QueuedPrompt, TurnOptions } from "@lemma/agent";
 import type { AssistantMessage, LlmChange, ModelInfo, ProviderInfo, SignIn, StreamEvent, Usage } from "@lemma/llm";
-import type { EventData, SessionEvent, SessionInfo, SessionsChange } from "@lemma/sessions";
+import type { EventData, SessionEvent, SessionInfo, SessionParent, SessionsChange } from "@lemma/sessions";
 
 /**
  * Dev-only in-browser fake of the host (`?mock`, or `?mock=fresh` for a first
@@ -336,6 +340,28 @@ type Served =
       readonly handle: (payload: any, send: (element: any) => void, fail: (error: HostError) => void) => () => void;
     };
 
+/** An installed nightly with a newer one out, so Settings › About shows its badge and Update button. */
+const MOCK_RELEASE: ReleaseStatus = {
+  build: {
+    version: "0.2.7",
+    kind: "release",
+    root: "/home/you/.local/share/lemma/releases/lemma-v0.2.7-darwin-arm64.Xk3QpZ",
+    commit: "3f2a1b9c0d12e4f5a6b7c8d9e0f1a2b3c4d5e6f7",
+    built: "2026-10-20T05:41:00Z",
+    channel: "nightly",
+    link: "/home/you/.local/bin/lemma",
+    dataDir: "/home/you/.local/share/lemma",
+    node: "24.22.0",
+  },
+  updatable: true,
+  checks: true,
+  channel: "nightly",
+  newest: "0.2.9",
+  newer: true,
+  older: false,
+  checkedAt: 1_792_000_000_000,
+};
+
 const serveCall = <Payload, Success>(
   source: string,
   declaration: ChannelDeclaration<"call", Payload, Success>,
@@ -449,6 +475,12 @@ export const createMockHost = (): Host => {
   });
   // Mirrors of real config Schemas, so the Plugins page shows settings forms.
   const configs: Record<string, Schema.Codec<any, any>> = {
+    "release.updates": Schema.Struct({
+      check: Schema.Boolean.pipe(Schema.withDecodingDefaultType(Effect.sync(() => true))).annotate({
+        title: "Check for updates",
+        description: "Ask every few hours whether a newer release is out on this install's channel, and say so when one is.",
+      }),
+    }),
     "agent.loop": Schema.Struct({
       defaultModel: Schema.optional(Schema.String).annotate({
         description: "<provider>/<model> for turns that name none. Absent: the first available model.",
@@ -530,7 +562,8 @@ export const createMockHost = (): Host => {
     },
     "mcp.servers": { provides: ["lemma/Mcp"], requires: ["lemma/Paths"] },
     "context.compaction": { requires: ["lemma/Sessions", "lemma/Llm"] },
-    "agent.profiles": { requires: ["lemma/Paths"], contributes: [{ name: "lemma/agent.sections", items: 1, keys: ["profile"] }] },
+    "agent.modes": { requires: ["lemma/Paths"], contributes: [{ name: "lemma/agent.sections", items: 1, keys: ["profile"] }] },
+    "profiles.switcher": { requires: ["lemma/Paths"] },
     "context.project": { requires: ["lemma/Paths"], contributes: [{ name: "lemma/agent.sections", items: 1, keys: ["project-context"] }] },
     "workspace.local": { provides: ["lemma/Workspace"], requires: ["lemma/Paths"] },
     "workspace.search-fff": { contributes: [{ name: "lemma/file-searchers", items: 1, keys: ["workspace.search-fff"] }] },
@@ -729,8 +762,8 @@ export const createMockHost = (): Host => {
   const queueChanged = (sessionId: string) =>
     activity.publish({ type: "queue-changed", sessionId, queue: queueOf(sessionId).map((queued) => queued.prompt), revision: ++queueRevision });
 
-  const create = (cwd = CWD, at = Date.now()): SessionInfo => {
-    const info: SessionInfo = { id: id("s"), cwd, createdAt: at, updatedAt: at, lastSeq: 0 };
+  const create = (cwd = CWD, at = Date.now(), parent?: SessionParent): SessionInfo => {
+    const info: SessionInfo = { id: id("s"), cwd, ...(parent === undefined ? {} : { parent }), createdAt: at, updatedAt: at, lastSeq: 0 };
     sessions.set(info.id, { info, events: [] });
     return info;
   };
@@ -754,6 +787,229 @@ export const createMockHost = (): Host => {
       sessionChanges.publish({ type: "session-changed", info: session.info });
     }
     return event;
+  };
+
+  /**
+   * A thread that handed tasks to agents (`delegate`): two worked in the background, one of which has told it back, and
+   * one it waited on failed. Each agent is a thread of its own under it (`SessionInfo.parent`).
+   */
+  const seedAgents = (start: number) => {
+    let t = start;
+    const at = (ms = 400) => (t += ms);
+    const agent = (call: string, title: string, mode: string | undefined, prompt: string, answer: string, end: "done" | "error", after: number) => {
+      const child = create(CWD, start + after, { sessionId: parentId, toolCallId: call }).id;
+      let c = start + after;
+      const step = (ms = 300) => (c += ms);
+      append(child, { type: "title", title }, step(), true);
+      append(child, { type: "turn-start", turnId: "t1", ...(mode === undefined ? {} : { plugins: { "agent.modes": mode } }) }, step(), true);
+      append(
+        child,
+        {
+          type: "message",
+          turnId: "t1",
+          requestId: `tools.delegate/${call}`,
+          message: { role: "user", timestamp: c, content: [{ type: "text", text: prompt }] },
+        },
+        step(),
+        true,
+      );
+      append(child, { type: "step-start", turnId: "t1", stepId: "p1" }, step(), true);
+      append(
+        child,
+        {
+          type: "message",
+          turnId: "t1",
+          stepId: "p1",
+          timing: { startedAt: c, endedAt: step(5200) },
+          message: assistant(
+            end === "done" ? [{ type: "text", text: answer }] : [],
+            usage(6100, 420, 9000),
+            end === "done" ? "stop" : "error",
+            end === "done" ? undefined : answer,
+          ),
+        },
+        c,
+        true,
+      );
+      append(child, { type: "step-end", turnId: "t1", stepId: "p1" }, step(), true);
+      append(child, { type: "turn-end", turnId: "t1", reason: end, ...(end === "error" ? { error: answer } : {}) }, step(), true);
+      return child;
+    };
+    const parentId = create(CWD, start).id;
+    const mapped = agent(
+      "d1",
+      "Map callers of rebuildRequest",
+      "explore",
+      "Find every caller of rebuildRequest in domains/ and say how each uses its result.",
+      "Fourteen callers, all in domains/: the agent loop's request builder, the trajectory view, and twelve tests. Each reads the rebuilt request whole; none keeps it.",
+      "done",
+      1200,
+    );
+    const reviewed = agent(
+      "d2",
+      "Review the reader refactor",
+      "explore",
+      "Review the session log reader for what a refactor would break: its readers, its tests, and its format.",
+      "Nothing breaks if the reader keeps its signature: the format tests pin every projection.",
+      "done",
+      1400,
+    );
+    const renamed = agent(
+      "d3",
+      "Rename the reader's types",
+      undefined,
+      "Rename SessionReader to LogReader throughout.",
+      "The model provider refused the request: 429 rate limited",
+      "error",
+      1600,
+    );
+    append(parentId, { type: "title", title: "Refactor the session log reader" }, at(), true);
+    append(parentId, { type: "turn-start", turnId: "t1" }, at(), true);
+    append(
+      parentId,
+      {
+        type: "message",
+        turnId: "t1",
+        message: { role: "user", timestamp: t, content: [{ type: "text", text: "Refactor the session log reader and check every caller still works." }] },
+      },
+      at(),
+      true,
+    );
+    append(parentId, { type: "step-start", turnId: "t1", stepId: "p1" }, at(), true);
+    const calls = [
+      {
+        id: "d1",
+        child: mapped,
+        title: "Map callers of rebuildRequest",
+        prompt: "Find every caller of rebuildRequest in domains/ and say how each uses its result.",
+        background: true,
+      },
+      {
+        id: "d2",
+        child: reviewed,
+        title: "Review the reader refactor",
+        prompt: "Review the session log reader for what a refactor would break.",
+        background: true,
+      },
+      { id: "d3", child: renamed, title: "Rename the reader's types", prompt: "Rename SessionReader to LogReader throughout.", background: false },
+    ];
+    append(
+      parentId,
+      {
+        type: "message",
+        turnId: "t1",
+        stepId: "p1",
+        timing: { startedAt: t, endedAt: at(2100) },
+        message: assistant(
+          [
+            { type: "text", text: "I'll split this: two explorers in the background, and the rename waited on." },
+            ...calls.map((call) => ({
+              type: "toolCall" as const,
+              id: call.id,
+              name: "delegate",
+              arguments: { prompt: call.prompt, title: call.title, ...(call.background ? { mode: "explore", background: true } : {}) },
+            })),
+          ],
+          usage(5200, 260, 11000),
+          "toolUse",
+        ),
+      },
+      t,
+      true,
+    );
+    for (const call of calls) {
+      const failed = !call.background;
+      append(
+        parentId,
+        {
+          type: "message",
+          turnId: "t1",
+          stepId: "p1",
+          timing: { startedAt: t, endedAt: at(failed ? 7400 : 60) },
+          details: {
+            sessionId: call.child,
+            title: call.title,
+            ...(call.background ? { mode: "explore", background: true } : {}),
+            ended: failed ? "error" : "running",
+            ...(failed ? { preview: "The model provider refused the request: 429 rate limited" } : {}),
+          },
+          message: {
+            role: "toolResult",
+            toolCallId: call.id,
+            toolName: "delegate",
+            isError: failed,
+            timestamp: t,
+            content: [
+              {
+                type: "text",
+                text: failed
+                  ? `Agent "${call.title}" (session ${call.child}) ended: error.`
+                  : `Started agent "${call.title}" (session ${call.child}) in the background. You are told when it finishes: do not wait or poll for it.`,
+              },
+            ],
+          },
+        },
+        t,
+        true,
+      );
+    }
+    append(parentId, { type: "step-end", turnId: "t1", stepId: "p1", decision: { result: "continue", why: "the model asked for tools" } }, at(), true);
+    append(parentId, { type: "step-start", turnId: "t1", stepId: "p2" }, at(), true);
+    append(
+      parentId,
+      {
+        type: "message",
+        turnId: "t1",
+        stepId: "p2",
+        timing: { startedAt: t, endedAt: at(1600) },
+        message: assistant(
+          [{ type: "text", text: "The rename failed on a rate limit; the explorers are still at work, and I'll pick up when they report back." }],
+          usage(5600, 90, 16000),
+        ),
+      },
+      t,
+      true,
+    );
+    append(parentId, { type: "step-end", turnId: "t1", stepId: "p2" }, at(), true);
+    append(parentId, { type: "turn-end", turnId: "t1", reason: "done" }, at(), true);
+    // The explorer that finished, told back: its notice starts the next turn.
+    append(parentId, { type: "turn-start", turnId: "t2" }, at(9000), true);
+    append(
+      parentId,
+      {
+        type: "context",
+        turnId: "t2",
+        source: "tools.delegate",
+        requestId: "tools.delegate:d1",
+        display: "Map callers of rebuildRequest finished",
+        content: [
+          {
+            type: "text",
+            text: `<agent_result title="Map callers of rebuildRequest" session="${mapped}" ended="done">\nFourteen callers, all in domains/: the agent loop's request builder, the trajectory view, and twelve tests. Each reads the rebuilt request whole; none keeps it.\n</agent_result>`,
+          },
+        ],
+      },
+      at(),
+      true,
+    );
+    append(parentId, { type: "step-start", turnId: "t2", stepId: "p1" }, at(), true);
+    append(
+      parentId,
+      {
+        type: "message",
+        turnId: "t2",
+        stepId: "p1",
+        timing: { startedAt: t, endedAt: at(1900) },
+        message: assistant(
+          [{ type: "text", text: "The callers only read the rebuilt request, so the reader can change its internals freely." }],
+          usage(6200, 70, 18000),
+        ),
+      },
+      t,
+      true,
+    );
+    append(parentId, { type: "step-end", turnId: "t2", stepId: "p1" }, at(), true);
+    append(parentId, { type: "turn-end", turnId: "t2", reason: "done" }, at(), true);
   };
 
   // Seed history.
@@ -1005,6 +1261,8 @@ export const createMockHost = (): Host => {
     );
     append(s2, { type: "step-end", turnId: "t1", stepId: "p1" }, at(10), true);
     append(s2, { type: "turn-end", turnId: "t1", reason: "error", error: oauthError }, at(10), true);
+    // An hour before the first: the thread a check opens first is the newest, which runs commands.
+    seedAgents(t0 - 3600_000);
     create(CWD, t0 - 86400_000);
   }
 
@@ -1119,7 +1377,7 @@ export const createMockHost = (): Host => {
         },
         step.id,
       );
-    // As the agent does: the turn logs each plugin's choice for it (a thread's mode, `agent.profiles`).
+    // As the agent does: the turn logs each plugin's choice for it (a thread's mode, `agent.modes`).
     append(sessionId, { type: "turn-start", turnId, model: by.ref, ...(options?.plugins === undefined ? {} : { plugins: options.plugins }) });
     append(sessionId, { type: "message", turnId, message: { role: "user", content, timestamp: started }, ...(requestId === undefined ? {} : { requestId }) });
     running.add(sessionId);
@@ -1549,13 +1807,41 @@ export const createMockHost = (): Host => {
 
   /** What the bundled plugins serve, as they serve it (`serveSessions`, `serveAgent`, `serveLlm`, `serveWorkspace`, `serveFiles`, `serveCommands`). */
   const integrations = createIntegrationsMock();
+  let profiles: readonly ProfileInfo[] = [
+    { name: "default", default: true, current: true, running: true, port: 7433, avatar: { kind: "pattern", seed: "default" } },
+  ];
   const served: Served[] = [
-    // The bundled modes, as `agent.profiles` lists them for any directory.
-    serveCall("agent.profiles", ProfileChannels.list, async () => ({
-      profiles: [
+    // This machine's profiles: the default alone, as for anyone who has made none, until one is made here.
+    serveCall("profiles.switcher", ProfileChannels.list, async () => profiles),
+    serveCall("profiles.switcher", ProfileChannels.create, async ({ name }) => {
+      if (profiles.some((profile) => profile.name === name)) throw new HostError({ code: "Exists", message: `A profile "${name}" is there already` });
+      const made: ProfileInfo = { name, default: false, current: false, running: false, port: 7433 + profiles.length, avatar: { kind: "pattern", seed: name } };
+      profiles = [...profiles, made];
+      return made;
+    }),
+    serveCall("profiles.switcher", ProfileChannels.setAvatar, async ({ name, avatar }) => {
+      const profile = profiles.find((candidate) => candidate.name === name);
+      if (profile === undefined) throw new HostError({ code: "NotFound", subject: name, message: `No profile "${name}"` });
+      const changed: ProfileInfo = { ...profile, avatar: avatar.kind === "default" ? { kind: "pattern", seed: name } : avatar };
+      profiles = profiles.map((candidate) => (candidate.name === name ? changed : candidate));
+      return changed;
+    }),
+    serveCall("profiles.switcher", ProfileChannels.open, async ({ name }) => {
+      throw new HostError({ code: "NotStarted", subject: name, message: `The mock host starts no host for the profile "${name}"` });
+    }),
+    // The bundled modes, as `agent.modes` lists them for any directory.
+    serveCall("agent.modes", ModeChannels.list, async () => ({
+      modes: [
         {
           name: "creator",
           description: "Customize Lemma through conversation, writing plugins that add features or UI, and modes of your own",
+          use: ["thread" as const],
+          source: "bundled" as const,
+        },
+        {
+          name: "explore",
+          description: "Explore code and information and report what was found, changing nothing",
+          use: ["agent" as const],
           source: "bundled" as const,
         },
         { name: "work", description: "Work with code, files, and information, searching, editing, and running commands as needed", source: "bundled" as const },
@@ -1580,8 +1866,8 @@ export const createMockHost = (): Host => {
         .slice(0, limit ?? 20);
     }),
     serveCall("sessions.files", SessionChannels.get, async ({ sessionId }) => sessionOf(sessionId).info),
-    serveCall("sessions.files", SessionChannels.create, async ({ cwd }) => {
-      const info = create(cwd);
+    serveCall("sessions.files", SessionChannels.create, async ({ cwd, parent }) => {
+      const info = create(cwd, Date.now(), parent);
       kept.add(info.id);
       sessionChanges.publish({ type: "session-changed", info });
       return info;
@@ -1645,10 +1931,10 @@ export const createMockHost = (): Host => {
       return session.info;
     }),
     // The branch up to the event, copied into a new session in the same directory, as the host does.
-    serveCall("sessions.files", SessionChannels.fork, async ({ sessionId, eventId }) => {
+    serveCall("sessions.files", SessionChannels.fork, async ({ sessionId, eventId, parent }) => {
       const source = sessionOf(sessionId);
       if (!source.events.some((event) => event.id === eventId)) throw notFound(eventId);
-      const info = create(source.info.cwd);
+      const info = create(source.info.cwd, Date.now(), parent);
       const events = branchOf(source.events, eventId).map((event, index) => ({ ...event, seq: index + 1 }));
       const title = events.flatMap((event) => (event.data.type === "title" ? [event.data.title] : [])).at(-1);
       const forked = sessionOf(info.id);
@@ -2060,6 +2346,10 @@ export const createMockHost = (): Host => {
     ),
     serveCall("devtools.trace", TraceChannels.changes, async () => mockTrace.history.get()),
     serveCall("devtools.host", HostChannels.info, async () => ({ cwd: CWD, home: HOME, composition: compositionInfo(), runtime })),
+    serveCall("release.updates", ReleaseChannels.status, async () => MOCK_RELEASE),
+    serveCall("release.updates", ReleaseChannels.check, async () => ({ ...MOCK_RELEASE, checkedAt: Date.now() })),
+    // A mock cannot restart: it says the release is there already.
+    serveCall("release.updates", ReleaseChannels.update, async () => ({ version: MOCK_RELEASE.newest!, updated: false, restarting: false })),
     serveCall("devtools.host", HostChannels.plugins, async ({ ids }) =>
       (ids === undefined ? plugins : plugins.filter((plugin) => ids.includes(plugin.id))).map((plugin) => redactTexts(plugin) as PluginStatus),
     ),

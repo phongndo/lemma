@@ -16,8 +16,13 @@ const paths = resolvePaths({ env: process.env, cwd: process.cwd() });
 ```
 
 [Configuration](../../docs/configuration.md) describes the files the host
-reads, how project rows merge over user rows, project trust, and what happens
-to a plugin that cannot run. What runs is planned by
+reads, how project rows merge over user rows, project trust, profiles, and
+what happens to a plugin that cannot run. A host runs for one profile
+(`LEMMA_PROFILE`, refused at the start when it is no profile's name): its home
+is the profile's (`Paths.home`, under `Paths.root`), the port its
+`profile.json` keeps goes beneath the transport's row, and its tools'
+`LEMMA_HOME` and `LEMMA_PROFILE` name it, so a `lemma` an agent runs reaches
+this host. What runs is planned by
 [`@lemma/composition`](../composition/README.md), which the web app plans with
 too. The modules' doc comments give their contracts: `loadComposition` never
 fails and reports bad files as diagnostics; `patchConfig` and `updateConfig`
