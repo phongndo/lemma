@@ -8,7 +8,6 @@ import type { PromptOutcome, WhenBusy } from "@lemma/agent";
 import { Sessions } from "@lemma/sessions";
 import type { SessionEvent } from "@lemma/sessions";
 import compaction from "@lemma/context-compaction";
-import prune from "@lemma/context-prune";
 import { SimDisk } from "@lemma/testing";
 import { Checker } from "./checker.ts";
 import type { Outcome } from "./checker.ts";
@@ -289,14 +288,14 @@ export class World {
       calls: this.calls,
       count,
     });
-    // Half the runs change what the model sees of old tool results as they go (context-edit events), and run
-    // context.prune, from sources of their own so the rest of the run draws as it did.
-    const edits = this.sim.random.split("prune").chance(0.5);
+    // Half the runs change what the model sees of old tool results as they go (context-edit events), from sources of
+    // their own so the rest of the run draws as it did.
+    const edits = this.sim.random.split("edits").chance(0.5);
     return {
       agent: this.agent,
       plugins: [
         compaction,
-        ...(edits ? [prune, simEdits(this.sim.random.split(`edits ${generation}`))] : []),
+        ...(edits ? [simEdits(this.sim.random.split(`edits ${generation}`))] : []),
         model.plugin,
         simTools(this.sim.random.split(`tools ${generation}`), { faults: faults.tools, record: this.tools, count }).plugin,
         simHooks(this.sim.random.split(`hooks ${generation}`), faults.hooks, count),

@@ -115,12 +115,6 @@ export interface Tool<Input = any> {
    * own result, for the chat to show as this tool's calls show.
    */
   readonly display?: true;
-  /**
-   * `true`: running it again would not give its results back (the person's answers, another agent's work), so what the
-   * model sees of them is left whole: a plugin shortening old tool results to make room (`context.prune`) leaves them.
-   * A call a tool that runs others makes is part of that tool's result, which is shortened or not as that tool is.
-   */
-  readonly irreplaceable?: true;
   readonly execute: (input: Input, context: ToolContext) => Awaitable<ToolResult, unknown>;
 }
 
@@ -298,8 +292,6 @@ export interface ToolContribution {
   readonly namespace?: string;
   /** The tool's `display`. */
   readonly display?: true;
-  /** The tool's `irreplaceable`. */
-  readonly irreplaceable?: true;
 }
 
 /**

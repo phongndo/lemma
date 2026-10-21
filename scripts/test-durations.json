@@ -47,7 +47,6 @@
   "domains/context/compaction/tests/compaction.test.ts": 3.8,
   "domains/context/compaction/tests/meter.test.ts": 0,
   "domains/context/project/tests/project-context.test.ts": 0,
-  "domains/context/prune/tests/prune.test.ts": 0.5,
   "domains/credentials/file/tests/credentials.test.ts": 1.9,
   "domains/devtools/contract/tests/matches.test.ts": 0,
   "domains/devtools/trace/tests/model.test.ts": 0,

@@ -139,8 +139,6 @@ export default definePlugin({
       direct: true,
       // A call a host restart cut off asks again: asking twice does no harm, and a client keeps what was typed.
       replay: "safe",
-      // Asking again would not give the answers back.
-      irreplaceable: true,
       execute: (input, { sessionId, toolCallId }) => ask(input, sessionId, toolCallId),
     });
 
