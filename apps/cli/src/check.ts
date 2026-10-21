@@ -20,7 +20,8 @@ import type { Failure, Io, Output } from "./command.ts";
  * them; then the host stops and the home is removed. It is the check an author outside this repository runs first.
  */
 
-const cliMain = fileURLToPath(new URL("./main.ts", import.meta.url));
+// From this file's folder, which is the bundle's too (`dist/lemma.mjs`): the sources' entry either way.
+const cliMain = fileURLToPath(new URL("../src/main.ts", import.meta.url));
 /**
  * How long a host has to start; to stop once asked (`lemma: stopped`), past its own limit; and then to exit, which it
  * does at once unless something its plugin started keeps it running.

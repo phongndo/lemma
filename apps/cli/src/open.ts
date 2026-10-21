@@ -1,6 +1,7 @@
 import { spawn } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { appUrl, DEEP_LINK_SCHEME } from "@lemma/contracts";
 import type { Io, Target } from "./command.ts";
 
@@ -10,6 +11,12 @@ import type { Io, Target } from "./command.ts";
  * browser here when there is one (a display, not over SSH), else printed on a
  * line of its own so it copies whole into a browser anywhere.
  */
+
+/**
+ * The built web app the host serves by default: a checkout's, which `pnpm start` builds. Found from this file's
+ * folder, which is the bundle's too (`dist/lemma.mjs`), so the bundle finds it where the sources do.
+ */
+export const webIndex = fileURLToPath(new URL("../../web/dist/index.html", import.meta.url));
 
 /**
  * Opens a page elsewhere (a sign-in) when this machine has a browser, after

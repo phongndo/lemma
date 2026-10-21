@@ -47,8 +47,8 @@ export const optIn: ReadonlySet<string> = new Set(["context.prune"]);
 /** The web app build the transport serves when no `staticDir` is configured. */
 export const webDist = fileURLToPath(new URL("../../../apps/web/dist", import.meta.url));
 
-/** How the agent runs this checkout's `lemma` CLI from its shell; `node` is on PATH wherever the host runs. */
-export const cliCommand = `node --conditions=lemma-source ${fileURLToPath(new URL("../../../apps/cli/src/main.ts", import.meta.url))}`;
+/** How the agent runs this checkout's `lemma` CLI from its shell (its bundle when built, see apps/cli); `node` is on PATH wherever the host runs. */
+export const cliCommand = `node --conditions=lemma-source ${fileURLToPath(new URL("../../../apps/cli/bin/lemma.js", import.meta.url))}`;
 
 /**
  * Everything a fresh install runs. What the host provides itself (`Paths`,
