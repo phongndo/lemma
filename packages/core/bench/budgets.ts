@@ -73,6 +73,15 @@ export const budgets = {
   "Harness / 10000 entries / ms per step": 3,
   "Harness / 10000 entries / heap MB": 64,
   "Harness / step time 10k vs 1k entries": 1.5,
+  // The session store's long session (domains/sessions/files/bench/store.ts, 2026-10-21, same machine): 10,018 events,
+  // 22.5 MB. A host holds 2,220 bytes an event (0.99x the file; 2,520 before requests shared their contributions, and
+  // holding each line's text as well would be about twice that). Search with no match 25 ms and a listing without the
+  // index 14 ms, reading events from their heads (75 and 42 ms parsing every line); trajectory 12-14 ms (about 50 ms
+  // when every request's tool specs were stringified). Advisory, as timings and the heap are.
+  sessionHeapPerEventBytes: 2_700,
+  sessionSearchMissMs: 50,
+  sessionListUnindexedMs: 30,
+  sessionTrajectoryMs: 30,
 } as const;
 
 const measurements: Record<string, Measurement> = {};

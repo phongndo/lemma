@@ -233,6 +233,12 @@ one seed fixes a run. `LEMMA_SIM_RUNS` (default 100),
 `LEMMA_SIM_SEED`, and `LEMMA_SIM_PATH` (printed by a failure) control it; a
 failing seed becomes a regression test. It also counts the situations runs reach
 (torn tails, failed appends kept and dropped, sessions read again after an
-unload, removals undone by a crash) and
+unload, removals undone by a crash, a long line listed before a file's last) and
 fails if one is never reached, so the generator cannot quietly stop covering
 them.
+
+`pnpm sessions:bench` (`bench/store.ts`) measures appends on the real disk, a
+listing with and without the index, and a long session an agent might leave
+(10,000 events, tool output up to 50 KB): opening it, the heap it holds an
+event, its trajectory, a search that matches nothing in it, and listing it
+without the index. Its budgets are in `packages/core/bench/budgets.ts`.

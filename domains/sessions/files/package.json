@@ -10,7 +10,7 @@
   "scripts": {
     "check": "tsrs --noEmit",
     "test": "vitest run",
-    "bench": "node bench/append.ts"
+    "bench": "node --expose-gc bench/store.ts"
   },
   "dependencies": {
     "@lemma/contracts": "workspace:*",
