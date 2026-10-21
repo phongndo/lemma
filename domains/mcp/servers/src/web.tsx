@@ -1,12 +1,13 @@
-import { For, Index, Show, createMemo, createSignal } from "solid-js";
+import { For, Index, Match, Show, Switch, createEffect, createMemo, createSignal, onCleanup } from "solid-js";
 import type { JSX } from "solid-js";
 import { IntegrationKinds } from "@lemma/integrations";
 import { PromptCommands } from "@lemma/threads";
 import type { IntegrationAddProps, IntegrationDetailProps, IntegrationItem, IntegrationStatus } from "@lemma/integrations";
+import { browserPlace } from "@lemma/llm/web";
 import { McpChannels } from "@lemma/mcp";
-import type { Exposure, McpServerChange, McpServerConfig, McpServerStatus, McpState, McpToolInfo } from "@lemma/mcp";
+import type { Exposure, McpAuthStatus, McpServerChange, McpServerConfig, McpServerStatus, McpState, McpToolInfo } from "@lemma/mcp";
 import { Client, Notify, Slots, defineWebPlugin, usePlugin } from "@lemma/web";
-import { AlertIcon, ChevronDownIcon, CopyButton, HammerIcon, PlusIcon, RefreshIcon, Segmented, Toggle, XIcon } from "@lemma/look";
+import { AlertIcon, ChevronDownIcon, CopyButton, ExternalIcon, HammerIcon, PlusIcon, RefreshIcon, Segmented, Spinner, Toggle, XIcon } from "@lemma/look";
 import { draftOf, entryOf, parsePasted, isImageAddress } from "./form.ts";
 import type { Rows, ServerDraft } from "./form.ts";
 import styles from "./mcp.css?inline";
@@ -43,13 +44,14 @@ const count = (n: number, one: string) => `${n} ${one}${n === 1 ? "" : "s"}`;
 
 const statusOf = (server: McpServerStatus): IntegrationStatus => {
   const reached = server.tools.filter((tool) => tool.exposure !== "hidden").length;
+  if (server.auth?.state === "signing-in") return { tone: "busy", text: "Signing in…" };
   switch (server.state) {
     case "connected":
       return { tone: "ok", text: `Connected · ${count(reached, "tool")}` };
     case "connecting":
       return { tone: "busy", text: "Connecting…" };
     case "failed":
-      return { tone: "error", text: "Failed" };
+      return { tone: "error", text: server.retryIn === undefined ? "Failed" : "Failed · retrying" };
     // Its tools wait on the person: as much trouble as a failure, and counted with them.
     case "needs-sign-in":
       return { tone: "error", text: "Needs sign-in" };
@@ -64,6 +66,156 @@ interface Actions {
   readonly configure: (server: string, change: McpServerChange) => Promise<void>;
   /** Writes the server's whole entry, or removes it. */
   readonly put: (server: string, entry: McpServerConfig | null) => Promise<void>;
+  readonly signIn: (server: string) => Promise<{ readonly url: string }>;
+  readonly finishSignIn: (server: string, address: string) => Promise<void>;
+  readonly cancelSignIn: (server: string) => Promise<void>;
+  readonly signOut: (server: string) => Promise<void>;
+}
+
+/**
+ * "in 40s", "in 4m": how long until `inMs` from when the host said it has passed, counted on this page's own clock from
+ * when it arrived, since the host's may differ; a clock that ticks each second while it shows.
+ */
+function Countdown(props: { inMs: number }) {
+  const plugin = usePlugin();
+  const [now, setNow] = createSignal(Date.now());
+  onCleanup(plugin.every(1000, () => setNow(Date.now())));
+  const at = createMemo(() => Date.now() + props.inMs);
+  const seconds = () => Math.max(0, Math.ceil((at() - now()) / 1000));
+  return <>{seconds() === 0 ? "now" : seconds() < 90 ? `in ${seconds()}s` : `in ${Math.round(seconds() / 60)}m`}</>;
+}
+
+/**
+ * For a browser that cannot reach Lemma (on another device than the host): the address it lands on after approving
+ * finishes the sign-in. Open from the start when this page itself came from another machine.
+ */
+function PasteAddress(props: { server: string; actions: Actions }) {
+  const plugin = usePlugin();
+  const [value, setValue] = createSignal("");
+  const [error, setError] = createSignal<string>();
+  const [sending, setSending] = createSignal(false);
+  // Its failure (an address from another sign-in, say) shows under the field.
+  const submit = plugin.action("finish sign-in", async () => {
+    if (value().trim() === "") return;
+    setSending(true);
+    setError(undefined);
+    try {
+      await props.actions.finishSignIn(props.server, value().trim());
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setSending(false);
+    }
+  });
+  return (
+    <details class="mcp-paste" open={browserPlace(location.hostname) === "elsewhere"}>
+      <summary>Browser on another device?</summary>
+      <p class="integration-hint">
+        After you approve, the browser may land on a page that doesn't load. That's expected: copy the page's address from the address bar and paste it here.
+      </p>
+      <form
+        class="mcp-paste-form"
+        onSubmit={(event) => {
+          event.preventDefault();
+          submit();
+        }}
+      >
+        <input
+          class="field"
+          type="text"
+          autocomplete="off"
+          spellcheck={false}
+          aria-label="The address the browser landed on"
+          placeholder="http://localhost:…/callback?code=…"
+          value={value()}
+          onInput={(event) => setValue(event.currentTarget.value)}
+        />
+        <button type="submit" class="button small" disabled={sending() || value().trim() === ""}>
+          {sending() ? "Signing in…" : "Continue"}
+        </button>
+      </form>
+      <Show when={error()}>{(message) => <p class="integration-error">{message()}</p>}</Show>
+    </details>
+  );
+}
+
+/**
+ * Signing in to a remote server that asks: a button while it has no sign-in, the page to approve on (here, or in a
+ * browser anywhere, with the address it lands on pasted back) while one waits, and signing out once it has one.
+ */
+function SignInSection(props: { server: string; auth: McpAuthStatus; actions: Actions }) {
+  const plugin = usePlugin();
+  const signIn = plugin.action("sign in", () => props.actions.signIn(props.server));
+  return (
+    <section class="integration-section mcp-sign-in">
+      <h3>Sign-in</h3>
+      <Switch>
+        <Match when={props.auth.state === "signing-in"}>
+          <Show
+            when={props.auth.url}
+            fallback={
+              <p class="mcp-waiting" role="status">
+                <Spinner />
+                <span>Finding where to sign in…</span>
+              </p>
+            }
+          >
+            {(url) => (
+              <>
+                <p class="mcp-sign-in-lead">Open this page in a browser and approve access. Lemma finishes signing in on its own.</p>
+                <div class="mcp-target">
+                  <code class="integration-code" title={url()}>
+                    {url()}
+                  </code>
+                  <CopyButton text={url()} label="Copy link" />
+                </div>
+                <div class="integration-actions">
+                  <a class="button small button-primary" href={url()} target="_blank" rel="noopener noreferrer">
+                    Open in browser <ExternalIcon />
+                  </a>
+                  <button type="button" class="button small" onClick={plugin.action("cancel sign-in", () => props.actions.cancelSignIn(props.server))}>
+                    Cancel
+                  </button>
+                </div>
+                <p class="mcp-waiting" role="status">
+                  <Spinner />
+                  <span>Waiting for you to approve in the browser</span>
+                </p>
+                <PasteAddress server={props.server} actions={props.actions} />
+              </>
+            )}
+          </Show>
+        </Match>
+        <Match when={props.auth.state === "signed-in"}>
+          <p class="mcp-sign-in-lead">Signed in. Lemma renews the sign-in on its own while the server allows it.</p>
+          <div class="integration-actions">
+            <button type="button" class="button small" onClick={signIn}>
+              Sign in again
+            </button>
+            <button type="button" class="button small" onClick={plugin.action("sign out", () => props.actions.signOut(props.server))}>
+              Sign out
+            </button>
+          </div>
+        </Match>
+        <Match when={props.auth.state === "signed-out"}>
+          <p class="mcp-sign-in-lead">{props.server} asks you to sign in before Lemma can use its tools.</p>
+          <div class="integration-actions">
+            <button type="button" class="button small button-primary" onClick={signIn}>
+              Sign in
+            </button>
+          </div>
+        </Match>
+      </Switch>
+      <Show when={props.auth.error}>
+        {(error) => (
+          <div class="callout callout-warn mcp-error">
+            <AlertIcon />
+            <span>{error()}</span>
+          </div>
+        )}
+      </Show>
+    </section>
+  );
 }
 
 /**
@@ -226,7 +378,9 @@ function ServerForm(props: {
                 spellcheck={false}
                 onInput={(event) => update({ url: event.currentTarget.value })}
               />
-              <span class="integration-hint">Streamable HTTP. A server that needs signing in takes a token in a header.</span>
+              <span class="integration-hint">
+                Streamable HTTP. A server that asks you to sign in offers a Sign in button once added; one that takes a token instead takes it in a header.
+              </span>
             </label>
             <RowsEditor
               label="Headers"
@@ -442,7 +596,11 @@ function ServerDetail(props: IntegrationDetailProps & { actions: Actions }) {
                 <Show when={server().server?.version}>{(version) => <code class="integration-version">v{version()}</code>}</Show>
               </h2>
               <span class="muted small">
-                {STATES[server().state]}
+                {server().auth?.state === "signing-in" ? "Signing in…" : STATES[server().state]}
+                <Show when={server().retryIn !== undefined}>
+                  {" "}
+                  · retrying <Countdown inMs={server().retryIn!} />
+                </Show>
                 <Show when={server().state === "connected"}> · {count(reached(), "tool")}</Show>
                 <Show when={server().server?.title ?? server().server?.name}>{(title) => <> · {title()}</>}</Show>
               </span>
@@ -481,6 +639,7 @@ function ServerDetail(props: IntegrationDetailProps & { actions: Actions }) {
               <pre>{server().stderr}</pre>
             </details>
           </Show>
+          <Show when={server().enabled && server().auth}>{(auth) => <SignInSection server={server().name} auth={auth()} actions={props.actions} />}</Show>
 
           <section class="integration-section">
             <h3>Connection</h3>
@@ -597,6 +756,11 @@ export default defineWebPlugin({
       reconnect: (server) => reported(`Reconnecting ${server}`, () => client.channel.call(McpChannels.reconnect, { server })),
       configure: (server, change) => reported(`Changing ${server}`, () => client.channel.call(McpChannels.configure, { server, change })),
       put: (server, entry) => client.channel.call(McpChannels.put, { server, entry }),
+      signIn: (server) => reported(`Signing in to ${server}`, () => client.channel.call(McpChannels.signIn, { server })),
+      // Its failure (a wrong address) is the paste field's to show.
+      finishSignIn: (server, address) => client.channel.call(McpChannels.finishSignIn, { server, address }),
+      cancelSignIn: (server) => reported(`Stopping the sign-in to ${server}`, () => client.channel.call(McpChannels.cancelSignIn, { server })),
+      signOut: (server) => reported(`Signing out of ${server}`, () => client.channel.call(McpChannels.signOut, { server })),
     };
     const items = createMemo((): readonly IntegrationItem[] =>
       (state()?.servers ?? []).map((server) => ({
@@ -633,6 +797,17 @@ export default defineWebPlugin({
     // the composer's to report, so it calls the host directly rather than through `actions`, which report too.
     const reconnect = (server: string) => client.channel.call(McpChannels.reconnect, { server });
     const configure = (server: string, change: McpServerChange) => client.channel.call(McpChannels.configure, { server, change });
+    // The message `/mcp login` leaves with the page to open, by server: gone once that sign-in is.
+    const signInToasts = new Map<string, number>();
+    createEffect(() => {
+      // Read first, whether any message waits or not, so a later change runs this again.
+      const servers = state()?.servers ?? [];
+      for (const [name, id] of signInToasts) {
+        if (servers.find((server) => server.name === name)?.auth?.state === "signing-in") continue;
+        notify.dismiss(id);
+        signInToasts.delete(name);
+      }
+    });
     const named = (name: string | undefined) => {
       const server = state()?.servers.find((candidate) => candidate.name === name);
       if (server === undefined) throw new Error(name === undefined ? "Name a server" : `No MCP server “${name}”`);
@@ -674,6 +849,33 @@ export default defineWebPlugin({
           description: "Close a server's connection and connect again",
           args: [servers((server) => server.enabled)],
           run: ({ args }) => reconnect(named(args[0]).name),
+        },
+        {
+          name: "login",
+          aliases: ["sign-in"],
+          description: "Sign in to a remote server that asks",
+          args: [servers((server) => server.auth !== undefined)],
+          run: async ({ args }) => {
+            const { name } = named(args[0]);
+            const { url } = await client.channel.call(McpChannels.signIn, { server: name });
+            const previous = signInToasts.get(name);
+            if (previous !== undefined) notify.dismiss(previous);
+            signInToasts.set(
+              name,
+              notify.toast({
+                level: "info",
+                message: `Approve Lemma's access to ${name} in the browser; Lemma finishes on its own. A browser on another device lands on a page that doesn't load: paste its address in Settings › Integrations › ${name}.`,
+                links: [{ url, label: "Open the sign-in page" }],
+              }),
+            );
+          },
+        },
+        {
+          name: "logout",
+          aliases: ["sign-out"],
+          description: "Forget the sign-in to a server",
+          args: [servers((server) => server.auth?.state === "signed-in")],
+          run: ({ args }) => client.channel.call(McpChannels.signOut, { server: named(args[0]).name }),
         },
         {
           name: "enable",

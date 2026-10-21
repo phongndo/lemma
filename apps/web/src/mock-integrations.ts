@@ -35,6 +35,18 @@ const SERVERS: readonly McpServerStatus[] = [
     entry: { url: "https://docs.example.com/mcp", headers: { Authorization: "Bearer ${DOCS_TOKEN}" } },
     error: "${DOCS_TOKEN} is not set in the host's environment",
   }),
+  server({
+    name: "tracker",
+    state: "needs-sign-in",
+    transport: "http",
+    target: "https://tracker.example.com/mcp",
+    entry: { url: "https://tracker.example.com/mcp" },
+    auth: { state: "signed-out" },
+  }),
+];
+
+const TRACKER_TOOLS: McpServerStatus["tools"] = [
+  { name: "list_issues", tool: "mcp__tracker__list_issues", exposure: "codemode", description: "List the issues assigned to you" },
 ];
 
 const targetOf = (entry: McpServerConfig) => entry.url ?? [entry.command ?? "", ...(entry.args ?? [])].join(" ").trim();
@@ -45,6 +57,10 @@ export const createIntegrationsMock = () => {
   const mcpState = (): McpState => ({ file: "~/.lemma/mcp.json", servers });
   const mcpChanged = () => {
     for (const listener of mcpListeners) listener(mcpState());
+  };
+  const update = (name: string, fields: Partial<McpServerStatus>) => {
+    servers = servers.map((status) => (status.name === name ? { ...status, ...fields } : status));
+    mcpChanged();
   };
   return {
     mcpState,
@@ -65,6 +81,15 @@ export const createIntegrationsMock = () => {
       );
       mcpChanged();
     },
+    // Signing in: the page is an example's, and a paste of any address signs in.
+    signIn: (name: string) => {
+      const url = `https://tracker.example.com/authorize?client_id=lemma&state=${name}`;
+      update(name, { auth: { state: "signing-in", url } });
+      return { url };
+    },
+    finishSignIn: (name: string) => update(name, { state: "connected", auth: { state: "signed-in" }, tools: TRACKER_TOOLS }),
+    cancelSignIn: (name: string) => update(name, { auth: { state: "signed-out" } }),
+    signOut: (name: string) => update(name, { state: "needs-sign-in", auth: { state: "signed-out" }, tools: [] }),
     putServer: (name: string, entry: McpServerConfig | null) => {
       if (entry === null) servers = servers.filter((status) => status.name !== name);
       else {

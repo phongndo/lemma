@@ -107,3 +107,36 @@
   flex: 1;
   min-width: 0;
 }
+
+.mcp-sign-in-lead {
+  margin: 0;
+}
+
+.mcp-waiting {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  color: var(--text-2);
+  font-size: calc(12px * var(--text-scale));
+}
+
+.mcp-paste summary {
+  color: var(--text-2);
+  cursor: pointer;
+  font-size: calc(12px * var(--text-scale));
+}
+
+.mcp-paste > p {
+  margin: 6px 0;
+}
+
+.mcp-paste-form {
+  display: flex;
+  gap: 8px;
+}
+
+.mcp-paste-form .field {
+  flex: 1;
+  min-width: 0;
+}

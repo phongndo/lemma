@@ -2,7 +2,7 @@ import type { ConnectionStatus, Host } from "@lemma/client";
 import { Effect, Schema } from "effect";
 import { HOST_API, HostError, configValues, describeConfig, providerOf, secret, wireCodec, withdrawnFrom } from "@lemma/contracts";
 import { AgentChannels, ModeChannels } from "@lemma/agent";
-import { McpChannels } from "@lemma/mcp";
+import { McpChannels, summarize } from "@lemma/mcp";
 import { CommandChannels } from "@lemma/commands";
 import { LlmChannels, emptyUsage } from "@lemma/llm";
 import { branchOf, cacheReport, recordsOf, requestOf, SessionChannels, searchLog, searchWords, trajectory } from "@lemma/sessions";
@@ -2365,6 +2365,11 @@ export const createMockHost = (): Host => {
     serveCall("mcp.servers", McpChannels.reconnect, async () => {}),
     serveCall("mcp.servers", McpChannels.configure, async ({ server, change }) => integrations.configureServer(server, change)),
     serveCall("mcp.servers", McpChannels.put, async ({ server, entry }) => integrations.putServer(server, entry)),
+    serveCall("mcp.servers", McpChannels.list, async () => summarize(integrations.mcpState())),
+    serveCall("mcp.servers", McpChannels.signIn, async ({ server }) => integrations.signIn(server)),
+    serveCall("mcp.servers", McpChannels.finishSignIn, async ({ server }) => integrations.finishSignIn(server)),
+    serveCall("mcp.servers", McpChannels.cancelSignIn, async ({ server }) => integrations.cancelSignIn(server)),
+    serveCall("mcp.servers", McpChannels.signOut, async ({ server }) => integrations.signOut(server)),
   ];
   const channels = new Map(served.map((channel) => [channel.declaration.id, channel]));
   const infoOf = ({ declaration: { id, title, description, access }, kind, source }: Served): ChannelInfo => ({
