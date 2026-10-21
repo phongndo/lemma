@@ -17,10 +17,10 @@ import {
   ThreadStart,
   Views,
 } from "@lemma/threads";
-import { Actions } from "@lemma/actions";
+import { Actions, shownKeysOf } from "@lemma/actions";
 import { Layout } from "@lemma/frame";
 import { NewThreadRoute, ThreadRoute } from "@lemma/sessions";
-import { Client, Notify, Pages, Router, Slots, defineWebPlugin, Contained, Each, First } from "@lemma/web";
+import { Client, Notify, Pages, Router, Slots, WebPlugins, defineWebPlugin, Contained, Each, First } from "@lemma/web";
 import { Workspace } from "@lemma/workspace/web";
 import type { Action } from "@lemma/actions";
 import type { SlotItem } from "@lemma/web";
@@ -29,15 +29,20 @@ import { ArchiveIcon, CopyIcon, LogIcon, PenSquareIcon, PencilIcon, PinIcon, Sid
 import { copyAndTell } from "@lemma/web/clipboard";
 import { CostRow } from "./card.tsx";
 import { createInspector } from "./inspector.tsx";
+import { shareOf } from "./pane.ts";
 import styles from "./thread-view.css?inline";
 
-const WIDTH_KEY = "lemma.threads.view.inspector-width";
+/** The inspection pane's share of the page, once its edge is dragged; before, its width is its stylesheet's. */
+const SHARE_KEY = "lemma.threads.view.pane-share";
+/**
+ * Where its width in px was kept before it was a share. Not carried over: one width dragged for one view (a page) made
+ * the pane open as wide over every thread and view, empty ones too, which a share and its first width replace.
+ */
+const OLD_WIDTH_KEY = "lemma.threads.view.inspector-width";
 /** Whether the thread card is kept open, in this browser: open until closed. */
 const CARD_KEY = "lemma.threads.view.card";
-/** The inspection pane's width (px) when none is kept, and the least it and the chat beside it take. */
-const WIDTH = 480;
-const MIN_WIDTH = 280;
-const MIN_CHAT = 360;
+/** In the desktop app (`window.lemmaDesktop`), which, unlike a browser, leaves ⌘T to the page. */
+const DESKTOP = "lemmaDesktop" in window;
 
 /**
  * The page for one thread (and for a new one): its header, its first view
@@ -46,22 +51,32 @@ const MIN_CHAT = 360;
  * views (the trace, a browser, any other plugin's), as many of each as are
  * wanted: it provides `Pane`. Views are siblings over the same log. An address
  * naming a view (`/threads/<id>/trajectory`) opens it in the thread's pane. The
- * pane opens from the keyboard (⌘I), the header, and the palette, and is
- * resized by its edge.
+ * pane opens from the keyboard (⌘I; ⌘T for a new tab), the header, and the
+ * palette, and is resized by its edge, to a share of the page.
  */
 export default defineWebPlugin({
   id: "threads.view",
   styles,
   routes: [NewThreadRoute, ThreadRoute],
-  requires: { client: Client, threads: Threads, workspace: Workspace, slots: Slots, layout: Layout, notify: Notify, router: Router },
+  requires: {
+    client: Client,
+    threads: Threads,
+    workspace: Workspace,
+    slots: Slots,
+    layout: Layout,
+    notify: Notify,
+    router: Router,
+    webPlugins: WebPlugins,
+  },
   provides: { pane: Pane },
-  setup: ({ client, threads, workspace, slots, layout, notify, router }) => {
+  setup: ({ client, threads, workspace, slots, layout, notify, router, webPlugins }) => {
     const views = () => slots.list(Views);
     /** The header's title is being edited in place. */
     const [renaming, setRenaming] = createSignal(false);
     /** The view filling the page: the first. */
     const main = () => views()[0];
-    const inspector = createInspector({ threads, slots, router, focusChat: () => slots.get(Actions, ThreadsActionIds.focusComposer)?.run() });
+    const keysOf = (id: string) => shownKeysOf(slots, webPlugins.list(), id);
+    const inspector = createInspector({ threads, slots, router, keysOf, focusChat: () => slots.get(Actions, ThreadsActionIds.focusComposer)?.run() });
     /** The thread card (`ThreadCard`) is kept open, over an open thread's chat: until closed, and remembered. */
     const [cardOpen, setCardOpen] = createSignal(load(CARD_KEY) !== "0");
     const toggleCard = () => {
@@ -70,6 +85,10 @@ export default defineWebPlugin({
     };
     /** An open thread with something sent: what the card is of (a new one has its start line instead). */
     const started = () => threads.activeId() !== undefined && !threads.blank();
+    /** Thread pages drawn: the pane's keys work only where it is, not over Settings, say. */
+    const [drawn, setDrawn] = createSignal(0);
+    /** The pane can open here: a thread's page is drawn, with views for its tabs. */
+    const paneShown = () => drawn() > 0 && threads.active() !== undefined && inspector.views().length > 0;
     /** The address names a thread the host does not have. */
     const unknown = () => {
       const named = router.matchOf(ThreadRoute)?.params.id;
@@ -183,7 +202,8 @@ export default defineWebPlugin({
       confirm: () => "Delete for good?",
       run: (session) => void threads.remove(session.id),
     });
-    // The inspection pane opens and closes from the keyboard and the header's button, at the tab it last showed.
+    // The inspection pane opens and closes from the keyboard and the header's button, at the tab it last showed; with
+    // none, they offer the views.
     add(
       {
         id: "thread.card",
@@ -203,15 +223,29 @@ export default defineWebPlugin({
         category: "View",
         keys: "mod+i",
         whileTyping: true,
-        when: () => threads.active() !== undefined && inspector.views().length > 0,
+        when: paneShown,
         run: () => inspector.toggle(),
+      },
+      {
+        // ⌘T, as a browser opens a tab: the pane's menu of views, a letter picking one (B, the browser). Only in the
+        // desktop app: a browser keeps ⌘T for its own tabs, and the page never hears it.
+        id: "thread.inspect-new-tab",
+        order: 12,
+        title: "New tab in the inspection pane…",
+        detail: "A view to open beside the chat: the trace, a browser, a page",
+        category: "View",
+        ...(DESKTOP ? { keys: "mod+t" } : {}),
+        whileTyping: true,
+        inPages: true,
+        when: paneShown,
+        run: () => inspector.offer(),
       },
       {
         id: "thread.inspect-maximize",
         order: 12,
         title: "Maximize or restore inspection pane",
         category: "View",
-        when: inspector.open,
+        when: () => drawn() > 0 && inspector.open(),
         run: () => inspector.maximize(),
       },
       {
@@ -325,13 +359,7 @@ export default defineWebPlugin({
     ));
 
     // The inspection pane's switch, last, beside where it opens; while it is open, its own head has the switch.
-    header("thread.inspect", 30, "end", () => (
-      <Show when={threads.activeId() !== undefined && inspector.views().length > 0 && !inspector.open()}>
-        <button class="icon-button inspect-toggle" aria-label="Open inspection pane" data-tip="Inspection pane" onClick={() => inspector.toggle()}>
-          <SidebarIcon />
-        </button>
-      </Show>
-    ));
+    header("thread.inspect", 30, "end", () => <inspector.Switch />);
     // The thread card's switch. The thread's actions are its row's menu in the sidebar (a right-click), and the palette's.
     header("thread.card", 15, "end", () => (
       <Show when={started()}>
@@ -352,10 +380,18 @@ export default defineWebPlugin({
     /** The card's groups, in the order their first rows come. */
     const cardGroups = createMemo(() => [...new Set(slots.list(ThreadCard).map((row) => row.group ?? row.id))]);
 
-    /** The inspection pane's width, kept across reloads; the page narrows it to leave the chat room. */
-    const [width, setWidth] = createSignal(Number(load(WIDTH_KEY)) || WIDTH);
+    /** The inspection pane's share of the page once its edge is dragged, kept across reloads; the page narrows it to leave the chat room. */
+    save(OLD_WIDTH_KEY, undefined);
+    const kept = Number(load(SHARE_KEY));
+    const [share, setShare] = createSignal<number | undefined>(kept > 0 && kept < 1 ? kept : undefined);
+    const resetShare = () => {
+      setShare(undefined);
+      save(SHARE_KEY, undefined);
+    };
 
     function Main() {
+      setDrawn((count) => count + 1);
+      onCleanup(() => setDrawn((count) => count - 1));
       let chat!: HTMLElement;
       let page!: HTMLElement;
       // The composer lies over the view's bottom: its height, for the view to pad its end by and scroll under it.
@@ -372,17 +408,18 @@ export default defineWebPlugin({
       createEffect(() => {
         if (!inspector.open() || inspector.maximized()) setResizing(false);
       });
-      /** Its edge's drag sets its width from the pointer, leaving the chat its least. */
+      /** Its edge's drag sets its share from the pointer, leaving the chat its least. */
       // The drag ends however the pointer is let go: released, cancelled, or the edge gone (the pane closed mid-drag).
       const resize = (event: PointerEvent) => {
         const started = dragEdge(event, {
           move: (moved) => {
             const bounds = page.getBoundingClientRect();
-            setWidth(Math.round(Math.max(MIN_WIDTH, Math.min(bounds.width - MIN_CHAT, bounds.right - moved.clientX))));
+            const next = shareOf(bounds.right - moved.clientX, bounds.width);
+            if (next !== undefined) setShare(next);
           },
           end: () => {
             setResizing(false);
-            save(WIDTH_KEY, String(width()));
+            save(SHARE_KEY, share()?.toString());
           },
         });
         if (started) setResizing(true);
@@ -438,7 +475,7 @@ export default defineWebPlugin({
             </Show>
           </section>
           <Show when={unknown() === undefined && inspector.open()}>
-            <inspector.Pane width={width()} resize={resize} />
+            <inspector.Pane share={share()} resize={resize} reset={resetShare} />
           </Show>
         </main>
       );

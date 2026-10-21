@@ -237,7 +237,7 @@ export interface ThreadView {
   readonly component: Component<ThreadViewProps>;
   /** The composer shows over its bottom: it pads its end by `--composer-height` (the composer's height, set on the page) to scroll under it. */
   readonly composer?: boolean;
-  /** The letter that opens it from the pane's + menu and its empty pane (`b` for the browser). */
+  /** The letter that picks it in the menus that open a tab of the pane: its +, and its switch while it has none (`b` for the browser). */
   readonly letter?: string;
   /** A tab's name while it has one of its own (a page's title); its `title` otherwise. */
   readonly label?: (tab: string) => string | undefined;

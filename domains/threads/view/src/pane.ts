@@ -119,9 +119,26 @@ export const moved = (state: PaneState, id: string, index: number, shows: Shows 
   return { ...state, tabs: state.tabs.map((tab) => (tab === moving || shows(tab) ? shown[next++]! : tab)) };
 };
 
-/** Closed, no longer filling the page; or open at the tab shown last, else the first that shows, else empty. */
+/**
+ * Closed, no longer filling the page; or open at the tab shown last, else the first that shows. With no tab that
+ * shows it stays closed: a pane is never open empty.
+ */
 export const toggled = (state: PaneState, shows: Shows = all): PaneState => {
   if (state.open) return { ...state, open: false, maximized: undefined };
-  const last = state.tabs.find((tab) => tab.id === state.active && shows(tab));
-  return { ...state, open: true, active: (last ?? state.tabs.find(shows))?.id };
+  const at = state.tabs.find((tab) => tab.id === state.active && shows(tab)) ?? state.tabs.find(shows);
+  return at === undefined ? state : { ...state, open: true, active: at.id };
+};
+
+/** The least the pane and the chat beside it take, in px: the pane hands them to its stylesheet (`--pane-least`, `--chat-least`). */
+export const LEAST = { pane: 280, chat: 360 } as const;
+
+/**
+ * The pane's share of the page (`total` px wide) at `width` px, kept between its least and what leaves the chat its
+ * least: a share, so the pane keeps its proportion as the window or the sidebar beside it changes. Undefined for a page
+ * with no width (out of sight), which has no share to give.
+ */
+export const shareOf = (width: number, total: number, least: { readonly pane: number; readonly chat: number } = LEAST): number | undefined => {
+  if (total <= 0) return undefined;
+  const most = Math.max(least.pane, total - least.chat);
+  return Math.round((Math.max(least.pane, Math.min(most, width)) / total) * 1000) / 1000;
 };

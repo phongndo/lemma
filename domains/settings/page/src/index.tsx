@@ -1,6 +1,6 @@
 import { For, Show, createEffect, createMemo, createSignal, on, onCleanup, onMount, untrack } from "solid-js";
 import { withKeys } from "@lemma/web/keys";
-import { shownKeys, Actions } from "@lemma/actions";
+import { shownKeysOf, Actions } from "@lemma/actions";
 import { filterGroups } from "./settings.ts";
 import type { EntryGroup } from "./settings.ts";
 import { Layout, SidebarFooter, SidebarRegion } from "@lemma/frame";
@@ -117,10 +117,7 @@ export default defineWebPlugin({
     };
 
     /** One of its actions' bindings, as the user has it. */
-    const keysOf = (id: string) => {
-      const action = slots.get(Actions, id);
-      return action === undefined ? undefined : shownKeys(action, webPlugins.list());
-    };
+    const keysOf = (id: string) => shownKeysOf(slots, webPlugins.list(), id);
     const [query, setQuery] = createSignal("");
     const searching = () => query().trim() !== "";
     const sections = () => slots.list(SettingsSections);
@@ -303,10 +300,7 @@ export default defineWebPlugin({
       const found = slots.list(SettingsSections).find((candidate) => candidate.badge?.() !== undefined);
       return found === undefined ? undefined : { id: found.id, title: found.title, badge: found.badge!()! };
     };
-    const openKeys = () => {
-      const action = slots.get(Actions, "settings.open");
-      return action === undefined ? undefined : shownKeys(action, webPlugins.list());
-    };
+    const openKeys = () => shownKeysOf(slots, webPlugins.list(), "settings.open");
     slots.add(SidebarFooter, {
       id: "settings",
       component: (props) => (

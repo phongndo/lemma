@@ -20,12 +20,21 @@ const BrowserConfig = Schema.Struct({
   }),
 });
 
-/** A tab's page: its toolbar, and the place the page shows in (drawn over it, from the app's top). */
 /** The page of the browser when it is a thread's first view, filling the page rather than in a tab. */
 const MAIN = "browser";
 
-/** A tab's page: its toolbar, and the place the page shows in (drawn over it, from the app's top). */
-function BrowserTab(props: { tab: string | undefined; pages: Pages; search: () => string; fresh: (tab: string) => boolean }) {
+/**
+ * A tab's page: its toolbar, and the place the page shows in (drawn over it, from the app's top). While drawn, its
+ * address bar is the one ⌘L goes to (`bar`).
+ */
+function BrowserTab(props: {
+  tab: string | undefined;
+  pages: Pages;
+  search: () => string;
+  fresh: (tab: string) => boolean;
+  /** Holds its address bar as the one ⌘L goes to, until the returned function lets go of it. */
+  bar: (input: HTMLInputElement) => () => void;
+}) {
   const page: Page = props.pages.pageFor(props.tab ?? MAIN);
   const [typed, setTyped] = createSignal<string>();
   let place!: HTMLDivElement;
@@ -36,6 +45,7 @@ function BrowserTab(props: { tab: string | undefined; pages: Pages; search: () =
   // A tab just opened takes the keys in its address bar, as a browser's does; one shown again (another thread's, after a
   // reload) leaves focus where it is.
   onMount(() => {
+    onCleanup(props.bar(input));
     if (page.url() === undefined && props.fresh(page.tab)) input.focus();
   });
   const go = (text: string) => {
@@ -161,9 +171,9 @@ function BrowserTab(props: { tab: string | undefined; pages: Pages; search: () =
  * A browser as a view of the thread, so pages sit in its inspection pane beside the conversation: the dev server the
  * agent is building, most often. In the desktop app a page is Chromium's (a `<webview>`), with back and forward, its
  * title for its tab's name, DevTools in their own window (the button, ⌘⌥I, or Inspect on its menu), and links that open
- * a new tab opening one in the pane; while it has focus the app's own shortcuts still work. Elsewhere it is a frame,
- * which only a page that lets itself be framed fills. Each tab keeps its page loaded until the tab closes, and where it
- * was across reloads.
+ * a new tab opening one in the pane; while it has focus the app's own shortcuts still work, and ⌘L goes to the address
+ * bar, as in a browser. Elsewhere it is a frame, which only a page that lets itself be framed fills, and ⌘L stays the
+ * browser's. Each tab keeps its page loaded until the tab closes, and where it was across reloads.
  */
 export default defineWebPlugin({
   id: "threads.browser",
@@ -173,6 +183,14 @@ export default defineWebPlugin({
   setup: ({ slots, pane, webPlugins, notify }, plugin) => {
     const pages = createPages();
     const search = () => plugin.config.search;
+    /** The address bar of the browser shown, while one is. */
+    const [bar, setBar] = createSignal<HTMLInputElement>();
+    const holdBar = (input: HTMLInputElement) => {
+      setBar(input);
+      return () => {
+        if (untrack(bar) === input) setBar(undefined);
+      };
+    };
     addSettings(slots, webPlugins, notify, plugin.id, search);
     // A page lives as long as its tab.
     createEffect(() => pages.keepOnly(new Set([MAIN, ...pane.tabs().map((tab) => tab.id)])));
@@ -194,7 +212,7 @@ export default defineWebPlugin({
         const page = pages.get(tab);
         return page === undefined ? hostOf(pages.savedUrl(tab)) : (page.title() ?? hostOf(page.url()));
       },
-      component: (props: ThreadViewProps) => <BrowserTab tab={props.tab} pages={pages} search={search} fresh={fresh} />,
+      component: (props: ThreadViewProps) => <BrowserTab tab={props.tab} pages={pages} search={search} fresh={fresh} bar={holdBar} />,
     });
     slots.add(Layers, {
       id: "browser.pages",
@@ -204,6 +222,24 @@ export default defineWebPlugin({
     });
     if (bridge === undefined) return;
     const desktop = bridge;
+    // ⌘L, as in a browser: in the desktop app only, as a browser keeps it for its own address bar.
+    slots.add(Actions, {
+      id: "browser.address",
+      order: 12,
+      title: "Go to the address bar",
+      detail: "Of the browser shown in the inspection pane",
+      category: "Browser",
+      keywords: ["url", "location"],
+      icon: LaptopIcon,
+      keys: "mod+l",
+      whileTyping: true,
+      inPages: true,
+      when: () => bar() !== undefined,
+      run: () => {
+        bar()?.focus();
+        bar()?.select();
+      },
+    });
     // While a page has focus its keys are its own, but for the app's that a browser keeps for itself (`inPages`): only
     // those held with a modifier, or a function key, so a binding rebound to a plain key (`n`) still types in the page.
     createEffect(() => {
