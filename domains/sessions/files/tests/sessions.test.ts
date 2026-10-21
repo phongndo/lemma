@@ -1,4 +1,4 @@
-import { promises as fs } from "node:fs";
+import { constants as fsConstants, promises as fs } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { Cause, Deferred, Effect, Exit, Fiber, Layer, Stream } from "effect";
@@ -66,15 +66,25 @@ const fileHandles = async () => {
   return Object.getPrototypeOf(probe) as fs.FileHandle;
 };
 
+/** A handle closed: its file, and whether it was opened to write (a session's writer) or to read. */
+interface Closed {
+  readonly file: string;
+  readonly writer: boolean;
+}
+
+/** Whether `flags` open a file to write it as a session's writer does (`ax`, `O_WRONLY | O_APPEND`), not to read. */
+const writes = (flags: unknown) =>
+  typeof flags === "number" ? (flags & (fsConstants.O_WRONLY | fsConstants.O_RDWR)) !== 0 : typeof flags === "string" && /^[aw]/.test(flags);
+
 /** Files closed, among those opened from now on: each handle has its own `close`, not one on the prototype. */
 const watchCloses = () => {
-  const closed: string[] = [];
+  const closed: Closed[] = [];
   const open = fs.open;
   vi.spyOn(fs, "open").mockImplementation(async (file, flags, mode) => {
     const handle = await open(file, flags, mode);
     const close = handle.close;
     handle.close = () => {
-      closed.push(String(file));
+      closed.push({ file: String(file), writer: writes(flags) });
       return close.call(handle);
     };
     return handle;
@@ -83,11 +93,14 @@ const watchCloses = () => {
 };
 
 /** Handles on a session's file closed so far: reading it, and unloading it, each close one. */
-const closesOf = (closed: readonly string[], id: string) => closed.filter((file) => file.endsWith(`_${id}.jsonl`)).length;
+const closesOf = (closed: readonly Closed[], id: string) => closed.filter(({ file }) => file.endsWith(`_${id}.jsonl`)).length;
 
-/** Waits for the sweep to unload a session: closing its file is the last thing it does. */
-const unloaded = (closed: readonly string[], id: string) =>
-  Effect.promise(() => vi.waitFor(() => expect(closed.some((file) => file.endsWith(`_${id}.jsonl`))).toBe(true)));
+/**
+ * Waits for the sweep to unload a session: closing its writer is the last thing it does. Not any close: the store's
+ * startup sweep for empty sessions can list a session's file as it is made, and read it.
+ */
+const unloaded = (closed: readonly Closed[], id: string) =>
+  Effect.promise(() => vi.waitFor(() => expect(closed.some(({ file, writer }) => writer && file.endsWith(`_${id}.jsonl`))).toBe(true)));
 
 const lockPath = () => path.join(dir, "sessions", ".lock");
 
