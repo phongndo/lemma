@@ -4,12 +4,12 @@
   "private": true,
   "type": "module",
   "exports": {
-    ".": "./src/main.ts",
+    ".": "./src/start.mjs",
     "./paths": "./src/paths.ts",
     "./limits": "./src/limits.ts"
   },
   "scripts": {
-    "start": "node --conditions=lemma-source src/main.ts",
+    "start": "node --conditions=lemma-source --max-semi-space-size=16 src/start.mjs",
     "check": "tsrs --noEmit",
     "test": "vitest run"
   },

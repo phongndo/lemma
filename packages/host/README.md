@@ -1,6 +1,7 @@
 # @lemma/host
 
-The host process. Importing the package runs it (`src/main.ts`): it resolves
+The host process. Importing the package runs it (`src/start.mjs`, which starts
+`src/main.ts`, [below](#its-start)): it resolves
 paths, reads the config and plugin files into a composition, loads it, and
 reloads when they change. [Usage](../../docs/usage.md) describes running it.
 Clients that need the host's paths without starting one (the CLI, the desktop
@@ -30,6 +31,42 @@ version imported, so a long run of edits grows the host by each one's code.
 A plugin whose code is edited often, or may hang, can run that code in a
 worker thread, which takes its module cache with it when it stops, as
 [isolated](../../examples/isolated/README.md) runs its tools.
+
+## Its start
+
+What the host loads as it starts is what its plugins import at their top
+level, so a bundled plugin imports a dependency only some of its calls use
+where those calls run: Playwright with `browser.chromium`'s first launch, the
+MCP SDK with a server's first connect, codemode's sandbox with its first
+script. `tests/startup.test.ts` holds the bundled plugins to that, and to a
+number of modules.
+
+Most of a start is compiling the modules the host loads and stripping their
+types, which Node.js's compile cache keeps from one start to the next:
+`src/start.mjs` turns it on and then imports `src/main.ts`, as the cache holds
+only what loads after it is on. A warm cache starts the host in about two
+thirds of the time, and spares it Node's type stripper (10–20 MB a thread),
+which is why the one module loaded before it is JavaScript. The stall
+watchdog's worker, [below](#a-blocked-event-loop), uses it too.
+
+- **Where.** The checkout's `packages/host/node_modules/.cache/compile`, so
+  every home, shell, and test's host shares it. `NODE_COMPILE_CACHE` names
+  another directory; `NODE_DISABLE_COMPILE_CACHE=1` turns it off. It can be
+  deleted at any time. What the host's tools run does not inherit it.
+- **Edits.** Each module's entry is checked against its source, so an edited
+  file (this checkout's, or a plugin file's) compiles again. Each version of a
+  plugin file the host loads keeps an entry of its own.
+- **When it is written.** Once the host has started, and again as it exits, so
+  a host killed later (a supervised one's group) keeps it.
+
+`pnpm start` and `pnpm dev` also cap V8's young generation
+(`--max-semi-space-size=16`, in MB). Uncapped, on a machine with memory to
+spare, it grows to 64 MB as the host starts and works, and stays committed
+until the host has idled for minutes: capped, a host holds about 25 MB less
+once started and 65 MB less after a few turns, for the same CPU a turn
+(measured end to end) and a harness benchmark step about 7% slower. It is a
+flag of Node's, which a running process cannot change, so it is each
+launcher's to pass; `lemma serve` and the desktop app do not yet.
 
 ## The host runtime
 

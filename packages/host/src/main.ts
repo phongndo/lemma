@@ -1,5 +1,7 @@
 #!/usr/bin/env node
 import { spawn } from "node:child_process";
+import { flushCompileCache, getCompileCacheDir } from "node:module";
+import { dirname } from "node:path";
 import { Cause, Duration, Effect, Exit, Option, Stream } from "effect";
 import { appUrl, faultMessage } from "@lemma/contracts";
 import { Diagnostic, makeLoader, makeSpanCollector, ReloadError } from "@lemma/core";
@@ -323,15 +325,35 @@ const program = Effect.gen(function* () {
     yield* log(`open ${url}`);
     if (!args.has("--no-open")) yield* openBrowser(url);
   }
+  // What compiled as it started is written now, not only as it exits: a host killed (its group, by a supervisor) keeps it.
+  yield* Effect.sync(flushCompileCache);
 
   yield* untilSignal;
   yield* log("shutting down");
 });
 
+/**
+ * Runs `start` with the compile cache this thread uses (`start.mjs`) named in the environment, which a worker it starts
+ * copies: a thread does not share the cache its parent turned on, and without it the watchdog's worker would load Node's
+ * type stripper (~15 MB) on every start. It is put back at once, so what the host's tools run does not inherit it.
+ */
+const withCompileCache = <A>(start: () => A): A => {
+  // The directory given holds one per Node.js version, which `getCompileCacheDir` names.
+  const dir = getCompileCacheDir();
+  const before = process.env.NODE_COMPILE_CACHE;
+  if (dir !== undefined) process.env.NODE_COMPILE_CACHE = dirname(dir);
+  try {
+    return start();
+  } finally {
+    if (before === undefined) delete process.env.NODE_COMPILE_CACHE;
+    else process.env.NODE_COMPILE_CACHE = before;
+  }
+};
+
 catchUnhandled();
 // A plugin stuck in synchronous work blocks every session: said while it lasts, and kept in the trace as `host.stall`.
 const NO_CODE: readonly CodeOwner[] = [];
-stalls = watchStalls({ owners: () => changing?.code() ?? NO_CODE, onStall: (stall) => recordStall(spans.tracer, stall) });
+stalls = withCompileCache(() => watchStalls({ owners: () => changing?.code() ?? NO_CODE, onStall: (stall) => recordStall(spans.tracer, stall) }));
 const exit = await Effect.runPromiseExit(Effect.scoped(program).pipe(Effect.withTracer(spans.tracer)));
 if (Exit.isFailure(exit)) {
   const failure = Cause.findErrorOption(exit.cause);

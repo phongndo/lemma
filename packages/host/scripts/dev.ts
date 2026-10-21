@@ -86,11 +86,19 @@ const run = (name: string, command: string, args: readonly string[], options: Sp
 const once = (command: string, args: readonly string[]) =>
   new Promise<boolean>((resolve) => spawn(command, args, { cwd: root, stdio: "inherit" }).once("exit", (code) => resolve(code === 0)));
 
-// The host's own output stays: watch mode would clear the terminal the web server shares.
+// The host's own output stays: watch mode would clear the terminal the web server shares. Its young generation is capped
+// as `pnpm start` caps it (the host's README, "Its start").
 run(
   "host",
   process.execPath,
-  ["--watch", "--watch-preserve-output", "--conditions=lemma-source", fileURLToPath(new URL("../src/main.ts", import.meta.url)), "--no-open"],
+  [
+    "--watch",
+    "--watch-preserve-output",
+    "--conditions=lemma-source",
+    "--max-semi-space-size=16",
+    fileURLToPath(new URL("../src/start.mjs", import.meta.url)),
+    "--no-open",
+  ],
   {
     cwd: project,
     env: { ...process.env, INIT_CWD: project },

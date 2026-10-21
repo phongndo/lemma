@@ -7,7 +7,9 @@ import { extname, join, relative, resolve } from "node:path";
 import { Deferred, Effect, Layer, Scope } from "effect";
 import { HttpServerRequest, HttpServerResponse } from "effect/http";
 import type { HttpServerError } from "effect/http";
-import { NodeHttpServer, NodeHttpServerRequest } from "@effect/platform-node";
+// The modules, not the package's index: it loads every platform module, Redis's client among them (~600 modules).
+import * as NodeHttpServer from "@effect/platform-node/NodeHttpServer";
+import * as NodeHttpServerRequest from "@effect/platform-node/NodeHttpServerRequest";
 import { RpcSerialization, RpcServer } from "effect/rpc";
 import type { Rpc, RpcGroup } from "effect/rpc";
 import { HOST_PROTOCOL, WEB_IMPORTABLE } from "@lemma/contracts";

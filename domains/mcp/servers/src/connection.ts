@@ -1,11 +1,26 @@
-import { Client, SdkHttpError, StreamableHTTPClientTransport } from "@modelcontextprotocol/client";
-import type { Tool as McpTool } from "@modelcontextprotocol/client";
-import { StdioClientTransport } from "@modelcontextprotocol/client/stdio";
+import type { Client, StreamableHTTPClientTransport, Tool as McpTool } from "@modelcontextprotocol/client";
+import type { StdioClientTransport } from "@modelcontextprotocol/client/stdio";
 import type { McpServerConfig } from "@lemma/mcp";
 import { isImageAddress } from "./form.ts";
 import type { CallResult } from "./tools.ts";
 
 export type { McpTool };
+
+type Sdk = typeof import("@modelcontextprotocol/client") & typeof import("@modelcontextprotocol/client/stdio");
+/**
+ * The SDK, imported by the first connect rather than with the plugin: with zod it is most of the code the plugin
+ * loads, for servers a host may have none of. One that cannot be loaded fails the connect, saying why.
+ */
+let sdk: Sdk | undefined;
+let loading: Promise<Sdk> | undefined;
+const loadSdk = (): Promise<Sdk> =>
+  (loading ??= Promise.all([import("@modelcontextprotocol/client"), import("@modelcontextprotocol/client/stdio")]).then(
+    ([client, stdio]) => (sdk = { ...client, ...stdio }),
+    (error: unknown) => {
+      loading = undefined;
+      throw error;
+    },
+  ));
 
 /** How much of a local server's stderr is kept for clients to show (`McpServerStatus.stderr`). */
 const STDERR_TAIL = 4096;
@@ -22,7 +37,7 @@ export interface ConnectionEvents {
 
 /** What went wrong, in words a person can act on. */
 export function describe(error: unknown, config: McpServerConfig): string {
-  if (error instanceof SdkHttpError && (error.status === 401 || error.status === 403))
+  if (sdk !== undefined && error instanceof sdk.SdkHttpError && (error.status === 401 || error.status === 403))
     return `The server answered ${error.status}: it needs sign-in, which Lemma does not do yet. Give it an Authorization header in "headers".`;
   const code = (error as NodeJS.ErrnoException | undefined)?.code;
   if (code === "ENOENT" && config.command !== undefined) return `Command not found: ${config.command}`;
@@ -110,7 +125,8 @@ export class Connection {
     this.state = "connecting";
     this.error = undefined;
     this.events.changed();
-    const client = new Client(
+    const loaded = await loadSdk().catch((error: unknown) => this.failed(error));
+    const client = new loaded.Client(
       { name: "lemma", version: this.clientVersion },
       {
         versionNegotiation: { mode: "auto" },
@@ -137,8 +153,8 @@ export class Connection {
       void client.close().catch(() => {});
     };
     try {
-      transport = this.transport();
-      if (transport instanceof StdioClientTransport) {
+      transport = this.transport(loaded);
+      if (transport instanceof loaded.StdioClientTransport) {
         transport.stderr?.on("data", (chunk: Buffer) => {
           this.stderr = (this.stderr + chunk.toString("utf8")).slice(-STDERR_TAIL);
         });
@@ -162,23 +178,31 @@ export class Connection {
       await client.close().catch(() => {});
       // One that never connected is not the client's to close.
       await transport?.close().catch(() => {});
-      if (!this.closing) {
-        this.state = "failed";
-        this.error = describe(error, this.config);
-        this.events.changed();
-      }
-      throw new Error(this.error ?? describe(error, this.config), { cause: error });
+      return this.failed(error);
     } finally {
       this.cancel = undefined;
     }
   }
 
+  /** Says why the connect failed, unless it was stopped, and throws it. */
+  private failed(error: unknown): never {
+    if (!this.closing) {
+      this.state = "failed";
+      this.error = describe(error, this.config);
+      this.events.changed();
+    }
+    throw new Error(this.error ?? describe(error, this.config), { cause: error });
+  }
+
   /** Throws for a `url` that is not one. */
-  private transport(): StreamableHTTPClientTransport | StdioClientTransport {
+  private transport(loaded: Sdk): StreamableHTTPClientTransport | StdioClientTransport {
     const { command, url } = this.config;
     if (url !== undefined)
-      return new StreamableHTTPClientTransport(new URL(url), this.config.headers === undefined ? {} : { requestInit: { headers: { ...this.config.headers } } });
-    return new StdioClientTransport({
+      return new loaded.StreamableHTTPClientTransport(
+        new URL(url),
+        this.config.headers === undefined ? {} : { requestInit: { headers: { ...this.config.headers } } },
+      );
+    return new loaded.StdioClientTransport({
       command: command!,
       args: [...(this.config.args ?? [])],
       ...(this.config.env === undefined ? {} : { env: { ...this.config.env } }),
