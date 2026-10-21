@@ -149,4 +149,80 @@ describe("profiles.switcher", () => {
     expect((await fs.readdir(homeOf("desk"))).filter((file) => file.startsWith("avatar"))).toEqual([]);
     expect(await failure(call("profiles.set-avatar", { name: "nobody", avatar: { kind: "default" } }))).toMatchObject({ reason: "NotFound" });
   });
+
+  it("shows a profile by the name it was given, any text, until a blank one gives it back its own", async () => {
+    const titleOf = async (name: string) =>
+      (await ok<readonly ProfileInfo[]>(call("profiles.list", undefined))).find((profile) => profile.name === name)?.title;
+    expect(await ok<ProfileInfo>(call("profiles.create", { name: "trading-desk", title: "  Trading desk 📈 " }))).toMatchObject({
+      name: "trading-desk",
+      title: "Trading desk 📈",
+    });
+    expect(await ok<ProfileInfo>(call("profiles.rename", { name: "trading-desk", title: "Markets" }))).toMatchObject({
+      name: "trading-desk",
+      title: "Markets",
+    });
+    expect(await titleOf("trading-desk")).toBe("Markets");
+    // The default too, which is the home itself.
+    await ok(call("profiles.rename", { name: "default", title: "Workbench" }));
+    expect(await titleOf("default")).toBe("Workbench");
+    await ok(call("profiles.rename", { name: "default", title: "  " }));
+    expect(await titleOf("default")).toBeUndefined();
+    expect(await fs.readdir(root)).not.toContain("title.json");
+    // What is no name is refused, and leaves the one it had.
+    for (const title of ["two\nlines", "x".repeat(61)])
+      expect(await failure(call("profiles.rename", { name: "trading-desk", title }))).toMatchObject({ reason: "Title" });
+    expect(await titleOf("trading-desk")).toBe("Markets");
+    expect(await failure(call("profiles.create", { name: "other", title: "tab\there" }))).toMatchObject({ reason: "Title" });
+    expect(await failure(call("profiles.rename", { name: "nobody", title: "Who" }))).toMatchObject({ reason: "NotFound" });
+  });
+
+  /** A lemma command that stops a profile's host as `stop --force` does: its discovery file goes. */
+  const stopper = async () => {
+    const cli = path.join(root, "stopping-lemma.mjs");
+    await fs.writeFile(
+      cli,
+      [
+        'import { rmSync } from "node:fs";',
+        'import { join } from "node:path";',
+        'if (process.argv.slice(2).join(" ") !== "stop --force --json") process.exit(2);',
+        'rmSync(join(process.env.LEMMA_HOME, "profiles", process.env.LEMMA_PROFILE, "transport.json"));',
+      ].join("\n"),
+    );
+    return { cli: `node ${JSON.stringify(cli)}` };
+  };
+
+  it("stops another profile's host with the lemma command, and never its own", async () => {
+    await ok(call("profiles.create", { name: "desk" }));
+    await running("desk", 9003);
+    expect(await ok<ProfileInfo>(call("profiles.stop", { name: "desk" }, { config: await stopper() }))).toMatchObject({ name: "desk", running: false });
+    // Stopped already, it has nothing to do.
+    expect(await ok<ProfileInfo>(call("profiles.stop", { name: "desk" }))).toMatchObject({ running: false });
+    await running("desk", 9003);
+    expect(await failure(call("profiles.stop", { name: "desk" }))).toMatchObject({
+      reason: "NotStopped",
+      message: expect.stringContaining("lemma --profile desk stop"),
+    });
+    expect(await failure(call("profiles.stop", { name: "desk" }, { profile: "desk" }))).toMatchObject({ reason: "Current" });
+  });
+
+  it("deletes another profile and everything in its home, stopping its host first, but never the default or its own", async () => {
+    await ok(call("profiles.create", { name: "desk", title: "Desk" }));
+    await fs.writeFile(path.join(homeOf("desk"), "auth.json"), "{}");
+    await ok(call("profiles.remove", { name: "desk" }));
+    expect(await fs.readdir(path.join(root, "profiles"))).toEqual([]);
+    // A running one is stopped first.
+    await ok(call("profiles.create", { name: "desk" }));
+    await running("desk", 9004);
+    expect(await failure(call("profiles.remove", { name: "desk" }))).toMatchObject({ reason: "NotStopped" });
+    expect(await fs.readdir(path.join(root, "profiles"))).toEqual(["desk"]);
+    await ok(call("profiles.remove", { name: "desk" }, { config: await stopper() }));
+    expect(await fs.readdir(path.join(root, "profiles"))).toEqual([]);
+    // Not the home itself, nor the profile of the host asked.
+    expect(await failure(call("profiles.remove", { name: "default" }, { profile: "desk" }))).toMatchObject({ reason: "Name" });
+    await ok(call("profiles.create", { name: "desk" }));
+    expect(await failure(call("profiles.remove", { name: "desk" }, { profile: "desk" }))).toMatchObject({ reason: "Current" });
+    expect(await failure(call("profiles.remove", { name: "nobody" }))).toMatchObject({ reason: "NotFound" });
+    expect(await failure(call("profiles.remove", { name: "../up" }))).toMatchObject({ reason: "Name" });
+    expect(await fs.readdir(root)).toContain("profiles");
+  });
 });

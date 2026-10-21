@@ -34,10 +34,25 @@ export type AvatarChange = typeof AvatarChange.Type;
 /** The most a profile's picture may hold, decoded: a client shrinks one to a small square first. */
 export const MAX_PICTURE_BYTES = 512 * 1024;
 
+/** What the default profile is called until it is given another name. */
+export const DEFAULT_PROFILE_TITLE = "Core";
+
+/** The longest name a profile can be given. */
+export const MAX_TITLE_LENGTH = 60;
+
+/** Why `title` cannot be a profile's name as people read it, or undefined when it can: any text on one line, `MAX_TITLE_LENGTH` at most. */
+export const titleProblem = (title: string): string | undefined => {
+  if ([...title].some((char) => char < " " || char === "\u007f")) return "A profile's name is one line of text";
+  if (title.trim().length > MAX_TITLE_LENGTH) return `A profile's name is at most ${MAX_TITLE_LENGTH} characters`;
+  return undefined;
+};
+
 /** A profile as a host lists it. */
 export const ProfileInfo = Schema.Struct({
-  /** Its name; `default` for the home's own. */
+  /** Its name, which `--profile` takes and its folder has; `default` for the home's own. It never changes. */
   name: Schema.String,
+  /** The name it was given to be shown by (`profiles.rename`), any text; absent, `profileTitle` makes one from `name`. */
+  title: Schema.optional(Schema.String),
   /** The home's own profile, which every other's is under. */
   default: Schema.Boolean,
   /** The one the host answering runs for. */
@@ -46,6 +61,8 @@ export const ProfileInfo = Schema.Struct({
   running: Schema.Boolean,
   /** The port its host listens on, or will, on its machine: what a client elsewhere reaches it at. */
   port: Schema.optional(Schema.Int),
+  /** Its home on its machine, which holds all of it. */
+  home: Schema.optional(Schema.String),
   /** Its picture. */
   avatar: ProfileAvatar,
 });
@@ -99,9 +116,40 @@ export const ProfileChannels = {
     id: "profiles.create",
     access: "change",
     title: "Make a profile",
-    description: "A new profile on the host's machine: an empty home with a port of its own, its host not yet started",
+    description: "A new profile on the host's machine: an empty home with a port of its own, its host not yet started, shown as `title` when given",
+    payload: Schema.Struct({ name: Schema.String, title: Schema.optional(Schema.String) }),
+    success: ProfileInfo,
+  }),
+  rename: defineChannel({
+    kind: "call",
+    id: "profiles.rename",
+    access: "change",
+    title: "Rename a profile",
+    description: "Gives a profile the name it is shown by, any text on one line; blank gives it back the one its name makes. Its name for --profile stays",
+    payload: Schema.Struct({ name: Schema.String, title: Schema.String }),
+    success: ProfileInfo,
+    repeatable: true,
+  }),
+  stop: defineChannel({
+    kind: "call",
+    id: "profiles.stop",
+    access: "change",
+    title: "Stop a profile's host",
+    description:
+      "Stops the host running for another profile, as `lemma --profile <name> stop --force` does: its running turns are cut off, and resume when it starts again",
     payload: Schema.Struct({ name: Schema.String }),
     success: ProfileInfo,
+    repeatable: true,
+  }),
+  remove: defineChannel({
+    kind: "call",
+    id: "profiles.remove",
+    access: "change",
+    title: "Delete a profile",
+    description:
+      "Deletes another profile and everything in its home, its threads, config, plugins, and logins, stopping its host first. Neither the default (the home itself) nor the profile of the host answering",
+    payload: Schema.Struct({ name: Schema.String }),
+    success: Schema.Void,
   }),
 } as const;
 
@@ -129,8 +177,38 @@ export const profileAddress = (from: string, opened: Pick<OpenedProfile, "url" |
 /** The web app of a profile opened from `from`, at `path`, with its token (see `profileAddress`). */
 export const profilePage = (from: string, opened: OpenedProfile, path = "/"): string => appUrl(profileAddress(from, opened), path, opened.token);
 
-/** A profile's name as people read it: `default` is Default. */
-export const profileTitle = (name: string): string => name.charAt(0).toUpperCase() + name.slice(1);
+/**
+ * A profile's name as people read it: the one it was given, else the default's is Core, and another's is its name
+ * with its dashes as spaces, capitalized (`trading-desk` is Trading desk).
+ */
+export const profileTitle = (profile: Pick<ProfileInfo, "name" | "default" | "title">): string => {
+  const given = profile.title?.trim();
+  if (given !== undefined && given !== "") return given;
+  if (profile.default) return DEFAULT_PROFILE_TITLE;
+  const words = profile.name.replace(/[-_]+/g, " ").trim() || profile.name;
+  return words.charAt(0).toUpperCase() + words.slice(1);
+};
+
+/**
+ * A name for a new profile shown as `title`, which `--profile` takes and its folder has: the title in lowercase
+ * letters, digits, and dashes (`Trading desk` is `trading-desk`), numbered past those `taken`; `profile` when it has
+ * none of them.
+ */
+export const profileNameFor = (title: string, taken: Iterable<string>): string => {
+  const used = new Set(taken);
+  const base =
+    title
+      .normalize("NFKD")
+      .replace(/[\u0300-\u036f]/g, "")
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-+|-+$/g, "")
+      .slice(0, 36)
+      .replace(/-+$/, "") || "profile";
+  // `default` is the home's own, which no folder can be.
+  if (base !== "default" && !used.has(base)) return base;
+  for (let n = 2; ; n++) if (!used.has(`${base}-${n}`)) return `${base}-${n}`;
+};
 
 /**
  * The query parameter a deep link names its profile by (`lemma://threads/abc?profile=desk`):
