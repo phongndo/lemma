@@ -14,6 +14,7 @@ import { CliError, defineBuiltin, ExitCode, usage } from "../command.ts";
 import type { Builtin, Globals, Io } from "../command.ts";
 import { connect, homeOf } from "../connect.ts";
 import { startedByText } from "../format.ts";
+import { readBuild } from "../release.ts";
 
 /*
  * Starting, stopping, and keeping a host on this machine: the commands that
@@ -63,6 +64,55 @@ const hostArgs = (flags: { readonly port: number | undefined; readonly host: str
   ...(flags.safe ? ["--safe"] : []),
 ];
 
+/** Waits for a host for `home` that `which` accepts to listen, for up to `within`: its entry, or undefined. */
+const listening = (home: string, which: (entry: { readonly pid: number }) => boolean, within: Duration.Duration, gone?: () => boolean) =>
+  Effect.gen(function* () {
+    for (;;) {
+      if (gone?.()) return undefined;
+      const entry = yield* readDiscovery(home);
+      if (entry !== undefined && which(entry)) return entry;
+      yield* Effect.sleep("100 millis");
+    }
+  }).pipe(Effect.timeoutOrElse({ duration: within, orElse: () => Effect.succeed(undefined) }));
+
+/** That no host started, with the end of its log, which says why. */
+const notStarted = (home: string, timedOut: boolean, within: Duration.Duration) =>
+  Effect.gen(function* () {
+    const { log } = hostFiles(home);
+    const lines = yield* tail(log, 15);
+    return yield* new CliError({
+      code: "NotStarted",
+      message: `The host did not start${timedOut ? ` within ${Duration.toSeconds(within)}s` : ""}. The end of its log (${log}):\n${lines.join("\n")}`,
+      exit: ExitCode.failed,
+    });
+  });
+
+/** Starts this lemma's host for `home` in the background, for the project at `cwd`, and waits for it to listen. */
+const startInBackground = (io: Io, home: string, cwd: string, args: readonly string[]) =>
+  Effect.gen(function* () {
+    if (io.self === undefined)
+      return yield* new CliError({ code: "Unsupported", message: "This lemma cannot start itself in the background", exit: ExitCode.failed });
+    const [command, ...rest] = io.self;
+    const child = spawn(command!, [...rest, "serve", "--no-open", ...args], {
+      cwd,
+      env: { ...io.env, INIT_CWD: cwd, LEMMA_STARTED_BY: "cli" } as NodeJS.ProcessEnv,
+      detached: true,
+      stdio: "ignore",
+    });
+    let exited: number | null | undefined;
+    child.once("exit", (code) => (exited = code));
+    child.once("error", () => (exited = -1));
+    child.unref();
+    const started = yield* listening(
+      home,
+      (entry) => entry.pid === child.pid,
+      START,
+      () => exited !== undefined,
+    );
+    if (started === undefined) return yield* notStarted(home, exited === undefined, START);
+    return { url: started.url, pid: started.pid, log: hostFiles(home).log };
+  });
+
 const serve = defineBuiltin({
   path: ["serve"],
   group: RUN,
@@ -103,39 +153,10 @@ const serve = defineBuiltin({
         yield* Effect.promise(() => serveHere([...args, ...(flags["no-open"] ? ["--no-open"] : [])]));
         return undefined;
       }
-      if (io.self === undefined)
-        return yield* new CliError({ code: "Unsupported", message: "This lemma cannot start itself in the background", exit: ExitCode.failed });
-      const [command, ...rest] = io.self;
-      const child = spawn(command!, [...rest, "serve", "--no-open", ...args], {
-        cwd: io.cwd,
-        env: { ...io.env, INIT_CWD: io.cwd, LEMMA_STARTED_BY: "cli" } as NodeJS.ProcessEnv,
-        detached: true,
-        stdio: "ignore",
-      });
-      let exited: number | null | undefined;
-      child.once("exit", (code) => (exited = code));
-      child.once("error", () => (exited = -1));
-      child.unref();
-      const { log } = hostFiles(home);
-      const started = yield* Effect.gen(function* () {
-        for (;;) {
-          if (exited !== undefined) return undefined;
-          const entry = yield* readDiscovery(home);
-          if (entry !== undefined && entry.pid === child.pid) return entry;
-          yield* Effect.sleep("100 millis");
-        }
-      }).pipe(Effect.timeoutOrElse({ duration: START, orElse: () => Effect.succeed(undefined) }));
-      if (started === undefined) {
-        const lines = yield* tail(log, 15);
-        return yield* new CliError({
-          code: "NotStarted",
-          message: `The host did not start${exited === undefined ? ` within ${Duration.toSeconds(START)}s` : ""}. The end of its log (${log}):\n${lines.join("\n")}`,
-          exit: ExitCode.failed,
-        });
-      }
+      const started = yield* startInBackground(io, home, io.cwd, args);
       return {
-        json: { url: started.url, pid: started.pid, home, log },
-        text: `Started a host for ${home}: ${started.url} (pid ${started.pid}). Its log is ${log}; \`lemma stop\` stops it.`,
+        json: { url: started.url, pid: started.pid, home, log: started.log },
+        text: `Started a host for ${home}: ${started.url} (pid ${started.pid}). Its log is ${started.log}; \`lemma stop\` stops it.`,
       };
     }),
 });
@@ -143,6 +164,57 @@ const serve = defineBuiltin({
 /** Asks at the terminal whether to go on; no when there is none. */
 const confirm = (io: Io, question: string): Effect.Effect<boolean> =>
   io.ask === undefined ? Effect.succeed(false) : Effect.promise(() => io.ask!(`${question} [y/N] `, false).then((answer) => /^y(es)?$/i.test(answer.trim())));
+
+/** How long a host may take to stop: its own shutdown deadline, and a margin. */
+const STOPPING = Duration.millis(SHUTDOWN_TIMEOUT_MS + 5_000);
+
+/**
+ * The running host's info, and what stopping it would cut off, once whoever asked has agreed to that: a host the
+ * desktop app started, or one with work in progress, only with `force` or a yes at the terminal.
+ */
+const beforeStop = (io: Io, force: boolean, doing: "Stopping" | "Restarting") =>
+  Effect.gen(function* () {
+    const { rpc } = yield* connect(io, { env: "local" });
+    const [info, items] = yield* Effect.all(
+      [
+        rpc["Host.Info"](),
+        // A plugin's to say: a host that cannot is taken to be busy, as it may be.
+        callChannel(rpc, CliChannels.inProgress, {}).pipe(
+          Effect.map((work) => work.flatMap((report) => report.items)),
+          Effect.orElseSucceed(() => ["work it cannot list (cli.registry is off)"]),
+        ),
+      ],
+      { concurrency: "unbounded" },
+    );
+    const verb = doing === "Stopping" ? "stop" : "restart";
+    if (!force && info.startedBy === "desktop")
+      return yield* new CliError({
+        code: "Owned",
+        message: `The desktop app started this host and stops it when it quits: quit the app, or ${verb} it here with --force`,
+        exit: ExitCode.failed,
+      });
+    if (!force && items.length > 0) {
+      io.err(`${doing} the host cuts off:\n${items.map((item) => `  ${item}`).join("\n")}\n(running turns resume when a host starts again)`);
+      if (!(yield* confirm(io, `${doing === "Stopping" ? "Stop" : "Restart"} it anyway?`)))
+        return yield* new CliError({ code: "Busy", message: `The host has work in progress; --force ${verb}s it anyway`, exit: ExitCode.failed });
+    }
+    return { info, items };
+  });
+
+/** Waits for the host's process to exit, failing once it has taken longer than a host may. */
+const exited = (pid: number) =>
+  Effect.gen(function* () {
+    const gone = yield* Effect.gen(function* () {
+      while (isAlive(pid)) yield* Effect.sleep("100 millis");
+      return true;
+    }).pipe(Effect.timeoutOrElse({ duration: STOPPING, orElse: () => Effect.succeed(false) }));
+    if (!gone)
+      return yield* new CliError({
+        code: "StillRunning",
+        message: `The host (pid ${pid}) did not stop within ${Duration.toSeconds(STOPPING)}s; its log (lemma logs) says what it is waiting on`,
+        exit: ExitCode.failed,
+      });
+  });
 
 const stop = defineBuiltin({
   path: ["stop"],
@@ -158,45 +230,61 @@ const stop = defineBuiltin({
       const home = homeOf(io);
       const running = yield* readDiscovery(home);
       if (running === undefined) return { json: { stopped: false, home }, text: `No host runs for ${home}` };
-      const { rpc } = yield* connect(io, { env: "local" });
-      const [info, items] = yield* Effect.all(
-        [
-          rpc["Host.Info"](),
-          // A plugin's to say: a host that cannot is taken to be busy, as it may be.
-          callChannel(rpc, CliChannels.inProgress, {}).pipe(
-            Effect.map((work) => work.flatMap((report) => report.items)),
-            Effect.orElseSucceed(() => ["work it cannot list (cli.registry is off)"]),
-          ),
-        ],
-        { concurrency: "unbounded" },
-      );
-      if (!flags.force && info.startedBy === "desktop")
-        return yield* new CliError({
-          code: "Owned",
-          message: `The desktop app started this host and stops it when it quits: quit the app, or stop it here with --force`,
-          exit: ExitCode.failed,
-        });
-      if (!flags.force && items.length > 0) {
-        io.err(`Stopping the host cuts off:\n${items.map((item) => `  ${item}`).join("\n")}\n(running turns resume when a host starts again)`);
-        if (!(yield* confirm(io, "Stop it anyway?")))
-          return yield* new CliError({ code: "Busy", message: "The host has work in progress; --force stops it anyway", exit: ExitCode.failed });
-      }
+      const { info, items } = yield* beforeStop(io, flags.force, "Stopping");
       const service = info.startedBy === "service" ? serviceManager() : undefined;
       if (service !== undefined) service.stop();
       else process.kill(running.pid, "SIGTERM");
-      const stopped = yield* Effect.gen(function* () {
-        while (isAlive(running.pid)) yield* Effect.sleep("100 millis");
-        return true;
-      }).pipe(Effect.timeoutOrElse({ duration: Duration.millis(SHUTDOWN_TIMEOUT_MS + 5_000), orElse: () => Effect.succeed(false) }));
-      if (!stopped)
-        return yield* new CliError({
-          code: "StillRunning",
-          message: `The host (pid ${running.pid}) did not stop within ${(SHUTDOWN_TIMEOUT_MS + 5_000) / 1000}s; its log (lemma logs) says what it is waiting on`,
-          exit: ExitCode.failed,
-        });
+      yield* exited(running.pid);
       return {
         json: { stopped: true, pid: running.pid, startedBy: info.startedBy ?? null, cutOff: items },
         text: `Stopped the host for ${home} (pid ${running.pid}, started ${startedByText(info.startedBy)})${service === undefined ? "" : "; the service stays installed and starts it again at login (lemma service)"}`,
+      };
+    }),
+});
+
+const restart = defineBuiltin({
+  path: ["restart"],
+  group: RUN,
+  summary: "Restart this machine's host on this lemma: after lemma update, to run the release it installed",
+  description:
+    "As lemma stop does, it says first what it would cut off; running turns resume once the host is back. A host a service runs restarts through the service, which runs the lemma command and so the release installed last. Any other starts again in the background, for the same project and on the same port; --port, --host, and --safe apply to its new run as they do to lemma serve's.",
+  flags: {
+    force: { type: "boolean", description: "Restart it whatever it is doing, and whoever started it" },
+    port: { type: "number", description: "Listen on this port, rather than the one it listens on" },
+    host: { type: "string", placeholder: "address", description: "Bind this address, this run only (default loopback)" },
+    safe: { type: "boolean", description: "Run the bundled plugins as shipped, reading no config file or plugin file" },
+  },
+  examples: ["lemma restart", "lemma update && lemma restart"],
+  run: ({ io, globals, flags }) =>
+    Effect.gen(function* () {
+      const wrong = localOnly(globals, "restart");
+      if (wrong !== undefined) return yield* wrong;
+      const home = homeOf(io);
+      const running = yield* readDiscovery(home);
+      if (running === undefined)
+        return yield* new CliError({ code: "NoHost", message: `No host runs for ${home}: lemma serve starts one`, exit: ExitCode.unavailable });
+      const { info, items } = yield* beforeStop(io, flags.force, "Restarting");
+      const service = info.startedBy === "service" ? serviceManager() : undefined;
+      if (service !== undefined) {
+        if (flags.port !== undefined || flags.host !== undefined || flags.safe)
+          return yield* usage("A service runs this host as its definition says: --port, --host, and --safe are for one lemma serve started");
+        const problems = service.restart();
+        if (problems.length > 0) return yield* new CliError({ code: "ServiceFailed", message: problems.join("\n"), exit: ExitCode.failed });
+        const within = Duration.sum(STOPPING, START);
+        const back = yield* listening(home, (entry) => entry.pid !== running.pid, within);
+        if (back === undefined) return yield* notStarted(home, true, within);
+        return {
+          json: { restarted: true, url: back.url, pid: back.pid, previous: running.pid, startedBy: "service", cutOff: items },
+          text: `Restarted the host for ${home} through ${service.name}: ${back.url} (pid ${back.pid})`,
+        };
+      }
+      process.kill(running.pid, "SIGTERM");
+      yield* exited(running.pid);
+      const port = flags.port ?? (Number(new URL(running.url).port) || undefined);
+      const started = yield* startInBackground(io, home, info.cwd, hostArgs({ port, host: flags.host, safe: flags.safe }));
+      return {
+        json: { restarted: true, url: started.url, pid: started.pid, previous: running.pid, startedBy: "cli", cutOff: items, log: started.log },
+        text: `Restarted the host for ${home} in the background: ${started.url} (pid ${started.pid}). Its log is ${started.log}; \`lemma stop\` stops it.`,
       };
     }),
 });
@@ -270,6 +358,8 @@ interface ServiceManager {
   readonly install: (start: boolean) => readonly string[];
   readonly uninstall: () => void;
   readonly stop: () => void;
+  /** Stops the host it runs and starts it again, from its definition; what went wrong, if anything. */
+  readonly restart: () => readonly string[];
   readonly status: () => { readonly installed: boolean; readonly enabled: boolean; readonly active: boolean };
 }
 
@@ -318,6 +408,10 @@ const serviceManager = (): ServiceManager | undefined => {
       },
       stop: () => {
         systemctl("stop", "lemma.service");
+      },
+      restart: () => {
+        const result = systemctl("restart", "lemma.service");
+        return result.status === 0 ? [] : [`systemctl --user restart lemma.service: ${(result.stderr || result.error?.message || "failed").trim()}`];
       },
       status: () => ({
         installed: existsSync(file),
@@ -370,6 +464,10 @@ const serviceManager = (): ServiceManager | undefined => {
         // KeepAlive restarts only an unsuccessful exit: a host stopped by SIGTERM exits cleanly and stays down.
         run("launchctl", ["kill", "SIGTERM", `${domain}/${LABEL}`]);
       },
+      restart: () => {
+        const result = run("launchctl", ["kickstart", "-k", `${domain}/${LABEL}`]);
+        return result.status === 0 ? [] : [`launchctl kickstart -k ${domain}/${LABEL}: ${(result.stderr || "failed").trim()}`];
+      },
       status: () => {
         const loaded = run("launchctl", ["print", `${domain}/${LABEL}`]);
         return { installed: existsSync(file), enabled: loaded.status === 0, active: loaded.status === 0 && /state = running/.test(loaded.stdout) };
@@ -379,9 +477,17 @@ const serviceManager = (): ServiceManager | undefined => {
   return undefined;
 };
 
-/** What a service runs: this lemma's `serve`, for the home this command uses. */
-const serviceDefinition = (io: Io, manager: ServiceManager) => {
-  const command = [...(io.self ?? []), "serve", "--no-open"];
+/**
+ * What a service runs: `serve`, for the home this command uses, of the `lemma` command the installer links, so that
+ * once restarted it runs the release installed last (`lemma update`); else this lemma's own, as a checkout runs it.
+ */
+const serviceCommand = (io: Io): readonly string[] | undefined => {
+  const { link } = readBuild();
+  if (link !== undefined) return [link, "serve", "--no-open"];
+  return io.self === undefined ? undefined : [...io.self, "serve", "--no-open"];
+};
+
+const serviceDefinition = (command: readonly string[], io: Io, manager: ServiceManager) => {
   const env: Record<string, string> = { LEMMA_STARTED_BY: "service", ...(io.env.LEMMA_HOME === undefined ? {} : { LEMMA_HOME: homeOf(io) }) };
   return { command, text: manager.render(command, env, join(hostFiles(homeOf(io)).logs, "service.log")) };
 };
@@ -396,7 +502,7 @@ const serviceInstall = defineBuiltin({
   group: SERVICE,
   summary: "Keep a host running as a user service (systemd or launchd): started at login, restarted after a crash",
   description:
-    "It runs this lemma's serve. Under Nix, the node and the checkout it names may be garbage-collected or moved: declare the service in your system configuration instead, from what --print shows (systemd.user.services, launchd.user.agents). On Linux, `loginctl enable-linger $USER` keeps it running without a login session.",
+    "It runs lemma serve: an installed release's lemma command, so once restarted (lemma restart) it runs the release lemma update installed; a checkout's node and sources, which under Nix may be garbage-collected or moved: declare that service in your system configuration instead, from what --print shows (systemd.user.services, launchd.user.agents). On Linux, `loginctl enable-linger $USER` keeps it running without a login session.",
   flags: {
     print: { type: "boolean", description: "Print the definition and write nothing" },
     "no-start": { type: "boolean", description: "Install and enable it, but start it at the next login rather than now" },
@@ -405,9 +511,10 @@ const serviceInstall = defineBuiltin({
     Effect.gen(function* () {
       const manager = serviceManager();
       if (manager === undefined) return yield* noManager();
-      if (io.self === undefined)
+      const named = serviceCommand(io);
+      if (named === undefined)
         return yield* new CliError({ code: "Unsupported", message: "This lemma cannot name itself for a service", exit: ExitCode.failed });
-      const { command, text } = serviceDefinition(io, manager);
+      const { command, text } = serviceDefinition(named, io, manager);
       if (flags.print) return { json: { manager: manager.name, file: manager.file, command, definition: text }, text };
       const home = homeOf(io);
       const running = yield* readDiscovery(home);
@@ -472,4 +579,4 @@ const serviceStatus = defineBuiltin({
     }),
 });
 
-export const lifecycleCommands: readonly Builtin[] = [serve, stop, logs, serviceStatus, serviceInstall, serviceUninstall];
+export const lifecycleCommands: readonly Builtin[] = [serve, stop, restart, logs, serviceStatus, serviceInstall, serviceUninstall];

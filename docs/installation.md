@@ -36,18 +36,20 @@ and is promoted, so a stable release is the same files nightly users ran
 curl -fsSL https://raw.githubusercontent.com/phongndo/lemma/main/scripts/install.sh | LEMMA_CHANNEL=nightly sh
 ```
 
-There is one `lemma` at a time: running the installer with the other channel
-switches to it. Both use `~/.lemma`, so your settings, credentials, and
+The installer records the channel with the release, and `lemma update` follows
+it; `lemma update --channel stable` switches back. There is one `lemma` at a
+time, and both channels use `~/.lemma`, so your settings, credentials, and
 sessions stay. Going from nightly to stable is going back to an older release,
 which may not read what a newer one wrote.
 
-| Variable                 | Default                | Meaning                                                                       |
-| ------------------------ | ---------------------- | ----------------------------------------------------------------------------- |
-| `LEMMA_CHANNEL`          | `stable`               | `stable` or `nightly`, as above                                               |
-| `LEMMA_VERSION`          | the channel's          | The release to install, by version (`0.2.7`), whichever channel it is in      |
-| `LEMMA_INSTALL_DIR`      | `~/.local/bin`         | Where the `lemma` command goes, as an absolute path                           |
-| `LEMMA_DATA_DIR`         | `~/.local/share/lemma` | Where the releases go, as an absolute path                                    |
-| `LEMMA_RELEASE_BASE_URL` | the release on GitHub  | A directory holding the release's archive and its `.sha256`, such as a mirror |
+| Variable                 | Default                | Meaning                                                                        |
+| ------------------------ | ---------------------- | ------------------------------------------------------------------------------ |
+| `LEMMA_CHANNEL`          | `stable`               | `stable` or `nightly`, as above                                                |
+| `LEMMA_VERSION`          | the channel's          | The release to install, by version (`0.2.7`), whichever channel it is in       |
+| `LEMMA_INSTALL_DIR`      | `~/.local/bin`         | Where the `lemma` command goes, as an absolute path                            |
+| `LEMMA_DATA_DIR`         | `~/.local/share/lemma` | Where the releases go, as an absolute path                                     |
+| `LEMMA_RELEASE_BASE_URL` | the release on GitHub  | A directory holding the release's archive and its `.sha256`, such as a mirror  |
+| `LEMMA_RELEASE_API_URL`  | GitHub's, for Lemma    | Where the installer and `lemma update` ask which release is a channel's newest |
 
 ## First use
 
@@ -66,12 +68,23 @@ shell; its browser tools need a Chrome or Chromium on the machine
 
 ## Updating
 
-Run the installer again, with the same `LEMMA_CHANNEL`. A running host keeps
-the version it started with: restart it (`lemma stop`, then `lemma serve`) to
-run the new one. The installer keeps the release before the new one, which
-such a host may still run from, and removes older ones. A user service runs the
-release it was installed with: run `lemma service install` again after
-updating.
+```sh
+lemma update --check            # whether a newer release is out on your channel
+lemma update                    # install it
+lemma restart                   # run the host on it
+lemma update --channel nightly  # follow the other channel from now on
+lemma update 0.2.5              # install that release: an older one rolls back
+```
+
+`lemma update` installs as the installer does, with the installer the release
+carries: the new release in a directory of its own, `lemma` switched to it once
+it runs, the release before kept and older ones removed. A running host keeps
+the release it started with, which is why the one before stays, until
+`lemma restart` stops it, saying first what that cuts off, and starts it again
+on the new one: a user service through the service manager, since it runs the
+`lemma` the installer links (`lemma service install`); any other in the
+background, for the same project and on the same port. `lemma version` says
+which release a `lemma` is ([versioning](versioning.md)).
 
 While Lemma is 0.x, a release may change what plugins are written against: a
 plugin written for another version is left out, and `lemma plugins` says why

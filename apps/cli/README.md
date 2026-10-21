@@ -19,9 +19,11 @@ nix develop -c pnpm lemma doctor                               # what is wrong h
 A client of a host that holds no domain. Its own commands are the ones no
 plugin could serve:
 
-- **This machine's host and setup:** `serve`, `stop`, `logs`, `service`,
-  `env`, `token`, `config`, `trust`, `doctor`, `plugins check`. They need no
-  host running.
+- **This machine's host and setup:** `serve`, `stop`, `restart`, `logs`,
+  `service`, `env`, `token`, `config`, `trust`, `doctor`, `plugins check`.
+  They need no host running.
+- **This lemma:** `version`, and `update`, which installs another release with
+  the installer the release carries ([versioning](../../docs/versioning.md)).
 - **The runtime's:** `status`, `plugins`, `reload`, `kernel`, `inspectors`,
   `channels`, `events`, `questions`, `answer`, `dismiss`, `open`: what the host
   serves itself (`RuntimeRpcs`), whatever plugins run.
@@ -48,7 +50,10 @@ plugin shadows one.
   (`LEMMA_STARTED_BY`), and returns once it listens. `stop` asks the host what
   stopping cuts off (`cli.in-progress`, from its plugins' `InProgress`) and asks, or refuses without a terminal
   unless `--force`; a host the desktop app started is the app's to stop, one a
-  service runs is stopped through the service manager. The host writes what it
+  service runs is stopped through the service manager. `restart` stops it as
+  `stop` does and starts it again on this lemma: through the service manager,
+  whose definition names the `lemma` the installer links, or else in the
+  background, for the project and on the port it had. The host writes what it
   prints to `<home>/logs/host.log`, which `logs` reads.
 - **A plugin's command runs on the host.** It outlives a dropped connection
   there for a while (`cli.registry`'s `resumeGraceMs`): the command reconnects

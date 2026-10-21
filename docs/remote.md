@@ -10,11 +10,11 @@ credentials, and tools are the server's, and a client's own host (the desktop
 app's, say) is a separate one. A client reaches several hosts by name: its own
 machine's (`local`) and the servers it has saved (`lemma env`).
 
-Keep the client's checkout at the server's version: the RPC protocol changes
-between versions (`HOST_PROTOCOL` in the transport plugin's
-[README](../domains/transport/server/README.md#use)), and a CLI that finds the
-host on another one says so and asks for it to be restarted from its version.
-The web app comes from the host, so it always matches.
+Keep the client's Lemma at the server's release (`lemma version` on each, and
+`lemma update <version>` to match one): the RPC protocol changes between
+versions ([versioning](versioning.md)), and a CLI that finds the host on
+another one says so and asks for it to be restarted from its version. The web
+app comes from the host, so it always matches.
 
 ## On the server
 

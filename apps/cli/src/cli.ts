@@ -6,6 +6,7 @@ import { readEnvironments } from "@lemma/contracts/discovery";
 import packageJson from "../package.json" with { type: "json" };
 import { hostCommands } from "./commands/host.ts";
 import { lifecycleCommands } from "./commands/lifecycle.ts";
+import { releaseCommands } from "./commands/release.ts";
 import { setupCommands } from "./commands/setup.ts";
 import { CliError, ExitCode, usage } from "./command.ts";
 import type { Builtin, Connection, Failure, Globals, Io, Output, QuestionPolicy } from "./command.ts";
@@ -15,7 +16,7 @@ import { groupHelp, hostedCommand, leadingWords, listHosted, match } from "./hos
 export { ExitCode } from "./command.ts";
 
 /** The `lemma` command's own commands, in the order `lemma help` lists their groups. */
-export const builtins: readonly Builtin[] = [...lifecycleCommands, ...hostCommands, ...setupCommands];
+export const builtins: readonly Builtin[] = [...lifecycleCommands, ...hostCommands, ...setupCommands, ...releaseCommands];
 
 export const VERSION: string = packageJson.version;
 

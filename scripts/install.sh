@@ -4,6 +4,7 @@ set -eu
 
 channel=${LEMMA_CHANNEL:-stable}
 version=${LEMMA_VERSION:-}
+api_url=${LEMMA_RELEASE_API_URL:-https://api.github.com/repos/phongndo/lemma}
 install_dir=${LEMMA_INSTALL_DIR:-"$HOME/.local/bin"}
 data_dir=${LEMMA_DATA_DIR:-"$HOME/.local/share/lemma"}
 
@@ -50,18 +51,22 @@ if [ -e "$destination" ] || [ -L "$destination" ]; then
   esac
 fi
 
-# Every build is a release: stable is the one marked latest, which only a promotion moves; nightly is the newest.
+# Every build is a release: stable is the one marked latest, which only a promotion moves; nightly is the newest. The
+# channel is recorded with the release, for `lemma update` to follow, whichever release LEMMA_VERSION picks.
+case "$channel" in
+  stable | nightly) ;;
+  *) fail "LEMMA_CHANNEL must be stable or nightly" ;;
+esac
 if [ -z "$version" ]; then
   case "$channel" in
     stable)
-      api=https://api.github.com/repos/phongndo/lemma/releases/latest
+      api="$api_url/releases/latest"
       none="no stable release is published yet; LEMMA_CHANNEL=nightly installs the newest nightly"
       ;;
     nightly)
-      api="https://api.github.com/repos/phongndo/lemma/releases?per_page=1"
+      api="$api_url/releases?per_page=1"
       none="no release is published yet"
       ;;
-    *) fail "LEMMA_CHANNEL must be stable or nightly" ;;
   esac
   metadata=$(curl -fsSL "$api") || fail "$none"
   version=$(printf '%s\n' "$metadata" | sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1)
@@ -95,6 +100,10 @@ tar -xzf "$temporary/$asset" -C "$temporary"
 mkdir -p "$data_dir/releases" "$install_dir"
 pending=$(mktemp -d "$data_dir/releases/$package.XXXXXX")
 cp -R "$temporary/$package/." "$pending/"
+# How it was installed, which `lemma version` shows and `lemma update` installs the next release by.
+json_string() { printf '"%s"' "$(printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g')"; }
+printf '{\n  "channel": %s,\n  "link": %s,\n  "dataDir": %s\n}\n' \
+  "$(json_string "$channel")" "$(json_string "$destination")" "$(json_string "$data_dir")" >"$pending/install.json"
 # Before switching the command: fails if this machine cannot run the release's runtime.
 if ! "$pending/bin/lemma" --version --text >/dev/null; then
   [ ! -e /etc/NIXOS ] || fail "this machine cannot run $package: on NixOS, its Node.js needs nix-ld (programs.nix-ld.enable)"

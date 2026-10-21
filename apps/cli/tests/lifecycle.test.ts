@@ -53,7 +53,7 @@ describe("a host started in the background", () => {
     return log !== undefined && existsSync(log) ? `${log}:\n${readFileSync(log, "utf8")}` : undefined;
   });
 
-  test("serve --detach returns once it listens; status says the CLI started it; logs prints its log; stop stops it", async () => {
+  test("serve --detach returns once it listens; status says the CLI started it; logs prints its log; restart starts it again; stop stops it", async () => {
     const self = [process.execPath, "--conditions=lemma-source", cliMain];
     const started = await runWith(["serve", "--detach", "--json"], home, { self });
     expect(started.code, started.err).toBe(ExitCode.ok);
@@ -79,10 +79,19 @@ describe("a host started in the background", () => {
     expect(JSON.parse((await invoke(["logs", "-n", "0", "--json"], home)).out)).toMatchObject({ lines: [] });
     expect((await invoke(["logs", "-n", "-5"], home)).code).toBe(ExitCode.usage);
 
+    // Again in the background, on the port it had, for the project it served.
+    const restart = await runWith(["restart", "--json"], home, { self });
+    expect(restart.code, restart.err).toBe(ExitCode.ok);
+    const restarted = JSON.parse(restart.out) as { pid: number };
+    pid = restarted.pid;
+    expect(restarted).toMatchObject({ restarted: true, url: serving.url, previous: serving.pid, startedBy: "cli", cutOff: [] });
+    expect(alive(serving.pid)).toBe(false);
+    expect(JSON.parse((await invoke(["status", "--json"], home)).out)).toMatchObject({ pid: restarted.pid, info: { startedBy: "cli", cwd: home } });
+
     const stopped = await invoke(["stop", "--json"], home);
     expect(stopped.code, stopped.err).toBe(ExitCode.ok);
-    expect(JSON.parse(stopped.out)).toEqual({ stopped: true, pid: serving.pid, startedBy: "cli", cutOff: [] });
-    expect(alive(serving.pid)).toBe(false);
+    expect(JSON.parse(stopped.out)).toEqual({ stopped: true, pid: restarted.pid, startedBy: "cli", cutOff: [] });
+    expect(alive(restarted.pid)).toBe(false);
     expect(existsSync(join(home, "transport.json"))).toBe(false);
     expect(JSON.parse((await invoke(["status", "--json"], home)).err).error.code).toBe("NoHost");
     expect(JSON.parse((await invoke(["stop", "--json"], home)).out)).toEqual({ stopped: false, home });
