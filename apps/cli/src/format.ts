@@ -69,6 +69,7 @@ export const formatStatus = (
     ["host", `${info.pid === undefined ? "" : `pid ${info.pid}, `}transport ${info.version}`],
     ["started", `${info.startedAt === undefined ? "" : `${time(info.startedAt)} `}${startedByText(info.startedBy)}`],
     ["home", info.home],
+    ...(info.profile === undefined ? [] : ([["profile", info.profile]] as const)),
     ["project", info.cwd],
     ["composition", `${info.composition.id.slice(0, 12)} (${info.composition.plugins.length} plugins)`],
     ["plugins", countStates(plugins) || "none"],

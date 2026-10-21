@@ -5,7 +5,7 @@ row turns them on (`"enabled": true`): `context.prune`. `~/.lemma/config.jsonc` 
 `<project>/.lemma/config.jsonc` patch that by plugin id. The project's is the
 one in the directory the host was started in; a session in another project
 with config of its own is told it does not apply there, while that project's
-`AGENTS.md`, skills, and profiles do.
+`AGENTS.md`, skills, and modes do.
 
 ```jsonc
 {
@@ -64,11 +64,11 @@ your plugins. What is there loads by itself, and again when it changes:
 | `ticker/`                              | A folder plugin, its `package.json` naming its halves: `"lemma": { "host": "./ticker.ts", "web": "./web.js", "styles": ["./ticker.css"] }` |
 
 A folder plugin's manifest can also name folders of things other plugins read,
-by kind: `"resources": { "skills": "./skills", "profiles": "./profiles" }`.
+by kind: `"resources": { "skills": "./skills", "modes": "./modes" }`.
 They come and go with its host half's plugins (turned off, failed, a project
 not trusted), and the plugin that reads a kind finds them in plugin status
-(`resourcesOf`): `skills.files` reads `skills`, and `agent.profiles` reads
-`profiles`, each below your own of the same name. A field Lemma does not read
+(`resourcesOf`): `skills.files` reads `skills`, and `agent.modes` reads
+`modes`, each below your own of the same name. A field Lemma does not read
 is reported, which catches a typo.
 
 The host links what a plugin file may import (`effect`, `@lemma/core`,
@@ -150,3 +150,47 @@ warns and ignores them.
 keeping the file's comments; `lemma trust` lists it and says whether the
 current directory is trusted. `lemma config --show-origin` lists what the files
 set for this directory's host, and which file sets each.
+
+## Profiles
+
+A profile is a separate Lemma on the same machine: its own plugins, config,
+look, threads, and logins, in a home of its own, served by a host of its own.
+Make one when what differs is the plugins or the interface, a coding agent
+beside a research desk; when it is the same app with another agent, that is a
+mode ([agent.modes](../domains/agent/modes/README.md)). Until you make one
+there is only the default, `~/.lemma` itself, and nothing about profiles
+shows.
+
+```sh
+lemma profile create research    # an empty home, ~/.lemma/profiles/research, with a port of its own
+lemma --profile research serve   # its host; LEMMA_PROFILE=research does the same for every command
+lemma profile                    # the profiles, their ports, and which hosts run
+```
+
+- **Where.** `<home>/profiles/<name>/`, laid out as the home is: its own
+  `config.jsonc`, `plugins/`, sessions, `auth.json`, and `trustedProjects`.
+  Its `profile.json` keeps the port its host listens on unless its config
+  names another, so its address stays the same, and with it what a browser
+  keeps for the address.
+- **Which one.** `--profile <name>` for one command, `LEMMA_PROFILE` for
+  every command and host started from that shell; `default`, or unset, is the
+  home's own. A host's tools run `lemma` in their own profile. The desktop app
+  opens its first window on `LEMMA_PROFILE`'s profile, and another profile in
+  a window of its own.
+- **Nothing is shared.** Not plugins, rows, logins, threads, or trusted
+  projects: a new profile starts as a fresh install does. Link a plugin file
+  or folder into each profile's `plugins/` to run it in each; log in from the
+  profile, or set the provider's API key variable where its host starts, to
+  use the same provider.
+- **Switching.** Once there is more than one, the web app's sidebar shows the
+  profile a page is as an avatar icon, as a browser does: a pattern made from
+  its name until you choose another or a picture of your own. Its menu opens
+  another, starting its host when none runs; Settings › Profiles makes one
+  ([profiles.switcher](../domains/profiles/switcher/README.md)). A profile on
+  a server is reached at its own port ([remote access](remote.md#profiles)).
+- **Removing.** `lemma profile remove <name>` deletes its home, once its host
+  is stopped.
+
+Profiles keep work apart; they do not keep it safe from each other. Every
+host runs as you, so one profile's tools (a shell) can read another's files,
+its logins included. What must not mix belongs to another user account.

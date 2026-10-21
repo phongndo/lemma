@@ -11,11 +11,12 @@ import { makeHostRpcHttp } from "@lemma/client";
 import { HOST_PROTOCOL } from "@lemma/contracts";
 import { environmentNameProblem, environmentsPath, LOCAL, normalizeUrl, readDiscovery, readEnvironments, writeEnvironments } from "@lemma/contracts/discovery";
 import { isInside, writeFileAtomic } from "@lemma/contracts/fs";
+import { profileOf } from "@lemma/contracts/profiles";
 import { hostFiles, resolvePaths } from "@lemma/host/paths";
 import { callOn } from "../channels.ts";
 import { CliError, defineBuiltin, ExitCode, usage } from "../command.ts";
 import type { Builtin, Io } from "../command.ts";
-import { connectTo, findTarget, homeOf, noLocalHost, reasonOf, statusOf, toCliError } from "../connect.ts";
+import { connectTo, findTarget, homeOf, noLocalHost, reasonOf, rootOf, statusOf, toCliError } from "../connect.ts";
 
 /*
  * Setting this client up: which hosts it reaches (`env`), the local host's
@@ -77,8 +78,9 @@ const health = (url: string, token: string): Effect.Effect<string> =>
 const failedWrite = (path: string, cause: unknown) =>
   new CliError({ code: "WriteFailed", message: `Cannot write ${path}: ${cause instanceof Error ? cause.message : String(cause)}`, exit: ExitCode.failed });
 
+/** The environments this client knows: the root's, whatever the profile. */
 const environmentsOf = (io: Io) =>
-  readEnvironments(homeOf(io)).pipe(Effect.mapError((error) => new CliError({ code: "NoHost", message: error.message, exit: ExitCode.failed })));
+  readEnvironments(rootOf(io)).pipe(Effect.mapError((error) => new CliError({ code: "NoHost", message: error.message, exit: ExitCode.failed })));
 
 const envList = defineBuiltin({
   path: ["env"],
@@ -135,7 +137,7 @@ const envAdd = defineBuiltin({
       const token = given || (ask === undefined ? "" : (yield* Effect.promise(() => ask(`Token for ${url} (\`lemma token\` there prints it): `, true))).trim());
       if (token === "") return yield* usage("env add needs the host's token: --token <token>, or LEMMA_TOKEN");
       const info = yield* verify(url, token);
-      const home = homeOf(io);
+      const home = rootOf(io);
       const file = yield* environmentsOf(io);
       const next = {
         ...(flags.use ? { default: args.name } : file.default === undefined ? {} : { default: file.default }),
@@ -156,7 +158,7 @@ const envUse = defineBuiltin({
   args: [{ name: "name", description: "A saved one's name, or local", required: true }],
   run: ({ io, args }) =>
     Effect.gen(function* () {
-      const home = homeOf(io);
+      const home = rootOf(io);
       const file = yield* environmentsOf(io);
       if (args.name !== LOCAL && file.environments[args.name] === undefined)
         return yield* new CliError({ code: "UnknownEnvironment", message: `No environment "${args.name}"; \`lemma env\` lists them`, exit: ExitCode.failed });
@@ -174,7 +176,7 @@ const envRemove = defineBuiltin({
   args: [{ name: "name", description: "A saved one's name", required: true }],
   run: ({ io, args }) =>
     Effect.gen(function* () {
-      const home = homeOf(io);
+      const home = rootOf(io);
       const file = yield* environmentsOf(io);
       if (file.environments[args.name] === undefined) return { json: { removed: false, name: args.name }, text: `No environment "${args.name}"` };
       const { [args.name]: _, ...environments } = file.environments;
@@ -192,7 +194,7 @@ const token = defineBuiltin({
     Effect.gen(function* () {
       const home = homeOf(io);
       const local = yield* readDiscovery(home);
-      if (local === undefined) return yield* noLocalHost(home);
+      if (local === undefined) return yield* noLocalHost(home, profileOf(io.env));
       return { json: { url: local.url, token: local.token }, text: local.token };
     }),
 });
@@ -453,7 +455,7 @@ const doctor = defineBuiltin({
           ? check("web", "Web app", "ok", "built")
           : check("web", "Web app", "warn", "not built: the host serves no page", "nix develop -c pnpm --filter @lemma/web-app build"),
       );
-      const environments = yield* Effect.result(readEnvironments(home));
+      const environments = yield* Effect.result(readEnvironments(rootOf(io)));
       if (environments._tag === "Failure") results.push(check("environments", "Environments", "fail", environments.failure.message));
       // The host commands go to: reachable, on this protocol, and its plugins well.
       const target = yield* Effect.result(findTarget(io, globals.env));

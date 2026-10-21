@@ -11,7 +11,6 @@ import type { Host } from "@lemma/client";
 import { callOn, following, ofChannel, reconnecting } from "./channels.ts";
 import { CliError, ExitCode, usage } from "./command.ts";
 import type { Connection, Failure, Globals, Io, Output, Target } from "./command.ts";
-import { homeOf } from "./connect.ts";
 import { openPage, openWebPath } from "./open.ts";
 import { answering, hearing, hostEvents, questionHandler } from "./questions.ts";
 
@@ -157,7 +156,7 @@ export const runHosted = (
           return;
         case "open":
           if (element.path !== undefined) {
-            if (!openWebPath(io, homeOf(io), connection.target, element.path)) io.err(appUrl(connection.target.url, element.path, connection.target.token));
+            if (!openWebPath(io, connection.target, element.path)) io.err(appUrl(connection.target.url, element.path, connection.target.token));
           } else openPage(io, element.url, element.prompt, answering(io, globals), prompts.signal);
           return;
         case "answer":

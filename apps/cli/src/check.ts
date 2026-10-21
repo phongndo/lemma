@@ -158,6 +158,8 @@ const hostIn = (home: string, env: Readonly<Record<string, string | undefined>>)
             ...process.env,
             ...env,
             LEMMA_HOME: home,
+            // The check's own home is the default profile's: a profile the caller's shell names is none of its.
+            LEMMA_PROFILE: undefined,
             LEMMA_URL: undefined,
             LEMMA_TOKEN: undefined,
             LEMMA_ENV: undefined,
@@ -198,7 +200,7 @@ const ask = (run: Runner, io: Io, home: string, argv: readonly string[]): Effect
     let err = "";
     const code = await run([...argv, "--json"], {
       ...io,
-      env: { ...io.env, LEMMA_HOME: home, LEMMA_URL: undefined, LEMMA_TOKEN: undefined, LEMMA_ENV: undefined },
+      env: { ...io.env, LEMMA_HOME: home, LEMMA_PROFILE: undefined, LEMMA_URL: undefined, LEMMA_TOKEN: undefined, LEMMA_ENV: undefined },
       out: (text) => void (out += `${text}\n`),
       err: (text) => void (err += `${text}\n`),
     });

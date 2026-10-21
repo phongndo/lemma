@@ -49,7 +49,7 @@ export interface Io {
   /** The terminal's width, when stdout is one. */
   readonly columns?: number;
   /** Runs the host in this process (`lemma serve` in the foreground); absent in tests. Resolves when it stops. */
-  readonly serve?: (argv: readonly string[]) => Promise<void>;
+  readonly serve?: (argv: readonly string[], profile: string | undefined) => Promise<void>;
   /** The command that runs this CLI again, `[node, ...flags, main.ts]`: what `serve --detach` and `service install` start. */
   readonly self?: readonly string[];
 }
@@ -62,6 +62,8 @@ export interface Globals {
   readonly json: boolean;
   readonly quiet: boolean;
   readonly env?: string | undefined;
+  /** `--profile`; the command's `io.env` carries it as `LEMMA_PROFILE`, which is what every command reads. */
+  readonly profile?: string | undefined;
   readonly fields?: readonly string[] | undefined;
   readonly questions?: QuestionPolicy | undefined;
   readonly answers: readonly string[];

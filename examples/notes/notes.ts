@@ -9,7 +9,7 @@ import { ToolResult, Tools } from "@lemma/tools";
  * Research notes: the agent keeps what it finds as Markdown notes in the project (`notes/`, a note a topic), so a
  * session's findings outlast it and the next picks up where it left off. Three tools write, search, and read them, and
  * a section of the system prompt lists the notes there are, so the model knows what it has. Its package brings the
- * `research` profile and the `cite` skill (`"resources"` in its manifest).
+ * `research` mode and the `cite` skill (`"resources"` in its manifest).
  *
  * A folder plugin, written the way a user writes one: link or copy the folder into `~/.lemma/plugins/`. It imports
  * only packages the host supplies, and is written with promises (`@lemma/core/plain`).
@@ -76,7 +76,7 @@ const text = (value: string) => new ToolResult({ content: [{ type: "text", text:
 export default definePlugin({
   id: "notes",
   version: "0.1.0",
-  uses: ["lemma/agent@1", "lemma/tools@1"],
+  uses: ["lemma/agent@2", "lemma/tools@1"],
   config: Config,
   setup: (_deps, { add, config }) => {
     const folder = (cwd: string) => path.resolve(cwd, config.dir);

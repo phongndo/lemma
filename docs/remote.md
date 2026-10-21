@@ -88,6 +88,28 @@ change writes it there.
   client's current directory: give a server path
   ([directory scope](../apps/cli/README.md#behavior)).
 
+## Profiles
+
+Each [profile](configuration.md#profiles) on the server is a host of its own,
+at its own port, with its own token. A client reaches one at the server's name
+and that port, so serve each profile's port as you serve the default's, at the
+same number (`lemma profile` lists them):
+
+```sh
+tailscale serve --bg --https=7433 7433   # the default's, at its own port too, so another profile can switch back to it
+tailscale serve --bg --https=7434 7434   # https://<machine>.<tailnet>.ts.net:7434 → the profile on 7434
+```
+
+- **Web app.** Its profile menu opens another profile at the page's machine
+  name and that profile's port, starting its host on the server when none
+  runs there ([profiles.switcher](../domains/profiles/switcher/README.md)).
+  A host started so runs until it is stopped; `lemma --profile <name>
+  service install` keeps one running on its own, as a service of its own.
+- **Desktop app.** Showing the server, it opens another profile in a window of
+  its own, through the server's host.
+- **CLI.** `lemma --env box --profile research status` asks the server's host
+  to open the profile, and goes to it at its port.
+
 ## Security
 
 The token is a bearer secret for the whole host: whoever holds it can run tools,

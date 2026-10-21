@@ -205,6 +205,9 @@ importers:
       '@lemma/host':
         specifier: workspace:*
         version: link:../../packages/host
+      '@lemma/profiles':
+        specifier: workspace:*
+        version: link:../../domains/profiles/contract
       effect:
         specifier: 4.0.5
         version: 4.0.5
@@ -239,6 +242,9 @@ importers:
       '@lemma/host':
         specifier: workspace:*
         version: link:../../packages/host
+      '@lemma/profiles':
+        specifier: workspace:*
+        version: link:../../domains/profiles/contract
       '@lemma/web':
         specifier: workspace:*
         version: link:../../packages/web
@@ -276,9 +282,9 @@ importers:
       '@lemma/agent-loop':
         specifier: workspace:*
         version: link:../../domains/agent/loop
-      '@lemma/agent-profiles':
+      '@lemma/agent-modes':
         specifier: workspace:*
-        version: link:../../domains/agent/profiles
+        version: link:../../domains/agent/modes
       '@lemma/client':
         specifier: workspace:*
         version: link:../../packages/client
@@ -384,6 +390,12 @@ importers:
       '@lemma/mcp-servers':
         specifier: workspace:*
         version: link:../../domains/mcp/servers
+      '@lemma/profiles':
+        specifier: workspace:*
+        version: link:../../domains/profiles/contract
+      '@lemma/profiles-switcher':
+        specifier: workspace:*
+        version: link:../../domains/profiles/switcher
       '@lemma/release':
         specifier: workspace:*
         version: link:../../domains/release/contract
@@ -786,7 +798,7 @@ importers:
         specifier: 5.0.5
         version: 5.0.5(@types/node@24.19.2)(vite@8.3.4(@types/node@24.19.2)(esbuild@0.28.2)(jiti@2.7.0))
 
-  domains/agent/profiles:
+  domains/agent/modes:
     dependencies:
       '@lemma/agent':
         specifier: workspace:*
@@ -2271,6 +2283,65 @@ importers:
       zod:
         specifier: 4.6.7
         version: 4.6.7
+
+  domains/profiles/contract:
+    dependencies:
+      '@lemma/contracts':
+        specifier: workspace:*
+        version: link:../../../packages/contracts
+      effect:
+        specifier: 4.0.5
+        version: 4.0.5
+    devDependencies:
+      '@types/node':
+        specifier: 24.19.2
+        version: 24.19.2
+      tsrs:
+        specifier: 0.18.0-ts7.1.0-dev.20260929
+        version: 0.18.0-ts7.1.0-dev.20260929
+      vitest:
+        specifier: 5.0.5
+        version: 5.0.5(@types/node@24.19.2)(vite@8.3.4(@types/node@24.19.2)(esbuild@0.28.2)(jiti@2.7.0))
+
+  domains/profiles/switcher:
+    dependencies:
+      '@lemma/contracts':
+        specifier: workspace:*
+        version: link:../../../packages/contracts
+      '@lemma/core':
+        specifier: workspace:*
+        version: link:../../../packages/core
+      '@lemma/frame':
+        specifier: workspace:*
+        version: link:../../frame/contract
+      '@lemma/look':
+        specifier: workspace:*
+        version: link:../../look/contract
+      '@lemma/profiles':
+        specifier: workspace:*
+        version: link:../contract
+      '@lemma/settings':
+        specifier: workspace:*
+        version: link:../../settings/contract
+      '@lemma/web':
+        specifier: workspace:*
+        version: link:../../../packages/web
+      effect:
+        specifier: 4.0.5
+        version: 4.0.5
+      solid-js:
+        specifier: 1.9.17
+        version: 1.9.17
+    devDependencies:
+      '@types/node':
+        specifier: 24.19.2
+        version: 24.19.2
+      tsrs:
+        specifier: 0.18.0-ts7.1.0-dev.20260929
+        version: 0.18.0-ts7.1.0-dev.20260929
+      vitest:
+        specifier: 5.0.5
+        version: 5.0.5(@types/node@24.19.2)(vite@8.3.4(@types/node@24.19.2)(esbuild@0.28.2)(jiti@2.7.0))
 
   domains/release/contract:
     dependencies:
@@ -3880,9 +3951,9 @@ importers:
       '@lemma/agent-loop':
         specifier: workspace:*
         version: link:../../domains/agent/loop
-      '@lemma/agent-profiles':
+      '@lemma/agent-modes':
         specifier: workspace:*
-        version: link:../../domains/agent/profiles
+        version: link:../../domains/agent/modes
       '@lemma/contracts':
         specifier: workspace:*
         version: link:../../packages/contracts
@@ -3926,9 +3997,9 @@ importers:
       '@lemma/agent-loop':
         specifier: workspace:*
         version: link:../../domains/agent/loop
-      '@lemma/agent-profiles':
+      '@lemma/agent-modes':
         specifier: workspace:*
-        version: link:../../domains/agent/profiles
+        version: link:../../domains/agent/modes
       '@lemma/contracts':
         specifier: workspace:*
         version: link:../../packages/contracts
@@ -3994,9 +4065,9 @@ importers:
       '@lemma/agent-loop':
         specifier: workspace:*
         version: link:../../domains/agent/loop
-      '@lemma/agent-profiles':
+      '@lemma/agent-modes':
         specifier: workspace:*
-        version: link:../../domains/agent/profiles
+        version: link:../../domains/agent/modes
       '@lemma/contracts':
         specifier: workspace:*
         version: link:../../packages/contracts
@@ -4099,9 +4170,9 @@ importers:
       '@lemma/agent-loop':
         specifier: workspace:*
         version: link:../../domains/agent/loop
-      '@lemma/agent-profiles':
+      '@lemma/agent-modes':
         specifier: workspace:*
-        version: link:../../domains/agent/profiles
+        version: link:../../domains/agent/modes
       '@lemma/contracts':
         specifier: workspace:*
         version: link:../../packages/contracts
@@ -4226,9 +4297,9 @@ importers:
       '@lemma/agent-loop':
         specifier: workspace:*
         version: link:../../domains/agent/loop
-      '@lemma/agent-profiles':
+      '@lemma/agent-modes':
         specifier: workspace:*
-        version: link:../../domains/agent/profiles
+        version: link:../../domains/agent/modes
       '@lemma/browser':
         specifier: workspace:*
         version: link:../../domains/browser/contract
@@ -4310,6 +4381,12 @@ importers:
       '@lemma/mcp-servers':
         specifier: workspace:*
         version: link:../../domains/mcp/servers
+      '@lemma/profiles':
+        specifier: workspace:*
+        version: link:../../domains/profiles/contract
+      '@lemma/profiles-switcher':
+        specifier: workspace:*
+        version: link:../../domains/profiles/switcher
       '@lemma/release':
         specifier: workspace:*
         version: link:../../domains/release/contract

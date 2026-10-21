@@ -54,7 +54,7 @@ channel that declares `read`, whatever plugin serves it, so a plugin's new
 read is a script's new tool with nothing configured: sessions and their
 Trajectory views (`sessions.list`, `.events`, `.search`, `.records`,
 `.request`, `.cache`), the agent's state, what else Lemma has (commands,
-skills, profiles, models), the workspace, and the host's own state and trace
+skills, modes, models), the workspace, and the host's own state and trace
 (`devtools.host.*`, `devtools.trace.*`). It stays an allowlist: one without
 `*` offers only the ids it names, and an id beside `*` adds a channel that
 declares nothing. A channel that declares a write (`operate`, `change`)

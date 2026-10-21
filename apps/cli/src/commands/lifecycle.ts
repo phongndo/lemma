@@ -7,13 +7,14 @@ import { fileURLToPath } from "node:url";
 import { Duration, Effect } from "effect";
 import { readDiscovery } from "@lemma/contracts/discovery";
 import type { Discovery } from "@lemma/contracts/discovery";
+import { profileOf } from "@lemma/contracts/profiles";
 import { CliChannels } from "@lemma/cli";
 import { callChannel } from "@lemma/client";
 import { SHUTDOWN_TIMEOUT_MS } from "@lemma/host/limits";
 import { hostFiles } from "@lemma/host/paths";
 import { CliError, defineBuiltin, ExitCode, usage } from "../command.ts";
 import type { Builtin, Globals, Io } from "../command.ts";
-import { connect, homeOf, otherProtocol, toCliError } from "../connect.ts";
+import { connect, homeOf, otherProtocol, rootOf, toCliError } from "../connect.ts";
 import { startedByText } from "../format.ts";
 import { readBuild } from "../release.ts";
 
@@ -119,7 +120,7 @@ const serve = defineBuiltin({
   group: RUN,
   summary: "Run the host for this machine's home: here in the terminal, or in the background with --detach",
   description:
-    "The host every client attaches to: the web app, the desktop app, and this command. There is one per home ($LEMMA_HOME, default ~/.lemma): another start says which runs. --port and --host apply to this run only, over the config files; to keep a host running across reboots and crashes, see lemma service. Its output goes to the terminal and to its log (lemma logs).",
+    "The host every client attaches to: the web app, the desktop app, and this command. There is one per home ($LEMMA_HOME, default ~/.lemma) and profile (--profile, see lemma profile): another start says which runs. --port and --host apply to this run only, over the config files; to keep a host running across reboots and crashes, see lemma service. Its output goes to the terminal and to its log (lemma logs).",
   flags: {
     detach: { type: "boolean", short: "d", description: "Start it in the background and return once it listens; lemma stop stops it" },
     port: { type: "number", description: "Listen on this port, this run only (0: any free one)" },
@@ -136,6 +137,13 @@ const serve = defineBuiltin({
       const wrong = localOnly(globals, "serve");
       if (wrong !== undefined) return yield* wrong;
       const home = homeOf(io);
+      const profile = profileOf(io.env);
+      if (profile !== undefined && !existsSync(home))
+        return yield* new CliError({
+          code: "NoProfile",
+          message: `There is no profile "${profile}" (${home}); \`lemma profile create ${profile}\` makes one`,
+          exit: ExitCode.failed,
+        });
       const running = yield* readDiscovery(home);
       if (running !== undefined)
         return yield* new CliError({
@@ -151,7 +159,7 @@ const serve = defineBuiltin({
         if (io.serve === undefined)
           return yield* new CliError({ code: "Unsupported", message: "This lemma cannot run a host in its own process", exit: ExitCode.failed });
         const serveHere = io.serve;
-        yield* Effect.promise(() => serveHere([...args, ...(flags["no-open"] ? ["--no-open"] : [])]));
+        yield* Effect.promise(() => serveHere([...args, ...(flags["no-open"] ? ["--no-open"] : [])], profileOf(io.env)));
         return undefined;
       }
       const started = yield* startInBackground(io, home, io.cwd, args);
@@ -262,7 +270,7 @@ const stop = defineBuiltin({
       if (running === undefined) return { json: { stopped: false, home }, text: `No host runs for ${home}` };
       const host = yield* runningHost(io, running, flags.force, "stop");
       yield* agreed(io, flags.force, "Stopping", host);
-      const service = host.startedBy === "service" ? serviceManager() : undefined;
+      const service = host.startedBy === "service" ? serviceManager(profileOf(io.env)) : undefined;
       if (service !== undefined) service.stop();
       else process.kill(running.pid, "SIGTERM");
       yield* exited(running.pid);
@@ -295,7 +303,7 @@ const restart = defineBuiltin({
       if (running === undefined)
         return yield* new CliError({ code: "NoHost", message: `No host runs for ${home}: lemma serve starts one`, exit: ExitCode.unavailable });
       const host = yield* runningHost(io, running, flags.force, "restart");
-      const service = host.startedBy === "service" ? serviceManager() : undefined;
+      const service = host.startedBy === "service" ? serviceManager(profileOf(io.env)) : undefined;
       // Before asking whether to cut anything off: a restart these flags cannot change is refused whatever the answer.
       if (service !== undefined && (flags.port !== undefined || flags.host !== undefined || flags.safe))
         return yield* usage("A service runs this host as its definition says: --port, --host, and --safe are for one lemma serve started");
@@ -342,7 +350,8 @@ const logs = defineBuiltin({
       const count = flags.lines ?? 50;
       if (!Number.isInteger(count) || count < 0) return yield* usage("--lines must be a whole number, 0 or more");
       const files = hostFiles(homeOf(io));
-      const path = flags.desktop ? join(files.logs, "desktop.log") : flags.previous ? files.previousLog : files.log;
+      // The desktop app's own log is the root's, whatever profile its windows show.
+      const path = flags.desktop ? join(hostFiles(rootOf(io)).logs, "desktop.log") : flags.previous ? files.previousLog : files.log;
       if (!existsSync(path))
         return yield* new CliError({
           code: "NotFound",
@@ -401,6 +410,10 @@ interface ServiceManager {
 
 const LABEL = "dev.lemma.host";
 
+/** The service's name: one per profile, the default's `lemma` (`dev.lemma.host`), another's `lemma-<profile>`. */
+const unitOf = (profile: string | undefined) => (profile === undefined ? "lemma.service" : `lemma-${profile}.service`);
+const labelOf = (profile: string | undefined) => (profile === undefined ? LABEL : `${LABEL}.${profile}`);
+
 const run = (command: string, args: readonly string[]) => spawnSync(command, args, { encoding: "utf8" });
 
 /** A word for systemd's command line: quoted when it has to be. */
@@ -408,9 +421,11 @@ const systemdWord = (word: string) => (/^[\w@%+=:,./-]+$/.test(word) ? word : `"
 
 const xml = (text: string) => text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 
-const serviceManager = (): ServiceManager | undefined => {
+/** The service manager's view of the service for `profile` (the default's when undefined). */
+const serviceManager = (profile?: string): ServiceManager | undefined => {
   if (process.platform === "linux") {
-    const file = join(process.env.XDG_CONFIG_HOME || join(homedir(), ".config"), "systemd", "user", "lemma.service");
+    const unit = unitOf(profile);
+    const file = join(process.env.XDG_CONFIG_HOME || join(homedir(), ".config"), "systemd", "user", unit);
     const systemctl = (...args: string[]) => run("systemctl", ["--user", ...args]);
     return {
       name: "systemd",
@@ -418,7 +433,7 @@ const serviceManager = (): ServiceManager | undefined => {
       render: (command, env) =>
         [
           "[Unit]",
-          "Description=Lemma host",
+          profile === undefined ? "Description=Lemma host" : `Description=Lemma host (profile ${profile})`,
           "",
           "[Service]",
           "WorkingDirectory=%h",
@@ -433,31 +448,32 @@ const serviceManager = (): ServiceManager | undefined => {
         ].join("\n"),
       install: (start) => {
         const said: string[] = [];
-        for (const args of [["daemon-reload"], start ? ["enable", "--now", "lemma.service"] : ["enable", "lemma.service"]]) {
+        for (const args of [["daemon-reload"], start ? ["enable", "--now", unit] : ["enable", unit]]) {
           const result = systemctl(...args);
           if (result.status !== 0) said.push(`systemctl --user ${args.join(" ")}: ${(result.stderr || result.error?.message || "failed").trim()}`);
         }
         return said;
       },
       uninstall: () => {
-        systemctl("disable", "--now", "lemma.service");
+        systemctl("disable", "--now", unit);
       },
       stop: () => {
-        systemctl("stop", "lemma.service");
+        systemctl("stop", unit);
       },
       restart: () => {
-        const result = systemctl("restart", "lemma.service");
-        return result.status === 0 ? [] : [`systemctl --user restart lemma.service: ${(result.stderr || result.error?.message || "failed").trim()}`];
+        const result = systemctl("restart", unit);
+        return result.status === 0 ? [] : [`systemctl --user restart ${unit}: ${(result.stderr || result.error?.message || "failed").trim()}`];
       },
       status: () => ({
         installed: existsSync(file),
-        enabled: systemctl("is-enabled", "lemma.service").stdout.trim() === "enabled",
-        active: systemctl("is-active", "lemma.service").stdout.trim() === "active",
+        enabled: systemctl("is-enabled", unit).stdout.trim() === "enabled",
+        active: systemctl("is-active", unit).stdout.trim() === "active",
       }),
     };
   }
   if (process.platform === "darwin") {
-    const file = join(homedir(), "Library", "LaunchAgents", `${LABEL}.plist`);
+    const label = labelOf(profile);
+    const file = join(homedir(), "Library", "LaunchAgents", `${label}.plist`);
     const domain = `gui/${userInfo().uid}`;
     return {
       name: "launchd",
@@ -468,7 +484,7 @@ const serviceManager = (): ServiceManager | undefined => {
           '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">',
           '<plist version="1.0">',
           "<dict>",
-          `  <key>Label</key><string>${LABEL}</string>`,
+          `  <key>Label</key><string>${label}</string>`,
           `  <key>WorkingDirectory</key><string>${xml(homedir())}</string>`,
           "  <key>ProgramArguments</key>",
           "  <array>",
@@ -489,23 +505,23 @@ const serviceManager = (): ServiceManager | undefined => {
         ].join("\n"),
       install: (start) => {
         if (!start) return [];
-        run("launchctl", ["bootout", `${domain}/${LABEL}`]);
+        run("launchctl", ["bootout", `${domain}/${label}`]);
         const result = run("launchctl", ["bootstrap", domain, file]);
         return result.status === 0 ? [] : [`launchctl bootstrap ${domain} ${file}: ${(result.stderr || "failed").trim()}`];
       },
       uninstall: () => {
-        run("launchctl", ["bootout", `${domain}/${LABEL}`]);
+        run("launchctl", ["bootout", `${domain}/${label}`]);
       },
       stop: () => {
         // KeepAlive restarts only an unsuccessful exit: a host stopped by SIGTERM exits cleanly and stays down.
-        run("launchctl", ["kill", "SIGTERM", `${domain}/${LABEL}`]);
+        run("launchctl", ["kill", "SIGTERM", `${domain}/${label}`]);
       },
       restart: () => {
-        const result = run("launchctl", ["kickstart", "-k", `${domain}/${LABEL}`]);
-        return result.status === 0 ? [] : [`launchctl kickstart -k ${domain}/${LABEL}: ${(result.stderr || "failed").trim()}`];
+        const result = run("launchctl", ["kickstart", "-k", `${domain}/${label}`]);
+        return result.status === 0 ? [] : [`launchctl kickstart -k ${domain}/${label}: ${(result.stderr || "failed").trim()}`];
       },
       status: () => {
-        const loaded = run("launchctl", ["print", `${domain}/${LABEL}`]);
+        const loaded = run("launchctl", ["print", `${domain}/${label}`]);
         return { installed: existsSync(file), enabled: loaded.status === 0, active: loaded.status === 0 && /state = running/.test(loaded.stdout) };
       },
     };
@@ -514,8 +530,9 @@ const serviceManager = (): ServiceManager | undefined => {
 };
 
 /**
- * What a service runs: `serve`, for the home this command uses, of the `lemma` command the installer links, so that
- * once restarted it runs the release installed last (`lemma update`); else this lemma's own, as a checkout runs it.
+ * What a service runs: `serve`, for the home and profile this command uses, of the `lemma` command the installer
+ * links, so that once restarted it runs the release installed last (`lemma update`); else this lemma's own, as a
+ * checkout runs it.
  */
 const serviceCommand = (io: Io): readonly string[] | undefined => {
   const { link } = readBuild();
@@ -524,7 +541,12 @@ const serviceCommand = (io: Io): readonly string[] | undefined => {
 };
 
 const serviceDefinition = (command: readonly string[], io: Io, manager: ServiceManager) => {
-  const env: Record<string, string> = { LEMMA_STARTED_BY: "service", ...(io.env.LEMMA_HOME === undefined ? {} : { LEMMA_HOME: homeOf(io) }) };
+  const profile = profileOf(io.env);
+  const env: Record<string, string> = {
+    LEMMA_STARTED_BY: "service",
+    ...(io.env.LEMMA_HOME === undefined ? {} : { LEMMA_HOME: rootOf(io) }),
+    ...(profile === undefined ? {} : { LEMMA_PROFILE: profile }),
+  };
   return { command, text: manager.render(command, env, join(hostFiles(homeOf(io)).logs, "service.log")) };
 };
 
@@ -538,14 +560,14 @@ const serviceInstall = defineBuiltin({
   group: SERVICE,
   summary: "Keep a host running as a user service (systemd or launchd): started at login, restarted after a crash",
   description:
-    "It runs lemma serve: an installed release's lemma command, so once restarted (lemma restart) it runs the release lemma update installed; a checkout's node and sources, which under Nix may be garbage-collected or moved: declare that service in your system configuration instead, from what --print shows (systemd.user.services, launchd.user.agents). On Linux, `loginctl enable-linger $USER` keeps it running without a login session.",
+    "It runs lemma serve, for the profile --profile names (one service each): an installed release's lemma command, so once restarted (lemma restart) it runs the release lemma update installed; a checkout's node and sources, which under Nix may be garbage-collected or moved: declare that service in your system configuration instead, from what --print shows (systemd.user.services, launchd.user.agents). On Linux, `loginctl enable-linger $USER` keeps it running without a login session.",
   flags: {
     print: { type: "boolean", description: "Print the definition and write nothing" },
     "no-start": { type: "boolean", description: "Install and enable it, but start it at the next login rather than now" },
   },
   run: ({ io, flags }) =>
     Effect.gen(function* () {
-      const manager = serviceManager();
+      const manager = serviceManager(profileOf(io.env));
       if (manager === undefined) return yield* noManager();
       const named = serviceCommand(io);
       if (named === undefined)
@@ -585,9 +607,9 @@ const serviceUninstall = defineBuiltin({
   path: ["service", "uninstall"],
   group: SERVICE,
   summary: "Stop the user service and remove it",
-  run: () =>
+  run: ({ io }) =>
     Effect.gen(function* () {
-      const manager = serviceManager();
+      const manager = serviceManager(profileOf(io.env));
       if (manager === undefined) return yield* noManager();
       if (!existsSync(manager.file)) return { json: { removed: false, file: manager.file }, text: `No service at ${manager.file}` };
       manager.uninstall();
@@ -601,9 +623,9 @@ const serviceStatus = defineBuiltin({
   path: ["service"],
   group: SERVICE,
   summary: "Whether a user service keeps a host running here: installed, enabled, running",
-  run: () =>
+  run: ({ io }) =>
     Effect.gen(function* () {
-      const manager = serviceManager();
+      const manager = serviceManager(profileOf(io.env));
       if (manager === undefined) return yield* noManager();
       const state = manager.status();
       return {

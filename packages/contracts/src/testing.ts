@@ -20,6 +20,7 @@ export const pathsPlugin = (home: string, paths: Partial<Context.Service.Shape<t
       Effect.succeed({
         paths: {
           home,
+          root: home,
           userConfig: join(home, "config.jsonc"),
           projectConfig: join(paths.cwd ?? home, ".lemma", "config.jsonc"),
           cwd: home,

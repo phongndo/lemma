@@ -1,8 +1,11 @@
 import { spawn } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { appUrl, DEEP_LINK_SCHEME } from "@lemma/contracts";
+import { appUrl } from "@lemma/contracts";
+import { deepLink } from "@lemma/profiles";
+import { DEFAULT_PROFILE, profileOf } from "@lemma/contracts/profiles";
 import type { Io, Target } from "./command.ts";
+import { rootOf } from "./connect.ts";
 
 /*
  * Opening a page for the person: the web app at one of its addresses (in the
@@ -33,8 +36,9 @@ export const openPage = (io: Io, url: string | undefined, prompt: string | undef
 };
 
 /**
- * The running desktop app's way in (`<home>/desktop.json`, which it writes):
- * the command that hands it a `lemma://` link. Undefined when none runs.
+ * The running desktop app's way in (`<root>/desktop.json`, which it writes,
+ * one for every profile): the command that hands it a `lemma://` link.
+ * Undefined when none runs.
  */
 const desktop = (home: string): readonly string[] | undefined => {
   try {
@@ -51,14 +55,15 @@ const desktop = (home: string): readonly string[] | undefined => {
 /**
  * Opens the web app at `path` of `target`: in the desktop app when it runs
  * here and shows the same host (the one a command finds by default, not one
- * `--env` or a variable named), else in the browser; prints the address when
- * neither opens. True when it opened somewhere.
+ * `--env` or a variable named), in the window of the command's profile, else
+ * in the browser; prints the address when neither opens. True when it opened
+ * somewhere.
  */
-export const openWebPath = (io: Io, home: string, target: Target, path: string): boolean => {
+export const openWebPath = (io: Io, target: Target, path: string): boolean => {
   const sameAsDesktop = target.source === "local" || (target.source === "saved" && target.from.endsWith("environments.json"));
-  const app = sameAsDesktop ? desktop(home) : undefined;
+  const app = sameAsDesktop ? desktop(rootOf(io)) : undefined;
   if (app !== undefined) {
-    spawn(app[0]!, [...app.slice(1), `${DEEP_LINK_SCHEME}://${path.replace(/^\/+/, "")}`], { detached: true, stdio: "ignore" })
+    spawn(app[0]!, [...app.slice(1), deepLink(path, profileOf(io.env) ?? DEFAULT_PROFILE)], { detached: true, stdio: "ignore" })
       .on("error", () => {})
       .unref();
     return true;

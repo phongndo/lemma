@@ -17,8 +17,8 @@ once, where it happened, and the log keeps what it was shown and when, so
 the request still rebuilds from the log. The transcript shows it there too.
 A branch shows each message once: a `custom` event records the ids it showed.
 
-Its package brings the `triage` profile ([`profiles/triage.md`](profiles/triage.md))
-by naming the folder in its manifest (`"resources": { "profiles": "./profiles" }`):
+Its package brings the `triage` mode ([`modes/triage.md`](modes/triage.md))
+by naming the folder in its manifest (`"resources": { "modes": "./modes" }`):
 pick **triage** in the composer and the agent is offered only the inbox's
 tools, with instructions for sorting.
 

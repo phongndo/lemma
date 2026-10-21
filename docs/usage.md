@@ -19,8 +19,11 @@ nix develop -c pnpm lemma status   # query the running host; `pnpm lemma --help`
 The host runs the plugins and serves the web app, the
 [desktop app](../apps/desktop/README.md), and the [CLI](../apps/cli/README.md),
 which all attach to it. There is one host per home (`~/.lemma`, or
-`$LEMMA_HOME`): it is the authority over that home's sessions, config, and
-credentials, and each host is separate from any other.
+`$LEMMA_HOME`) and profile: it is the authority over that home's sessions,
+config, and credentials, and each host is separate from any other. A profile
+is another Lemma beside the default, with plugins, threads, and logins of its
+own: `lemma profile create <name>` makes one, and `--profile <name>` (or
+`LEMMA_PROFILE`) picks it ([profiles](configuration.md#profiles)).
 
 - **On your machine** the desktop app starts a host when none runs, and stops
   it when it quits, saying first what that cuts off. `lemma serve` runs one

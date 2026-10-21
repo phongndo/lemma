@@ -9,7 +9,7 @@ these are its files:
   `details`, so the session's log is its only store;
 - [`glossary.web.js`](glossary.web.js), the web half: how its calls show in
   the chat, and a **Glossary** view of the open thread's terms;
-- [`profiles/tutor.md`](profiles/tutor.md), a profile its package brings
+- [`modes/tutor.md`](modes/tutor.md), a mode its package brings
   (`"resources"` in [`package.json`](package.json)): an agent that teaches a
   topic step by step, offered the glossary, `read`, and `ask_user`.
 

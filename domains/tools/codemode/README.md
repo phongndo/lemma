@@ -84,7 +84,7 @@ codemode call's own output (`✓ bash 12ms {"command":"ls"}`), and the result's
   demand, and the description stays the same as such tools come and go,
   keeping the request's prefix cached. The system prompt names the namespaces
   (the MCP servers name their own), so the model knows they are there: once a
-  request's tools are chosen (a thread's profile keeps some), only those whose
+  request's tools are chosen (a thread's mode keeps some), only those whose
   tools it still offers, and none without codemode (`AgentRequestHook`'s
   `select` phase).
 - **Pages from scripts.** A script that computes data can draw it with a

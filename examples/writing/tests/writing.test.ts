@@ -9,7 +9,7 @@ import type { PluginInfo } from "@lemma/contracts";
 import { hostControlPlugin, pathsPlugin } from "@lemma/contracts/testing";
 import { Agent } from "@lemma/agent";
 import agent from "@lemma/agent-loop";
-import profiles from "@lemma/agent-profiles";
+import modes from "@lemma/agent-modes";
 import { callTools, reply, scriptedLlm, SCRIPTED_MODEL, toolCall } from "@lemma/llm/testing";
 import type { Script } from "@lemma/llm/testing";
 import { Sessions } from "@lemma/sessions";
@@ -52,17 +52,17 @@ describe("in a turn", () => {
       state: "active",
       provides: [],
       requires: [],
-      resources: { profiles: [fileURLToPath(new URL("../profiles", import.meta.url))] },
+      resources: { modes: [fileURLToPath(new URL("../modes", import.meta.url))] },
     },
   ];
-  const run = (scripts: readonly Script[], profile?: string) => {
+  const run = (scripts: readonly Script[], mode?: string) => {
     const llm = scriptedLlm(scripts);
     const project = path.join(dir, "project");
     return Effect.runPromise(
       Effect.scoped(
         Effect.gen(function* () {
           const core = yield* makeCore(
-            [pathsPlugin(path.join(dir, "home"), { cwd: project }), hostControlPlugin(known), sessions, tools, agent, profiles, llm.plugin, writing],
+            [pathsPlugin(path.join(dir, "home"), { cwd: project }), hostControlPlugin(known), sessions, tools, agent, modes, llm.plugin, writing],
             {
               configs: { "agent.loop": { defaultModel: SCRIPTED_MODEL.ref } },
             },
@@ -70,7 +70,7 @@ describe("in a turn", () => {
           return yield* core.run(
             Effect.gen(function* () {
               const { id } = yield* (yield* Sessions).create({ cwd: project });
-              yield* (yield* Agent).prompt(id, [{ type: "text", text: "draft it" }], profile === undefined ? {} : { plugins: { "agent.profiles": profile } });
+              yield* (yield* Agent).prompt(id, [{ type: "text", text: "draft it" }], mode === undefined ? {} : { plugins: { "agent.modes": mode } });
               return llm.requests;
             }),
           );
@@ -87,7 +87,7 @@ describe("in a turn", () => {
     expect(JSON.stringify(requests[1]!.messages)).toContain("3 words in 2 sentences and 1 paragraphs");
   });
 
-  it("brings the writing profile, and leaves the guide out when there is none", async () => {
+  it("brings the writing mode, and leaves the guide out when there is none", async () => {
     const [request] = await run([reply("ok")], "writing");
     expect((request!.tools ?? []).map((tool) => tool.name)).toEqual(["draft_stats"]);
     expect(request!.system).toContain("# Writing");
