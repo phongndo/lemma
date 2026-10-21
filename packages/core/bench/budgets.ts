@@ -10,9 +10,11 @@ import type { Measurement, Unit } from "./report.ts";
 export const budgets = {
   // Dispatch tuned 2026-10-06 (same machine): a handler's own services are overlaid on its caller's context instead
   // of merged into a copy per call, and no span is made with tracing off. 32 handlers: 67.3 -> 18.3us spans off,
-  // 74.1 -> 64.4 spans on (Effect's span machinery is the rest).
-  "Hook / 32 handlers / spans on": 100,
-  "Hook / 32 handlers / spans off": 28,
+  // 74.1 -> 64.4 spans on (Effect's span machinery is the rest). Again 2026-10-21: the hook looked up in one step,
+  // and a handler's span kept as it is made (`useSpan`): 80.2 -> 62.3us spans on, 18.3 -> 16.2 off, 136 -> 118
+  // collected; no handlers 0.24 -> 0.08 (scripts/bench-compare.ts, 10 runs).
+  "Hook / 32 handlers / spans on": 90,
+  "Hook / 32 handlers / spans off": 24,
   // Handlers written with promises: passing through in place 26.6us against 18.5 for Effect handlers (1.4x). Async-local
   // storage is entered for every handler: entering it only for `async` ones (22.3us) lost the operation's context in
   // `.then` chains. A call through a promise-based view 0.46us against 0.16 for Effect.runPromise, its plugin's own
@@ -20,7 +22,10 @@ export const budgets = {
   "Hook / 32 plain handlers, in place / spans off": 34,
   // As the host traces (2026-10-11, same machine): a collector keeps each span as data, 89us against 65 for Effect's
   // native spans; hearing each handler's step (`onStep`, which the agent asks for once per request) adds about 30.
-  "Hook / 32 handlers / spans collected, steps heard": 180,
+  "Hook / 32 handlers / spans collected, steps heard": 170,
+  // An event offered in place to each observer's queue with room (2026-10-21), not on a fiber of its own: to 8
+  // observers 1.87 -> 0.17us.
+  "Event publish / 8 observers": 0.3,
   "Plain service call": 0.6,
   "core.run entry": 6,
   "Mount + dispose / 32 plugins": 2000,
@@ -69,10 +74,12 @@ export const budgets = {
   "Harness / 100 entries / max events per turn": 46,
   "Harness / 1000 entries / max events per turn": 46,
   "Harness / 10000 entries / max events per turn": 46,
-  "Harness / 100 entries / ms per step": 3,
-  "Harness / 10000 entries / ms per step": 3,
+  // A step's request no longer copies its history, nor walks the whole branch (2026-10-21): 1.50 -> 1.23ms at 100
+  // entries, 1.66 -> 0.93 at 10,000, which is no longer than a step at 1,000 (0.89 times it).
+  "Harness / 100 entries / ms per step": 2,
+  "Harness / 10000 entries / ms per step": 1.5,
   "Harness / 10000 entries / heap MB": 64,
-  "Harness / step time 10k vs 1k entries": 1.5,
+  "Harness / step time 10k vs 1k entries": 1.2,
 } as const;
 
 const measurements: Record<string, Measurement> = {};
