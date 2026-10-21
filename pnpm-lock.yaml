@@ -384,6 +384,12 @@ importers:
       '@lemma/mcp-servers':
         specifier: workspace:*
         version: link:../../domains/mcp/servers
+      '@lemma/release':
+        specifier: workspace:*
+        version: link:../../domains/release/contract
+      '@lemma/release-updates':
+        specifier: workspace:*
+        version: link:../../domains/release/updates
       '@lemma/router':
         specifier: workspace:*
         version: link:../../packages/router
@@ -2265,6 +2271,62 @@ importers:
       zod:
         specifier: 4.6.7
         version: 4.6.7
+
+  domains/release/contract:
+    dependencies:
+      '@lemma/contracts':
+        specifier: workspace:*
+        version: link:../../../packages/contracts
+      effect:
+        specifier: 4.0.5
+        version: 4.0.5
+    devDependencies:
+      '@types/node':
+        specifier: 24.19.2
+        version: 24.19.2
+      tsrs:
+        specifier: 0.18.0-ts7.1.0-dev.20260929
+        version: 0.18.0-ts7.1.0-dev.20260929
+
+  domains/release/updates:
+    dependencies:
+      '@lemma/cli':
+        specifier: workspace:*
+        version: link:../../cli/contract
+      '@lemma/contracts':
+        specifier: workspace:*
+        version: link:../../../packages/contracts
+      '@lemma/core':
+        specifier: workspace:*
+        version: link:../../../packages/core
+      '@lemma/look':
+        specifier: workspace:*
+        version: link:../../look/contract
+      '@lemma/release':
+        specifier: workspace:*
+        version: link:../contract
+      '@lemma/settings':
+        specifier: workspace:*
+        version: link:../../settings/contract
+      '@lemma/web':
+        specifier: workspace:*
+        version: link:../../../packages/web
+      effect:
+        specifier: 4.0.5
+        version: 4.0.5
+      solid-js:
+        specifier: 1.9.17
+        version: 1.9.17
+    devDependencies:
+      '@types/node':
+        specifier: 24.19.2
+        version: 24.19.2
+      tsrs:
+        specifier: 0.18.0-ts7.1.0-dev.20260929
+        version: 0.18.0-ts7.1.0-dev.20260929
+      vitest:
+        specifier: 5.0.5
+        version: 5.0.5(@types/node@24.19.2)(vite@8.3.4(@types/node@24.19.2)(esbuild@0.28.2)(jiti@2.7.0))
 
   domains/sessions/cli:
     dependencies:
@@ -4248,6 +4310,12 @@ importers:
       '@lemma/mcp-servers':
         specifier: workspace:*
         version: link:../../domains/mcp/servers
+      '@lemma/release':
+        specifier: workspace:*
+        version: link:../../domains/release/contract
+      '@lemma/release-updates':
+        specifier: workspace:*
+        version: link:../../domains/release/updates
       '@lemma/sessions':
         specifier: workspace:*
         version: link:../../domains/sessions/contract

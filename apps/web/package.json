@@ -53,6 +53,8 @@
     "@lemma/look-kit": "workspace:*",
     "@lemma/mcp": "workspace:*",
     "@lemma/mcp-servers": "workspace:*",
+    "@lemma/release": "workspace:*",
+    "@lemma/release-updates": "workspace:*",
     "@lemma/router": "workspace:*",
     "@lemma/router-solid": "workspace:*",
     "@lemma/sessions": "workspace:*",

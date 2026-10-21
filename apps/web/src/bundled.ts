@@ -33,6 +33,7 @@ import pluginsPage from "@lemma/settings-plugins";
 import projectsPage from "@lemma/workspace-projects";
 import providers from "@lemma/llm-providers";
 import reload from "@lemma/frame-reload";
+import release from "@lemma/release-updates/web";
 import threadView from "@lemma/threads-view";
 import ask from "@lemma/tools-ask/web";
 import bash from "@lemma/tools-bash/web";
@@ -114,6 +115,7 @@ export const bundled: readonly Plugin[] = [
   appearancePage,
   projectsPage,
   addProject,
+  release,
   devtools,
   trace,
   interactionDialog,

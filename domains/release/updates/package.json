@@ -1,0 +1,35 @@
+{
+  "name": "@lemma/release-updates",
+  "version": "0.1.0",
+  "private": true,
+  "description": "What this Lemma is, and updating it: Settings › About, a check for a newer release, and its Update button",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./web": "./src/web.tsx"
+  },
+  "scripts": {
+    "check": "tsrs --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@lemma/cli": "workspace:*",
+    "@lemma/contracts": "workspace:*",
+    "@lemma/core": "workspace:*",
+    "@lemma/look": "workspace:*",
+    "@lemma/release": "workspace:*",
+    "@lemma/settings": "workspace:*",
+    "@lemma/web": "workspace:*",
+    "effect": "4.0.5",
+    "solid-js": "1.9.17"
+  },
+  "devDependencies": {
+    "@types/node": "24.19.2",
+    "tsrs": "0.18.0-ts7.1.0-dev.20260929",
+    "vitest": "5.0.5"
+  },
+  "lemma": {
+    "host": "./src/index.ts",
+    "web": "./src/web.tsx"
+  }
+}

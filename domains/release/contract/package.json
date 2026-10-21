@@ -1,0 +1,21 @@
+{
+  "name": "@lemma/release",
+  "version": "0.1.0",
+  "private": true,
+  "description": "The release domain's contract: what this Lemma is, whether a newer release is out, and installing it, as channels",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "check": "tsrs --noEmit"
+  },
+  "dependencies": {
+    "@lemma/contracts": "workspace:*",
+    "effect": "4.0.5"
+  },
+  "devDependencies": {
+    "@types/node": "24.19.2",
+    "tsrs": "0.18.0-ts7.1.0-dev.20260929"
+  }
+}

@@ -30,8 +30,10 @@ where a release no longer fits a plugin or a session.
 | `link`, `dataDir` | The `lemma` command the installer links to it, and where it keeps releases                     |
 | `root`, `node`    | Where its files are, and the Node.js it runs on                                                |
 
+Settings › About shows the same, and whether a newer release is out.
 `lemma update` installs the channel's newest release, another channel's
-(`--channel`), or a version given, an older one rolling back
+(`--channel`), or a version given, an older one rolling back; About's Update
+button installs the newest and restarts the host on it
 ([installation](installation.md#updating)).
 
 ## Versions that must match

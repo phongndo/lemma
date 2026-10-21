@@ -21,6 +21,7 @@ import llmCli from "@lemma/llm-cli";
 import llmCommands from "@lemma/llm-commands";
 import llmPiAi from "@lemma/llm-pi-ai";
 import mcpServers from "@lemma/mcp-servers";
+import releaseUpdates from "@lemma/release-updates";
 import sessionsCli from "@lemma/sessions-cli";
 import sessionsFiles from "@lemma/sessions-files";
 import toolsAsk from "@lemma/tools-ask";
@@ -50,8 +51,9 @@ export const webDist = fileURLToPath(new URL("../../../apps/web/dist", import.me
 const shellWord = (word: string) => (/^[\w@%+=:,./-]+$/.test(word) ? word : `'${word.replaceAll("'", "'\\''")}'`);
 
 /**
- * How the agent runs the `lemma` CLI beside this host from its shell: on the Node.js the host runs on, which a release
- * carries and need not put on PATH; a host in the desktop app runs on Electron, so its agent uses the `node` on PATH.
+ * How the agent, and `release.updates`, run the `lemma` CLI beside this host from a shell: on the Node.js the host runs
+ * on, which a release carries and need not put on PATH; a host in the desktop app runs on Electron, so they use the
+ * `node` on PATH.
  */
 export const cliCommand = `${process.versions.electron === undefined ? shellWord(process.execPath) : "node"} --conditions=lemma-source ${shellWord(fileURLToPath(new URL("../../../apps/cli/src/main.ts", import.meta.url)))}`;
 
@@ -92,6 +94,7 @@ export const bundled: readonly Plugin[] = [
   commandsHost,
   devtoolsTrace,
   devtoolsHost,
+  releaseUpdates,
   // The lemma command's: the commands and checks plugins add, then each domain's.
   cliRegistry,
   llmCli,
@@ -146,6 +149,7 @@ export const bundledWeb: readonly string[] = [
   "look.highlight",
   "look.kit",
   "mcp.servers",
+  "release.updates",
   "settings.page",
   "settings.plugins",
   "skills.files",
@@ -181,4 +185,5 @@ export const bundledWeb: readonly string[] = [
 export const appDefaults: Readonly<Record<string, Readonly<Record<string, unknown>>>> = {
   "transport.server": { staticDir: webDist },
   "agent.loop": { cli: cliCommand },
+  "release.updates": { cli: cliCommand },
 };
