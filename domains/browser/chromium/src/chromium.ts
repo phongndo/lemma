@@ -40,7 +40,7 @@ interface Session {
 export interface ChromiumOptions {
   /** The config's `executablePath`. */
   readonly executablePath?: string | undefined;
-  /** How long after its last call the browser closes; 0: never. */
+  /** How long after a session's last call its tabs close, and after the last call of all the browser; 0: never. */
   readonly idleMs: number;
   readonly headless: boolean;
   readonly env?: Readonly<Record<string, string | undefined>>;
@@ -158,8 +158,8 @@ const tabInfo = async (session: Session, tab: Tab, status?: number): Promise<Bro
 
 /**
  * `Browser` over a Chromium that Playwright launches on first use, headless unless configured otherwise. Each session
- * gets a browser context of its own; the browser closes `idleMs` after its last call ends (the sessions' tabs with it),
- * when it disconnects, and on `close`.
+ * gets a browser context of its own, closed `idleMs` after the session's last call ends; the browser closes `idleMs` after
+ * the last call of all, when it disconnects, and on `close`.
  */
 export const makeChromium = (options: ChromiumOptions) => {
   const env = options.env ?? process.env;
@@ -170,12 +170,17 @@ export const makeChromium = (options: ChromiumOptions) => {
   /** Calls running now: the browser stays open while any does. */
   let active = 0;
   let idleTimer: NodeJS.Timeout | undefined;
+  /** Calls running for each session, and the timer closing a session's tabs `idleMs` after its last call ends. */
+  const sessionCalls = new Map<string, number>();
+  const sessionTimers = new Map<string, NodeJS.Timeout>();
   let executable: string | undefined;
   const renders = Semaphore.makeUnsafe(RENDERS_AT_ONCE);
 
   const reset = () => {
     launched = undefined;
     sessions.clear();
+    for (const timer of sessionTimers.values()) clearTimeout(timer);
+    sessionTimers.clear();
   };
 
   const browser = (): Promise<PlaywrightBrowser> => {
@@ -228,6 +233,16 @@ export const makeChromium = (options: ChromiumOptions) => {
     idleTimer.unref();
   };
 
+  /** Closes a session's profile and its tabs; its next call opens a new one. */
+  const closeSession = async (sessionId: string): Promise<void> => {
+    clearTimeout(sessionTimers.get(sessionId));
+    sessionTimers.delete(sessionId);
+    const making = sessions.get(sessionId);
+    if (making === undefined) return;
+    sessions.delete(sessionId);
+    await making.then((session) => session.context.close()).catch(() => {});
+  };
+
   /** Runs one call: the browser stays open while it runs, and its idle time counts from when the last call ends. */
   const use = <A>(work: () => Promise<A>, target?: BrowserTarget): Effect.Effect<A, BrowserError> =>
     Effect.tryPromise({
@@ -243,6 +258,31 @@ export const makeChromium = (options: ChromiumOptions) => {
       },
       catch: (cause) => toBrowserError(cause, target),
     });
+
+  /**
+   * Runs one call of a session's: as `use`, and its tabs stay open while it runs, closing `idleMs` after its last call
+   * ends, so a session gone quiet holds no renderer while others keep the browser open.
+   */
+  const useSession = <A>(sessionId: string, work: () => Promise<A>, target?: BrowserTarget): Effect.Effect<A, BrowserError> =>
+    use(async () => {
+      sessionCalls.set(sessionId, (sessionCalls.get(sessionId) ?? 0) + 1);
+      clearTimeout(sessionTimers.get(sessionId));
+      sessionTimers.delete(sessionId);
+      try {
+        return await work();
+      } finally {
+        const left = sessionCalls.get(sessionId)! - 1;
+        if (left > 0) sessionCalls.set(sessionId, left);
+        else {
+          sessionCalls.delete(sessionId);
+          if (options.idleMs > 0 && sessions.has(sessionId)) {
+            const timer = setTimeout(() => void closeSession(sessionId), options.idleMs);
+            timer.unref();
+            sessionTimers.set(sessionId, timer);
+          }
+        }
+      }
+    }, target);
 
   const addTab = (session: Session, page: Page): Tab => {
     const tab: Tab = { id: `t${++session.opened}`, page, generation: 0, valid: undefined, console: [], windowOpens: 0 };
@@ -374,33 +414,37 @@ export const makeChromium = (options: ChromiumOptions) => {
 
   /** Runs an action on the tab, and gives the session's current tab afterwards (a popup it opened, else the same). */
   const act = (sessionId: string, options: InTab & BrowserTarget, work: (tab: Tab, locator: Locator | undefined) => Promise<void>) =>
-    use(async () => {
-      const { session, tab } = await tabOf(sessionId, options);
-      const opens = tab.windowOpens;
-      const popups = session.popups;
-      await work(tab, hasTarget(options) ? locate(tab, options) : undefined);
-      await settle(tab.page);
-      // It asked for a window that has not arrived yet: wait for it, so the result names the tab it opened. A window
-      // Chromium refuses (a data: URL) never arrives, and the wait ends at its limit.
-      if (tab.windowOpens > opens && session.popups === popups) {
-        await new Promise<void>((resolve) => {
-          const timer = setTimeout(resolve, POPUP_WAIT_MS);
-          session.popupWaiters.push(() => {
-            clearTimeout(timer);
-            resolve();
+    useSession(
+      sessionId,
+      async () => {
+        const { session, tab } = await tabOf(sessionId, options);
+        const opens = tab.windowOpens;
+        const popups = session.popups;
+        await work(tab, hasTarget(options) ? locate(tab, options) : undefined);
+        await settle(tab.page);
+        // It asked for a window that has not arrived yet: wait for it, so the result names the tab it opened. A window
+        // Chromium refuses (a data: URL) never arrives, and the wait ends at its limit.
+        if (tab.windowOpens > opens && session.popups === popups) {
+          await new Promise<void>((resolve) => {
+            const timer = setTimeout(resolve, POPUP_WAIT_MS);
+            session.popupWaiters.push(() => {
+              clearTimeout(timer);
+              resolve();
+            });
           });
-        });
-      }
-      const current = session.tabs.get(session.current ?? tab.id) ?? tab;
-      if (current !== tab) await settle(current.page);
-      return tabInfo(session, current);
-    }, options);
+        }
+        const current = session.tabs.get(session.current ?? tab.id) ?? tab;
+        if (current !== tab) await settle(current.page);
+        return tabInfo(session, current);
+      },
+      options,
+    );
 
   const point = (options: BrowserTarget) => ({ x: options.x!, y: options.y! });
 
   const service: Service = {
     open: (sessionId, { tabId, url, newTab }) =>
-      use(async () => {
+      useSession(sessionId, async () => {
         const session = await sessionOf(sessionId);
         let tab = tabId === undefined ? undefined : session.tabs.get(tabId);
         if (tabId !== undefined && tab === undefined)
@@ -419,7 +463,7 @@ export const makeChromium = (options: ChromiumOptions) => {
       }),
 
     close: (sessionId, options) =>
-      use(async () => {
+      useSession(sessionId, async () => {
         const { session, tab } = await tabOf(sessionId, options);
         await tab.page.close();
         session.tabs.delete(tab.id);
@@ -428,14 +472,14 @@ export const makeChromium = (options: ChromiumOptions) => {
       }),
 
     navigate: (sessionId, { url, waitUntil, ...options }) =>
-      use(async () => {
+      useSession(sessionId, async () => {
         const { session, tab } = await tabOf(sessionId, options);
         const status = await goto(tab.page, url, waitUntil ?? "load");
         return tabInfo(session, tab, status);
       }),
 
     snapshot: (sessionId, options) =>
-      use(async () => {
+      useSession(sessionId, async () => {
         const { tab } = await tabOf(sessionId, options);
         const raw = await tab.page.ariaSnapshot({ mode: "ai", timeout: ACTION_TIMEOUT_MS });
         // Password fields' values, and fields drawn as dots, are never in a snapshot: each field showing a value is
@@ -521,7 +565,7 @@ export const makeChromium = (options: ChromiumOptions) => {
       }),
 
     evaluate: (sessionId, { expression, ...options }) =>
-      use(async () => {
+      useSession(sessionId, async () => {
         const { tab } = await tabOf(sessionId, options);
         const json = toJson(await tab.page.evaluate(expression));
         return json.length > MAX_VALUE_CHARS
@@ -530,7 +574,7 @@ export const makeChromium = (options: ChromiumOptions) => {
       }),
 
     screenshot: (sessionId, { fullPage, maxBytes, ...options }) =>
-      use(async (): Promise<BrowserImage> => {
+      useSession(sessionId, async (): Promise<BrowserImage> => {
         const { tab } = await tabOf(sessionId, options);
         const viewport = tab.page.viewportSize() ?? VIEWPORT;
         const pageHeight =
@@ -549,24 +593,28 @@ export const makeChromium = (options: ChromiumOptions) => {
       }),
 
     waitFor: (sessionId, { text, load, state, timeoutMs, ...options }) =>
-      use(async () => {
-        const { session, tab } = await tabOf(sessionId, options);
-        const timeout = Math.min(Math.max(timeoutMs ?? ACTION_TIMEOUT_MS, 0), MAX_WAIT_MS);
-        if (load === undefined && text === undefined && !hasTarget(options))
-          throw fail("InvalidTarget", "Say what to wait for: text, a load state, or a ref, locator, or selector");
-        if (load !== undefined) await tab.page.waitForLoadState(load, { timeout });
-        if (text !== undefined)
-          await tab.page
-            .getByText(text)
-            .first()
-            .waitFor({ state: state ?? "visible", timeout });
-        if (hasTarget(options)) {
-          const locator = locate(tab, options);
-          if (locator === undefined) throw fail("InvalidTarget", "Waiting needs a ref, locator, or selector, not a point");
-          await locator.waitFor({ state: state ?? "visible", timeout });
-        }
-        return tabInfo(session, tab);
-      }, options),
+      useSession(
+        sessionId,
+        async () => {
+          const { session, tab } = await tabOf(sessionId, options);
+          const timeout = Math.min(Math.max(timeoutMs ?? ACTION_TIMEOUT_MS, 0), MAX_WAIT_MS);
+          if (load === undefined && text === undefined && !hasTarget(options))
+            throw fail("InvalidTarget", "Say what to wait for: text, a load state, or a ref, locator, or selector");
+          if (load !== undefined) await tab.page.waitForLoadState(load, { timeout });
+          if (text !== undefined)
+            await tab.page
+              .getByText(text)
+              .first()
+              .waitFor({ state: state ?? "visible", timeout });
+          if (hasTarget(options)) {
+            const locator = locate(tab, options);
+            if (locator === undefined) throw fail("InvalidTarget", "Waiting needs a ref, locator, or selector, not a point");
+            await locator.waitFor({ state: state ?? "visible", timeout });
+          }
+          return tabInfo(session, tab);
+        },
+        options,
+      ),
 
     render: (html, { width, colorScheme }) =>
       renders.withPermits(1)(
@@ -661,5 +709,5 @@ export const makeChromium = (options: ChromiumOptions) => {
 const noTabs = (idleMs: number) =>
   fail(
     "NoTab",
-    `No tab is open in this session${idleMs > 0 ? ` (the browser closes ${idleMs < 1000 ? `${idleMs} ms` : `${Math.round(idleMs / 1000)} seconds`} after its last call)` : ""}: open one with browser_open`,
+    `No tab is open in this session${idleMs > 0 ? ` (a session's tabs close ${idleMs < 1000 ? `${idleMs} ms` : `${Math.round(idleMs / 1000)} seconds`} after its last call)` : ""}: open one with browser_open`,
   );
