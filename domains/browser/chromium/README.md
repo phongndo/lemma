@@ -1,6 +1,6 @@
 # browser.chromium
 
-Provides [`Browser`](../contract/src/browser.ts) over a Chromium that [Playwright](https://playwright.dev) (`playwright-core`) launches headless on the first call, with a browser context per session. Nothing starts until a tool asks for a page.
+Provides [`Browser`](../contract/src/browser.ts) over a Chromium that [Playwright](https://playwright.dev) (`playwright-core`) launches headless on the first call, with a browser context per session. Nothing starts until a tool asks for a page, and nothing of Playwright loads until then either: it is most of the code the host would load at start. A Playwright that cannot be loaded fails the call `Unavailable`, saying why, as a missing Chromium does.
 
 ```jsonc
 { "plugins": { "browser.chromium": { "config": { "idleSeconds": 900, "headless": false } } } }

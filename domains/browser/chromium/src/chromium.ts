@@ -1,7 +1,6 @@
 import { Effect, Semaphore } from "effect";
 import type { Context } from "effect";
-import { chromium } from "playwright-core";
-import type { Browser as PlaywrightBrowser, BrowserContext, Locator, Page } from "playwright-core";
+import type { Browser as PlaywrightBrowser, BrowserContext, BrowserType, Locator, Page } from "playwright-core";
 import { BrowserError, hasTarget, parseRef, targetProblem } from "@lemma/browser";
 import type { Browser, BrowserImage, BrowserTab, BrowserTarget, ConsoleMessage, InTab, LoadState } from "@lemma/browser";
 import { HTML_MEASURE_SOURCE } from "@lemma/tools/html";
@@ -147,6 +146,25 @@ export const toJson = (value: unknown): string => {
   return json ?? "null";
 };
 
+/**
+ * Playwright's Chromium, imported by the first call that launches the browser rather than with the plugin: Playwright is
+ * most of the code the host would otherwise load at start (about 7 MB), for a browser most runs never open. If it cannot
+ * be loaded, that call fails `Unavailable` saying so, as when no Chromium is found, and the next call tries again.
+ */
+let playwright: Promise<BrowserType> | undefined;
+const loadPlaywright = (): Promise<BrowserType> =>
+  (playwright ??= import("playwright-core").then(
+    (loaded) => loaded.chromium,
+    (cause: unknown) => {
+      playwright = undefined;
+      throw fail(
+        "Unavailable",
+        `Playwright (playwright-core) could not be loaded: ${firstLine(cause instanceof Error ? cause.message : String(cause))}`,
+        cause,
+      );
+    },
+  ));
+
 /** A tab as the contract gives it. */
 const tabInfo = async (session: Session, tab: Tab, status?: number): Promise<BrowserTab> => ({
   tabId: tab.id,
@@ -178,35 +196,42 @@ export const makeChromium = (options: ChromiumOptions) => {
     sessions.clear();
   };
 
+  /** The browser, launched by the first call; one that fails to launch is tried again by the next. */
   const browser = (): Promise<PlaywrightBrowser> => {
     if (launched !== undefined) return launched;
-    const found = findChromium({
-      configured: options.executablePath,
-      env,
-      platform: process.platform,
-      isExecutable: isExecutableFile,
-      playwright: () => {
-        try {
-          return chromium.executablePath();
-        } catch {
-          return undefined;
-        }
-      },
-    });
-    if ("problem" in found) return Promise.reject(fail("Unavailable", found.problem));
-    executable = found.path;
-    const starting = chromium.launch({ executablePath: found.path, headless: options.headless }).then(
-      (started) => {
-        started.on("disconnected", () => {
-          if (launched === starting) reset();
+    const starting = loadPlaywright()
+      .then((chromium) => {
+        const found = findChromium({
+          configured: options.executablePath,
+          env,
+          platform: process.platform,
+          isExecutable: isExecutableFile,
+          playwright: () => {
+            try {
+              return chromium.executablePath();
+            } catch {
+              return undefined;
+            }
+          },
         });
-        return started;
-      },
-      (cause: unknown) => {
-        if (launched === starting) reset();
-        throw fail("Unavailable", `Chromium at ${found.path} did not start: ${firstLine(cause instanceof Error ? cause.message : String(cause))}`, cause);
-      },
-    );
+        if ("problem" in found) throw fail("Unavailable", found.problem);
+        executable = found.path;
+        return chromium.launch({ executablePath: found.path, headless: options.headless }).catch((cause: unknown) => {
+          throw fail("Unavailable", `Chromium at ${found.path} did not start: ${firstLine(cause instanceof Error ? cause.message : String(cause))}`, cause);
+        });
+      })
+      .then(
+        (started) => {
+          started.on("disconnected", () => {
+            if (launched === starting) reset();
+          });
+          return started;
+        },
+        (cause: unknown) => {
+          if (launched === starting) reset();
+          throw cause;
+        },
+      );
     launched = starting;
     return starting;
   };
