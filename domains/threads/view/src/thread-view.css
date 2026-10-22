@@ -214,7 +214,7 @@
 }
 
 /* Over the view's bottom, so what the view shows passes under the composer; the view pads its end by `--composer-height`. Only what it draws takes the pointer, so the view still scrolls beside it. */
-/* The thread card: the open thread's facts, floating over its chat's top right while kept open, as a menu's rows. */
+/* The thread card: the open thread's facts, floating over its chat's top right while open, as a menu's rows. */
 .thread-card {
   position: absolute;
   top: calc(var(--head-height) + 4px);

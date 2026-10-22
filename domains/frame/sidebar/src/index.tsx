@@ -6,7 +6,7 @@ import { Accessibility, AutoScroller, Feedback, PointerActivationConstraints } f
 import { RestrictToVerticalAxis } from "@dnd-kit/abstract/modifiers";
 import { RestrictToElement } from "@dnd-kit/dom/modifiers";
 import type { SessionInfo, SessionMarks } from "@lemma/sessions";
-import { formatKeys, withKeys } from "@lemma/web/keys";
+import { formatKeys, inDesktop, withKeys } from "@lemma/web/keys";
 import { loadJson, recordOf, save } from "@lemma/web/storage";
 import { dragEdge } from "@lemma/web/drag";
 import { ActionIds, Actions, shownKeysOf } from "@lemma/actions";
@@ -14,11 +14,10 @@ import { sessionTitle, ThreadActions, Threads, ThreadWaits, SidebarRowPart, Side
 import { ActionMenu, Layout, SidebarActions, SidebarFooter, SidebarRegion } from "@lemma/frame";
 import type { LayoutService } from "@lemma/frame";
 import { Workspace } from "@lemma/workspace/web";
-import type { WorkspaceService } from "@lemma/workspace/web";
-import { Interactions, Slots, WebPlugins, defineWebPlugin, Each, usePlugin } from "@lemma/web";
+import { Slots, WebPlugins, defineWebPlugin, Each, usePlugin } from "@lemma/web";
 import type { Action } from "@lemma/actions";
 import type { SidebarRowProps, ThreadDraft, ThreadsService } from "@lemma/threads";
-import type { SlotsService, WebPluginsService } from "@lemma/web";
+import type { SlotsService } from "@lemma/web";
 import {
   ArchiveIcon,
   Avatar,
@@ -337,9 +336,7 @@ function ThreadRow(props: SidebarRowProps) {
 interface Deps {
   readonly threads: ThreadsService;
   readonly slots: SlotsService;
-  readonly webPlugins: WebPluginsService;
   readonly layout: LayoutService;
-  readonly workspace: WorkspaceService;
   readonly now: () => number;
   readonly lists: () => ReturnType<typeof sections>;
   /** Each thread's agents, and theirs, listed under it (`nestedAgents`). */
@@ -359,6 +356,8 @@ interface Deps {
   readonly marks: () => Marks;
   /** The keys that go to a thread, while all but their last are held down (`Action.onHold`). */
   readonly shortcut: (id: string) => string | undefined;
+  /** The key the action `id` runs on, for a button's tip (`shownKeysOf`). */
+  readonly keysOf: (id: string) => string | undefined;
 }
 
 /** A thread's row, as the `sidebar.row` part draws it: it follows the thread as it changes. */
@@ -656,8 +655,7 @@ function SortableThreads(props: {
 }
 
 function Sidebar(props: { deps: Deps; onPick: () => void }) {
-  const { threads, slots, webPlugins, layout } = props.deps;
-  const keysOf = (id: string) => shownKeysOf(slots, webPlugins.list(), id);
+  const { threads, layout, keysOf } = props.deps;
   const row = rowOf(props.deps, props.onPick);
   const [archivedOpen, setArchivedOpen] = createSignal(loadJson(ARCHIVED_OPEN_KEY, false, (value): value is boolean => typeof value === "boolean"));
   const toggleArchived = () => {
@@ -929,9 +927,8 @@ export default defineWebPlugin({
     webPlugins: WebPlugins,
     layout: Layout,
     workspace: Workspace,
-    interactions: Interactions,
   },
-  setup: ({ threads, slots, webPlugins, layout, workspace, interactions }, plugin) => {
+  setup: ({ threads, slots, webPlugins, layout, workspace }, plugin) => {
     // Times tick once a second while a turn runs (its time shows), else once a minute.
     const [now, setNow] = createSignal(Date.now());
     createEffect(() => {
@@ -1030,12 +1027,11 @@ export default defineWebPlugin({
       await threads.mark(session.id, change);
     };
 
+    const keysOf = (id: string) => shownKeysOf(slots, webPlugins.list(), id);
     const deps: Deps = {
       threads,
       slots,
-      webPlugins,
       layout,
-      workspace,
       now,
       lists,
       agents,
@@ -1050,22 +1046,12 @@ export default defineWebPlugin({
       drop,
       marks,
       shortcut: (id) => shortcuts().get(id),
+      keysOf,
     };
     slots.add(SidebarRegion, { id: "sidebar", phase: "default", component: (props) => <Sidebar deps={deps} onPick={props.onPick} /> });
     slots.add(SidebarRowPart, { id: "sidebar.row", phase: "default", component: ThreadRow });
 
-    // A question a turn asked the host to put (an approval, a choice, a value) waits on the person in its thread.
-    slots.add(ThreadWaits, {
-      id: "sidebar.questions",
-      order: 100,
-      waiting: (sessionId) => {
-        const request = interactions.open().find((open) => open.origin === `session:${sessionId}`);
-        return request === undefined ? undefined : request.type === "ask" ? "Needs input" : "Needs approval";
-      },
-    });
-
     // Its head's buttons, across from the toggle: the palette, search in the palette's thread search, and a new thread.
-    const keysOf = (id: string) => shownKeysOf(slots, webPlugins.list(), id);
     const newThread = plugin.action("start a new thread", () => threads.newThread());
     slots.add(SidebarActions, {
       id: "sidebar.palette",
@@ -1133,9 +1119,15 @@ export default defineWebPlugin({
       const next = stepFrom(order(), threads.activeId(), by);
       if (next !== undefined) void threads.select(next);
     };
-    // The keys a browser keeps for its tabs work in a web page too (`inPages`).
-    add("sidebar.next-thread", 20, { title: "Next thread", keys: "mod+shift+]", whileTyping: true, inPages: true, run: step(1) });
-    add("sidebar.previous-thread", 21, { title: "Previous thread", keys: "mod+shift+[", whileTyping: true, inPages: true, run: step(-1) });
+    // The keys a browser keeps for its tabs: in the desktop app only (`inDesktop`), where a web page hands them on too (`inPages`).
+    add("sidebar.next-thread", 20, { title: "Next thread", ...(inDesktop ? { keys: "mod+shift+]" } : {}), whileTyping: true, inPages: true, run: step(1) });
+    add("sidebar.previous-thread", 21, {
+      title: "Previous thread",
+      ...(inDesktop ? { keys: "mod+shift+[" } : {}),
+      whileTyping: true,
+      inPages: true,
+      run: step(-1),
+    });
     // mod+1 … mod+9: the thread at that place in the list, pinned ones first.
     for (let at = 1; at <= 9; at++)
       add(`sidebar.thread-${at}`, 30 + at, {
@@ -1192,12 +1184,12 @@ export default defineWebPlugin({
       const next = needing(by);
       if (next !== undefined) void threads.select(next);
     };
-    // Alt+Shift+↓ and ↑, as Slack and Discord step through what is unread; with none, the keys stay the field's.
+    // Alt+Shift+↓ and ↑, as Slack and Discord step through what is unread. In a text field they stay its own (on macOS
+    // they select to a paragraph's end), whether or not a thread needs you.
     add("sidebar.next-needing", 23, {
       title: "Next thread that needs you",
       keywords: ["waiting", "unread", "done", "input", "approval", "attention"],
       keys: "alt+shift+arrowdown",
-      whileTyping: true,
       when: () => needing(1) !== undefined,
       run: goNeeding(1),
     });
@@ -1205,7 +1197,6 @@ export default defineWebPlugin({
       title: "Previous thread that needs you",
       keywords: ["waiting", "unread", "done", "input", "approval", "attention"],
       keys: "alt+shift+arrowup",
-      whileTyping: true,
       when: () => needing(-1) !== undefined,
       run: goNeeding(-1),
     });

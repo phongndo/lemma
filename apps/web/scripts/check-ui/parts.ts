@@ -137,9 +137,13 @@ export const parts = async (): Promise<string> => {
   await marker("SidebarActions");
   await marker("ComposerActions");
   await marker("ThreadCard");
+  // The card starts closed: open it to see its rows, and close it again after.
+  await page.click(".main-head .card-toggle");
   for (const slot of ["ThreadHeader", "SidebarActions", "ComposerActions", "ThreadCard"]) {
     await page.waitForSelector(`.check-${slot}`, { timeout: 5_000 }).catch(() => assert.fail(`${slot} does not render what a plugin adds`));
   }
+  await page.click(".main-head .card-toggle");
+  await page.waitForSelector(".thread-card", { state: "detached", timeout: 5_000 });
   // A palette source: its items come up in the palette, and its prefix narrows to it.
   await page.evaluate(async () => {
     const { PaletteSources } = (await import("/src/ui/api.ts" as string)).api.contracts;
@@ -525,15 +529,14 @@ export const parts = async (): Promise<string> => {
       timeout: 5_000,
     })
     .catch(async () => assert.fail(`dragging a pane tab left them as ${(await titles()).join(", ")}`));
-  // Its right-click menu closes the others; with focus in the pane, ⌘W closes its tab, and the last one the pane, the
-  // thread staying.
+  // Its right-click menu closes the others; the shown tab's × (⌘W with focus in the pane, in the desktop app: a browser
+  // keeps ⌘W) closes it, and the last one the pane, the thread staying.
   await page.click(".thread-inspector-open >> nth=2", { button: "right" });
   await page.click(".popover [role=menuitem] >> text=Close others");
   assert.deepEqual(await titles(), ["Trace"]);
-  await page.focus(".thread-inspector-open");
-  await page.keyboard.press("ControlOrMeta+w");
+  await page.click(".thread-inspector-tab.shown .thread-inspector-close");
   await page.waitForSelector(".thread-inspector", { state: "detached" });
-  assert.equal(await where(), thread, "⌘W in the pane closed the thread");
+  assert.equal(await where(), thread, "closing the pane's last tab closed the thread");
   // With no tab it never opens empty: its switch offers the views, and the tab picked takes focus.
   await page.click("[aria-label='Open inspection pane']");
   await page.click(".popover [role=menuitem] >> text=Trace");
@@ -542,7 +545,7 @@ export const parts = async (): Promise<string> => {
     .waitForFunction(() => document.activeElement?.matches(".thread-inspector-tab.shown .thread-inspector-open") === true, undefined, { timeout: 3_000 })
     .catch(() => assert.fail("a view picked from the pane's switch does not take focus"));
   // ⌘I offers them too, by letter, and closes its menu again.
-  await page.keyboard.press("ControlOrMeta+w");
+  await page.click(".thread-inspector-tab.shown .thread-inspector-close");
   await page.waitForSelector(".thread-inspector", { state: "detached" });
   const menuFocused = () => page.waitForFunction(() => document.activeElement?.closest(".popover") != null);
   await page.keyboard.press("ControlOrMeta+i");
@@ -779,8 +782,9 @@ export const parts = async (): Promise<string> => {
   await page.evaluate(() => (window as any).lemmaMock.releaseSteers());
   assert.equal(await where(), thread, "⌘Enter left the thread shown");
   assert.equal(await page.inputValue("textarea"), "", "⌘Enter left the prompt in the composer");
-  // Done while another showed, the background thread needs the person: Alt+Shift+↓ goes to it from the prompt, and
-  // ⌘[ and ⌘] go back and forward. ⌘⌥A archives it, and on it archived, unarchives it.
+  // Done while another showed, the background thread needs the person: Alt+Shift+↓ goes to it, though not from the
+  // prompt, where it stays the field's, and the browser's back and forward (⌘[ and ⌘] in the desktop app) return. ⌘⌥A
+  // archives it, and on it archived, unarchives it.
   await page
     .waitForSelector(`${workingRow} .thread-state[data-state=done]`, { timeout: 5_000 })
     .catch(() => assert.fail("a thread done in the background does not say so on its card"));
@@ -794,17 +798,20 @@ export const parts = async (): Promise<string> => {
       .catch(async () => assert.fail(`${key} went to ${await where()}, not ${thread}`));
   await page.focus("textarea");
   await page.keyboard.press("Alt+Shift+ArrowDown");
+  assert.equal(await where(), thread, "Alt+Shift+↓ in the prompt left it");
+  await page.locator("textarea").blur();
+  await page.keyboard.press("Alt+Shift+ArrowDown");
   await atBackground("Alt+Shift+↓");
-  await page.keyboard.press("ControlOrMeta+BracketLeft");
-  await atThread("⌘[");
-  await page.keyboard.press("ControlOrMeta+BracketRight");
-  await atBackground("⌘]");
+  await page.goBack();
+  await atThread("back");
+  await page.goForward();
+  await atBackground("forward");
   await page.keyboard.press("ControlOrMeta+Alt+KeyA");
   await page
     .waitForFunction((id) => (window as any).blankThreads.list().find((session: any) => session.id === id)?.archived === true, background, { timeout: 5_000 })
     .catch(() => assert.fail("⌘⌥A did not archive the thread shown"));
-  await page.keyboard.press("ControlOrMeta+BracketLeft");
-  await atBackground("⌘[ after archiving");
+  await page.goBack();
+  await atBackground("back after archiving");
   await page.keyboard.press("ControlOrMeta+Alt+KeyA");
   await page
     .waitForFunction((id) => (window as any).blankThreads.list().find((session: any) => session.id === id)?.archived !== true, background, { timeout: 5_000 })

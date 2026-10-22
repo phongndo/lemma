@@ -431,7 +431,8 @@ function Composer(props: { deps: Deps }) {
     setImages((current) => [...current, ...attached]);
   };
 
-  const hold = createQuickHold();
+  // ⌘ is the completions' while they show, which ⌘1 … ⌘9 pick from.
+  const hold = createQuickHold(() => completion.open() && completion.items().length > 0);
   const onKeyDown = (event: KeyboardEvent) => {
     hold.track(event);
     // The completion menu, while open, takes the keys that move through it, pick, and close it: a search

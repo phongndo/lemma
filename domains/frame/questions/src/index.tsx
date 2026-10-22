@@ -2,6 +2,7 @@ import { For, Match, Show, Switch, createSignal } from "solid-js";
 import type { InteractionRequest } from "@lemma/contracts";
 import { stepFor } from "@lemma/web/keys";
 import { Layers } from "@lemma/frame";
+import { ThreadWaits } from "@lemma/threads";
 import { Interactions, Slots, defineWebPlugin } from "@lemma/web";
 import type { InteractionsService } from "@lemma/web";
 import { ConfigForm, Dialog } from "@lemma/look";
@@ -180,12 +181,24 @@ function InteractionModal(props: { interactions: InteractionsService }) {
   );
 }
 
-/** The host's questions as a dialog: an API key to enter, a change to confirm, an option to pick, a form to fill. */
+/**
+ * The host's questions as a dialog: an API key to enter, a change to confirm, an option to pick, a form to fill. And
+ * the threads they wait in (`ThreadWaits`), which the sidebar, the palette, and Settings › Archived mark.
+ */
 export default defineWebPlugin({
   id: "frame.questions",
   styles,
   requires: { interactions: Interactions, slots: Slots },
   setup: ({ interactions, slots }) => {
     slots.add(Layers, { id: "interaction", order: 50, component: () => <InteractionModal interactions={interactions} /> });
+    // A question a turn asked the host to put (an approval, a choice, a value) waits on the person in its thread.
+    slots.add(ThreadWaits, {
+      id: "frame.questions",
+      order: 100,
+      waiting: (sessionId) => {
+        const request = interactions.open().find((open) => open.origin === `session:${sessionId}`);
+        return request === undefined ? undefined : request.type === "ask" ? "Needs input" : "Needs approval";
+      },
+    });
   },
 });

@@ -9,10 +9,7 @@ the palette's thread search (`ActionIds.searchThreads`), each while a plugin
 offers it, and New thread. Its foot
 has the `SidebarFooter`. Each thread is a `SidebarRowPart` and its menu the
 `ThreadActions` ([`@lemma/threads`](../../threads/contract/src/index.ts)).
-Adds to `ThreadWaits` the threads a host question waits in (`Interactions`,
-asked from a turn): `Needs approval`, or `Needs input` for a value. Requires
-`Threads`, `Slots`, `WebPlugins`, `Layout`, `Workspace`, and
-`Interactions`.
+Requires `Threads`, `Slots`, `WebPlugins`, `Layout`, and `Workspace`.
 
 ## Behavior
 
@@ -76,14 +73,18 @@ asked from a turn): `Needs approval`, or `Needs input` for a value. Requires
 - **Keys.** `mod+1` … `mod+9` go to the thread at that place, pinned ones
   first; while `mod` is held alone a moment (`Action.onHold`, from the
   keymap), each of those threads shows its keys (`⌘1`) where its state goes,
-  as T3 Code does. `mod+shift+]` and `mod+shift+[` go to the next and
-  previous, stopping at the ends. `alt+shift+arrowdown` and
-  `alt+shift+arrowup` go to the next and previous thread that needs you, round
+  as T3 Code does, unless a list that picks with them has it (the composer's
+  completions). In the desktop app, `mod+shift+]` and `mod+shift+[` go to the
+  next and previous, stopping at the ends; a browser keeps them for its tabs,
+  so there Next thread and Previous thread are the palette's.
+  `alt+shift+arrowdown` and `alt+shift+arrowup` go to the next and previous
+  thread that needs you, round
   the list, as Slack and Discord step through what is unread: one that waits
   on you (`ThreadWaits`) or is `Done`, or an agent under one that waits on you
-  (a finished agent's thread goes on with what it did). With none, they stay
-  the text field's. A right-click opens a thread's menu and a double-click
-  renames it. Settings › Keyboard rebinds them all.
+  (a finished agent's thread goes on with what it did). In a text field they
+  stay its own (on macOS, selecting to a paragraph's end). A right-click opens
+  a thread's menu and a double-click renames it. Settings › Keyboard rebinds
+  them all.
 - **Kept in this browser** (`lemma.frame.sidebar.marks`): the pinned and
   active orders, and when threads were archived and unarchived, which order the
   list beyond when each was made; and whether the archived fold is open, and

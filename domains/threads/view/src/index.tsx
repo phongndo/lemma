@@ -2,6 +2,7 @@ import { For, Show, createEffect, createMemo, createSignal, onCleanup } from "so
 import type { JSX } from "solid-js";
 import { isRoute } from "@lemma/router";
 import { tildePath } from "@lemma/web/format";
+import { inDesktop } from "@lemma/web/keys";
 import { load, save } from "@lemma/web/storage";
 import { dragEdge } from "@lemma/web/drag";
 import {
@@ -34,15 +35,6 @@ import styles from "./thread-view.css?inline";
 
 /** The inspection pane's share of the page, once its edge is dragged; before, its width is its stylesheet's. */
 const SHARE_KEY = "lemma.threads.view.pane-share";
-/**
- * Where its width in px was kept before it was a share. Not carried over: one width dragged for one view (a page) made
- * the pane open as wide over every thread and view, empty ones too, which a share and its first width replace.
- */
-const OLD_WIDTH_KEY = "lemma.threads.view.inspector-width";
-/** Whether the thread card is kept open, in this browser: open until closed. */
-const CARD_KEY = "lemma.threads.view.card";
-/** In the desktop app (`window.lemmaDesktop`), which, unlike a browser, leaves ⌘T to the page. */
-const DESKTOP = "lemmaDesktop" in window;
 
 /**
  * The page for one thread (and for a new one): its header, its first view
@@ -76,13 +68,18 @@ export default defineWebPlugin({
     /** The view filling the page: the first. */
     const main = () => views()[0];
     const keysOf = (id: string) => shownKeysOf(slots, webPlugins.list(), id);
-    const inspector = createInspector({ threads, slots, router, keysOf, focusChat: () => slots.get(Actions, ThreadsActionIds.focusComposer)?.run() });
-    /** The thread card (`ThreadCard`) is kept open, over an open thread's chat: until closed, and remembered. */
-    const [cardOpen, setCardOpen] = createSignal(load(CARD_KEY) !== "0");
-    const toggleCard = () => {
-      setCardOpen(!cardOpen());
-      save(CARD_KEY, cardOpen() ? undefined : "0");
-    };
+    /** The thread card (`ThreadCard`), over an open thread's chat: closed at first, so it covers none of it until asked. */
+    const [cardOpen, setCardOpen] = createSignal(false);
+    const toggleCard = () => setCardOpen(!cardOpen());
+    const inspector = createInspector({
+      threads,
+      slots,
+      router,
+      keysOf,
+      focusChat: () => slots.get(Actions, ThreadsActionIds.focusComposer)?.run(),
+      // A menu of views opens over where the card is: one at a time.
+      menuOpened: () => setCardOpen(false),
+    });
     /** An open thread with something sent: what the card is of (a new one has its start line instead). */
     const started = () => threads.activeId() !== undefined && !threads.blank();
     /** Thread pages drawn: the pane's keys work only where it is, not over Settings, say. */
@@ -105,8 +102,9 @@ export default defineWebPlugin({
         title: "New thread",
         category: "Thread",
         icon: PenSquareIcon,
-        // ⌘N, as Codex and T3 Code have it; in a browser it stays the browser's (a new window), so ⌘⇧O works there.
-        keys: ["mod+n", "mod+shift+o"],
+        // ⌘N, as Codex and T3 Code have it, in the desktop app (`inDesktop`); in a browser it stays the browser's (a new
+        // window), and ⌘⇧O is the app's.
+        keys: inDesktop ? ["mod+n", "mod+shift+o"] : "mod+shift+o",
         global: true,
         inPages: true,
         run: () => {
@@ -227,14 +225,14 @@ export default defineWebPlugin({
         run: () => inspector.toggle(),
       },
       {
-        // ⌘T, as a browser opens a tab: the pane's menu of views, a letter picking one (B, the browser). Only in the
-        // desktop app: a browser keeps ⌘T for its own tabs, and the page never hears it.
+        // ⌘T, as a browser opens a tab: the pane's menu of views, a letter picking one (B, the browser). In the desktop
+        // app only (`inDesktop`), as ⌘W.
         id: "thread.inspect-new-tab",
         order: 12,
         title: "New tab in the inspection pane…",
         detail: "A view to open beside the chat: the trace, a browser, a page",
         category: "View",
-        ...(DESKTOP ? { keys: "mod+t" } : {}),
+        ...(inDesktop ? { keys: "mod+t" } : {}),
         whileTyping: true,
         inPages: true,
         when: paneShown,
@@ -254,7 +252,7 @@ export default defineWebPlugin({
         order: 12,
         title: "Close the inspection pane's tab",
         category: "View",
-        keys: "mod+w",
+        ...(inDesktop ? { keys: "mod+w" } : {}),
         whileTyping: true,
         inPages: true,
         when: inspector.focused,
@@ -381,7 +379,6 @@ export default defineWebPlugin({
     const cardGroups = createMemo(() => [...new Set(slots.list(ThreadCard).map((row) => row.group ?? row.id))]);
 
     /** The inspection pane's share of the page once its edge is dragged, kept across reloads; the page narrows it to leave the chat room. */
-    save(OLD_WIDTH_KEY, undefined);
     const kept = Number(load(SHARE_KEY));
     const [share, setShare] = createSignal<number | undefined>(kept > 0 && kept < 1 ? kept : undefined);
     const resetShare = () => {

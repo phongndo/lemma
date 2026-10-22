@@ -8,6 +8,8 @@ vi.hoisted(() => {
 
 const press = (key: string, code: string, mods: { ctrl?: boolean; shift?: boolean; alt?: boolean; meta?: boolean } = {}) =>
   ({ key, code, ctrlKey: mods.ctrl ?? false, shiftKey: mods.shift ?? false, altKey: mods.alt ?? false, metaKey: mods.meta ?? false }) as KeyboardEvent;
+/** `event` with AltGr held, which Windows reports as Ctrl+Alt too. */
+const withAltGr = (event: KeyboardEvent) => ({ ...event, getModifierState: (key: string) => key === "AltGraph" }) as KeyboardEvent;
 
 describe("bindingOf", () => {
   it("records modifiers in a fixed order and letters by their physical key", () => {
@@ -22,6 +24,7 @@ describe("bindingOf", () => {
     expect(bindingOf(press("?", "Slash", { shift: true }))).toBe("?");
     expect(bindingOf(press("Shift", "ShiftLeft", { shift: true }))).toBeUndefined();
     expect(bindingOf(press("Control", "ControlLeft", { ctrl: true }))).toBeUndefined();
+    expect(bindingOf(withAltGr(press("AltGraph", "AltRight", { ctrl: true, alt: true })))).toBeUndefined();
   });
 });
 
@@ -45,6 +48,15 @@ describe("matchesKeys", () => {
     expect(matchesKeys("mod+]", press("]", "BracketRight", { ctrl: true }))).toBe(true);
   });
 
+  it("takes a key typed with AltGr for typing, not for mod+alt", () => {
+    // AltGr+A types ą on a Polish layout; Windows reports it as Ctrl+Alt+A.
+    expect(matchesKeys("mod+alt+a", withAltGr(press("ą", "KeyA", { ctrl: true, alt: true })))).toBe(false);
+    expect(matchesKeys("a", withAltGr(press("ą", "KeyA")))).toBe(false);
+    expect(matchesKeys("mod+alt+a", press("a", "KeyA", { ctrl: true, alt: true }))).toBe(true);
+    // On macOS ⌥ is Alt, whatever the event says of AltGr.
+    expect(matchesKeys("mod+alt+a", withAltGr(press("å", "KeyA", { meta: true, alt: true })), true)).toBe(true);
+  });
+
   it("needs the exact modifiers", () => {
     expect(matchesKeys("mod+k", press("k", "KeyK", { ctrl: true, shift: true }))).toBe(false);
     expect(matchesKeys("mod+k", press("k", "KeyK"))).toBe(false);
@@ -59,6 +71,7 @@ describe("holdsKeys", () => {
     expect(holdsKeys("mod+shift+]", press("Shift", "ShiftLeft", { ctrl: true, shift: true }))).toBe(true);
     expect(holdsKeys("alt+1", press("Alt", "AltLeft", { alt: true, ctrl: true }))).toBe(false);
     expect(holdsKeys("mod+1", press("Control", "ControlLeft"))).toBe(false);
+    expect(holdsKeys("mod+alt+a", withAltGr(press("AltGraph", "AltRight", { ctrl: true, alt: true })))).toBe(false);
   });
 
   it("never holds a binding without a modifier", () => {

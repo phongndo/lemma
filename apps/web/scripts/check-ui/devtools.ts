@@ -253,8 +253,10 @@ export const devtools = async (): Promise<string> => {
   await page
     .waitForSelector(".thread-chat.starting", { state: "detached", timeout: 5_000 })
     .catch(() => assert.fail("a thread's prompt stays in the middle of the page once its first prompt is sent"));
-  // Its facts are in its card, open over the chat until closed, its mode first (not being the default); the composer
-  // holds none of them.
+  // Its facts are in its card, which its header's switch opens over the chat (closed at first, so it covers none of
+  // it), its mode first (not being the default); the composer holds none of them.
+  assert.equal(await page.locator(".thread-card").count(), 0, "a started thread's card is open before it is asked for");
+  await page.click(".main-head .card-toggle");
   await page
     .waitForSelector(".thread-card .menu-item:first-child >> text=Creator mode", { timeout: 5_000 })
     .catch(() => assert.fail("a started thread's card does not show its mode first"));
@@ -267,6 +269,16 @@ export const devtools = async (): Promise<string> => {
   await page.waitForSelector(".thread-card", { state: "detached", timeout: 5_000 }).catch(() => assert.fail("the thread card's switch does not close it"));
   await page.click(".main-head .card-toggle");
   await page.waitForSelector(".thread-card", { timeout: 5_000 }).catch(() => assert.fail("the thread card's switch does not open it again"));
+  // A menu of views opens where the card is: the card closes, so the two do not stack. The pane may be open from
+  // before the reload, so the menu is its tabs' or the switch's.
+  await page.locator("[aria-label='Open a view'], [aria-label='Open inspection pane']").first().click();
+  await page
+    .waitForSelector(".thread-card", { state: "detached", timeout: 5_000 })
+    .catch(() => assert.fail("the thread card stays open under the menu of views"));
+  // Escape is the menu's once it has focus, not the running turn's.
+  await page.waitForFunction(() => document.activeElement?.closest(".popover") != null);
+  await page.keyboard.press("Escape");
+  await page.waitForSelector(".popover", { state: "detached", timeout: 3_000 });
   await page.fill("textarea", "steer it");
   // Something written takes the stop button's place with the steer button, rather than adding one beside it.
   await page

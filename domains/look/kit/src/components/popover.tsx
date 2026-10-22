@@ -2,7 +2,7 @@ import { Show, createSignal, onCleanup } from "solid-js";
 import { Portal } from "solid-js/web";
 
 import { usePlugin } from "@lemma/web";
-import { listKey, modKey, quickKey } from "@lemma/web/keys";
+import { bindingOf, listKey, modKey, quickKey } from "@lemma/web/keys";
 import type { Placement, PopoverProps } from "@lemma/look";
 
 const MARGIN = 8;
@@ -80,6 +80,8 @@ export function Popover(props: PopoverProps) {
     });
   const hold = (event: KeyboardEvent | FocusEvent) => {
     const next = event instanceof KeyboardEvent && modKey(event) && !event.altKey && !event.shiftKey;
+    // Held alone, mod is the menu's: handled, so the keymap's actions do not show their keys for it too (`createQuickHold`).
+    if (next && bindingOf(event) === undefined) event.preventDefault();
     if (next === quick) return;
     quick = next;
     label();
