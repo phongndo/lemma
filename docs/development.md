@@ -35,9 +35,13 @@ set `HK=0` to skip them once.
 CI (`.github/workflows/check.yml`) runs its checks as parallel jobs, in the dev
 shell on Linux: `pnpm check`, the packed-package and browser checks, and
 `pnpm test` and the web app's `ui:check`, each in two halves on runners of
-their own (`--shard=1/2`, `--shard=2/2`); macOS runs `pnpm test` in thirds,
-with plain Node.js and pnpm. The tests' shards are split by how long each file
-took (`scripts/test-shards.ts`, from `scripts/test-durations.json`), so they end
+their own (`--shard=1/2`, `--shard=2/2`); on main, macOS runs `pnpm test` in
+thirds, with plain Node.js and pnpm. Pull requests skip macOS: GitHub's free
+plan runs five macOS jobs at once, so one pull request's run queued behind
+another's, and a Mac that pushes has run the tests in the pre-push hook
+(`gh workflow run check.yml --ref <branch>` runs them on a branch). The
+tests' shards are split by how long each file took (`scripts/test-shards.ts`,
+from `scripts/test-durations.json`), so they end
 together; when they drift apart, `nix develop -c pnpm test:durations` measures
 again. The `passed` job succeeds only when every
 other job does, so it is the one check a branch rule needs to require. Each commit on main also uploads its

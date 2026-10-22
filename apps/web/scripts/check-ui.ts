@@ -82,15 +82,30 @@ import { toggling } from "./check-ui/toggling.ts";
  * (`shared.ts`: the dev server, the browser, and the helpers that boot and drive a page).
  */
 
+/*
+ * A share takes about a minute and a half in CI. A step that never returns (Playwright waits on some calls for ever)
+ * fails the check at the deadline, naming the lanes still running and leaving their traces, rather than holding the job
+ * until its timeout cancels it with nothing to show.
+ */
+const DEADLINE_MINUTES = 4;
+let deadline: NodeJS.Timeout | undefined;
 try {
   // In this order, every other lane makes two shares that take about as long.
   const lanes = [toggling, parts, rail, devtools, separate, pages].filter((_, at) => at % shards === shard - 1);
-  const done = await Promise.all(lanes.map((lane) => lane()));
+  const running = new Set(lanes.map((lane) => lane.name));
+  const overdue = new Promise<never>((_, reject) => {
+    deadline = setTimeout(
+      () => reject(new Error(`UI check: still running after ${DEADLINE_MINUTES} minutes: ${[...running].join(", ")}`)),
+      DEADLINE_MINUTES * 60_000,
+    );
+  });
+  const done = await Promise.race([Promise.all(lanes.map((lane) => lane().finally(() => running.delete(lane.name)))), overdue]);
   console.log(`UI check${shards > 1 ? ` (${shard}/${shards})` : ""}: ${done.join("; ")}.`);
 } catch (error) {
   await saveArtifacts();
   throw error;
 } finally {
+  clearTimeout(deadline);
   await browser.close();
   await server.close();
 }

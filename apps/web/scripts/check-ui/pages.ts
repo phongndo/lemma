@@ -303,24 +303,30 @@ export const pages = async (): Promise<string> => {
     addEventListener("keydown", (event) => event.key === "Escape" && setTimeout(() => parent.postMessage({ type: "check-escaped" }, "*"), 0));
   });
   const escaped = (count: number) => page.waitForFunction((count) => (window as any).escapes >= count, count, { timeout: 3_000 });
+  // Each Escape comes up only once what it did going down is checked, as a user's key comes up a moment later. Chromium
+  // can leave a key unanswered that reaches this frame as it goes, and `keyboard.press` then waits for ever: the Escape
+  // that closes the page comes up once the frame has gone, and one that wrongly closed it fails its check, not hangs.
   await content.locator("#field").focus();
-  await page.keyboard.press("Escape");
+  await page.keyboard.down("Escape");
   await escaped(1);
   assert.equal(await viewer.count(), 1, "Escape in a field of a page full screen closes the page");
+  await page.keyboard.up("Escape");
   await content.evaluate(() => {
     (document.activeElement as HTMLElement).blur();
     (document.getElementById("own-dialog") as HTMLDialogElement).showModal();
   });
-  await page.keyboard.press("Escape");
+  await page.keyboard.down("Escape");
   await escaped(2);
   assert.equal(await viewer.count(), 1, "Escape closing a page's own dialog closes the page full screen too");
+  await page.keyboard.up("Escape");
   assert.equal(
     await content.evaluate(() => (document.getElementById("own-dialog") as HTMLDialogElement).open),
     false,
     "Escape does not reach a page's own dialog",
   );
-  await page.keyboard.press("Escape");
+  await page.keyboard.down("Escape");
   await viewer.waitFor({ state: "detached", timeout: 5_000 }).catch(() => assert.fail("Escape pressed in a page full screen does not close it"));
+  await page.keyboard.up("Escape");
   await page
     .waitForFunction(() => document.activeElement?.getAttribute("aria-label") === "Open full screen", undefined, { timeout: 3_000 })
     .catch(async () => assert.fail(`closing a page full screen gives focus to ${await focused()}, not the button that opened it`));
