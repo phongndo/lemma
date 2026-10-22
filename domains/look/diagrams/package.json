@@ -2,7 +2,7 @@
   "name": "@lemma/look-diagrams",
   "version": "0.1.0",
   "private": true,
-  "description": "Mermaid diagrams for ```mermaid blocks, through the `markdown.code` slot",
+  "description": "Mermaid diagrams for ```mermaid blocks, drawn by Pele, through the `markdown.code` slot",
   "type": "module",
   "exports": {
     ".": "./src/index.tsx"
@@ -15,7 +15,7 @@
     "@lemma/frame": "workspace:*",
     "@lemma/look": "workspace:*",
     "@lemma/web": "workspace:*",
-    "mermaid": "12.2.0",
+    "pele": "1.8.0",
     "solid-js": "1.9.17"
   },
   "devDependencies": {

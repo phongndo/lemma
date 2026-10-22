@@ -63,7 +63,7 @@ three base colors, `--bg`, `--text`, and `--accent`, and
 [`styles.css`](src/styles.css) derives surfaces, muted text, and the accent's
 tint from them. A plugin's own colors are tokens in its stylesheet:
 `highlight`'s `--code-*` (GitHub's colors until set), `diagrams'`
-`--diagram-*` (Mermaid's own until set). `--text-scale` sizes every font and
+`--diagram-*` (the page's colors until set). `--text-scale` sizes every font and
 `--radius-scale` rounds every corner.
 
 The look is the `look.appearance` plugin's config, which it paints on the page:

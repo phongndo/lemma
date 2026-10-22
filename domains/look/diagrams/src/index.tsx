@@ -2,41 +2,31 @@ import { Show, createSignal } from "solid-js";
 import { Layers } from "@lemma/frame";
 import { CodeBlocks, Dialog, LOOK_PLUGINS } from "@lemma/look";
 import { Slots, defineWebPlugin } from "@lemma/web";
-import { currentTheme, currentToken, onLookChange, tokenColor } from "@lemma/web/paint";
-import type { DiagramLook } from "./mermaid.ts";
+import { currentToken, onLookChange, tokenColor } from "@lemma/web/paint";
+import type { DiagramLook } from "./pele.ts";
 import { viewerScale } from "./viewer.ts";
 import styles from "./diagrams.css?inline";
 
-const DIAGRAM_TOKENS = ["--diagram-background", "--diagram-node", "--diagram-border", "--diagram-text", "--diagram-line", "--diagram-note"];
-
 /**
- * How diagrams are drawn: in Mermaid's own light or dark theme, unless the
- * look sets a `--diagram-*` token. Then they are drawn in the page's colors,
- * with each `--diagram-*` token set over them; a plain color is all an image
- * can take.
+ * How diagrams are drawn: in the page's colors, with each `--diagram-*` token
+ * a look sets over them; a plain color is all an image can take.
  */
 const diagramLook = (): DiagramLook => {
-  const dark = currentTheme() === "dark";
-  const font = currentToken("--font-ui");
-  if (DIAGRAM_TOKENS.every((token) => currentToken(token) === "")) return { dark, font };
   const color = (token: string, fallback: string, under = "--bg-raised") => tokenColor(currentToken(token) === "" ? fallback : token, under);
   return {
-    dark,
-    font,
+    font: currentToken("--font-ui"),
     colors: {
       background: color("--diagram-background", "--bg-raised", "--bg"),
       node: color("--diagram-node", "--bg-active"),
       border: color("--diagram-border", "--border-strong"),
       text: color("--diagram-text", "--text"),
+      muted: tokenColor("--text-2", "--bg-raised"),
       line: color("--diagram-line", "--text-3"),
       note: color("--diagram-note", "--accent-soft"),
+      accent: tokenColor("--accent", "--bg-raised"),
     },
   };
 };
-
-/** Resolves when the browser has a moment between frames, so Mermaid's synchronous work does not land in one mid-stream. */
-const idle = (): Promise<void> =>
-  new Promise((resolve) => (typeof requestIdleCallback === "function" ? requestIdleCallback(() => resolve(), { timeout: 1_000 }) : setTimeout(resolve, 0)));
 
 /** Room the viewer's dialog takes around a diagram, in pixels. */
 const VIEWER_MARGIN = 160;
@@ -71,13 +61,13 @@ function Viewer(props: { viewing: Viewing; onClose: () => void }) {
 }
 
 /**
- * Mermaid diagrams for ```mermaid blocks, through the `markdown.code` slot.
- * A block is drawn once its fence closes (until then it streams as code),
- * and its source stays a click away. A diagram is drawn in Mermaid's own
- * light or dark theme, or in the page's colors once the look sets a
- * `--diagram-*` token (`--diagram-node`, `--diagram-border`, `--diagram-line`,
- * `--diagram-text`, `--diagram-background`, `--diagram-note`), and drawn
- * again when the look changes. Mermaid loads on first use.
+ * Mermaid diagrams for ```mermaid blocks, through the `markdown.code` slot,
+ * drawn by Pele. A block is drawn once its fence closes (until then it streams
+ * as code), and its source stays a click away. A diagram is drawn in the
+ * page's colors, with any `--diagram-*` token the look sets over them
+ * (`--diagram-node`, `--diagram-border`, `--diagram-line`, `--diagram-text`,
+ * `--diagram-background`, `--diagram-note`), and drawn again when the look
+ * changes. Pele loads on first use.
  */
 export default defineWebPlugin({
   id: LOOK_PLUGINS.diagrams,
@@ -86,19 +76,19 @@ export default defineWebPlugin({
   setup: ({ slots }, plugin) => {
     /** Each diagram's source, to draw it again in another theme. */
     const sources = new WeakMap<HTMLImageElement, string>();
-    let loading: Promise<typeof import("./mermaid.ts")> | undefined;
+    let loading: Promise<typeof import("./pele.ts")> | undefined;
     const load = () => {
       const start = performance.now();
-      return (loading ??= idle().then(async () => {
-        const module = await import("./mermaid.ts");
-        performance.measure("lemma:mermaid-load", { start });
+      return (loading ??= import("./pele.ts").then((module) => {
+        performance.measure("lemma:diagram-load", { start });
         return module;
       }));
     };
+    /** The look diagrams are drawn in, read once until it changes. */
+    let look: DiagramLook | undefined;
     const draw = async (image: HTMLImageElement, code: string) => {
       const { renderDiagram } = await load();
-      await idle();
-      image.src = await renderDiagram(code, diagramLook());
+      image.src = await renderDiagram(code, (look ??= diagramLook()));
     };
     const [viewing, setViewing] = createSignal<Viewing>();
     slots.add(Layers, {
@@ -109,6 +99,7 @@ export default defineWebPlugin({
     /** Its diagrams on the page, redrawn in the new colors when the look changes. */
     const drawn = new Set<HTMLImageElement>();
     const redraw = () => {
+      look = undefined;
       for (const image of drawn) {
         if (!image.isConnected) {
           drawn.delete(image);
@@ -126,7 +117,7 @@ export default defineWebPlugin({
       match: (lang) => lang === "mermaid",
       render: async (block, target) => {
         if (!block.complete) {
-          // A diagram is on its way: load Mermaid now, while the model writes it, not when it is done.
+          // A diagram is on its way: load Pele now, while the model writes it, not when it is done.
           void load().catch(() => {});
           return;
         }

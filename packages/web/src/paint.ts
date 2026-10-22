@@ -143,7 +143,7 @@ export const onLookChange = (listener: () => void): (() => void) => {
 let swatch: CanvasRenderingContext2D | null | undefined;
 /**
  * A token's color as an opaque `#rrggbb`, laid over the token `under` if it is
- * translucent: for a renderer that takes only plain colors (Mermaid, a canvas).
+ * translucent: for what takes only plain colors (an SVG image, a canvas).
  */
 export const tokenColor = (name: string, under = "--bg"): string => {
   const probe = document.createElement("span");
