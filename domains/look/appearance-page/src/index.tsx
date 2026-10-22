@@ -110,15 +110,17 @@ export default defineWebPlugin({
     const choosingLight = choosing("light");
     const choosingDark = choosing("dark");
 
-    // The rows, each made once (a theme row again only when the themes a search finds it by change): a group asked for
-    // its entries again then keeps its rows drawn, and a menu open in one (`SettingsGroup.entries`).
+    // The rows, each made once: a group asked for its entries again (the Theme group, as the look changes) keeps its rows
+    // drawn, and a menu open in one (`SettingsGroup.entries`).
     const previewRows = [{ text: "Preview look config", view: () => <Preview deps={deps} /> }];
     const schemeRow = { text: "Theme scheme color mode dark light system", view: () => <SchemePicker deps={deps} /> };
-    const themeRow = (scheme: Scheme) => {
-      const named = createMemo(() => titles(scheme));
-      const label = scheme === "light" ? "Light" : "Dark";
-      return createMemo(() => ({ text: `${label} theme palette ${named()}`, view: () => <ThemeChoice deps={deps} scheme={scheme} /> }));
-    };
+    // A theme row is one object, its text read as a search asks, so a theme added or removed keeps the row drawn.
+    const themeRow = (scheme: Scheme) => ({
+      get text() {
+        return `${scheme === "light" ? "Light" : "Dark"} theme palette ${titles(scheme)}`;
+      },
+      view: () => <ThemeChoice deps={deps} scheme={scheme} />,
+    });
     const lightRow = themeRow("light");
     const darkRow = themeRow("dark");
     const accentRow = { text: "Accent color colour highlight primary buttons links", view: () => <AccentPicker deps={deps} /> };
@@ -188,19 +190,16 @@ export default defineWebPlugin({
         description: "Shows each file's type as its own colored icon, wherever a file is named.",
       },
     ] as const;
-    // Made once each, offered while their plugin is there; a switch shows its plugin as it is, or as it last was.
-    const switchRows = switches.map((entry) => {
-      const found = createMemo<PluginStatus | undefined>((last) => pluginRow(entry.id) ?? last);
-      return {
-        id: entry.id,
-        text: entry.text,
-        view: () => (
-          <Show when={found()}>
-            {(plugin) => <PluginSwitch title={entry.title} description={entry.description} on={isOn(plugin())} onChange={(on) => turn(plugin(), on)} />}
-          </Show>
-        ),
-      };
-    });
+    // Made once each, offered while their plugin is there.
+    const switchRows = switches.map((entry) => ({
+      id: entry.id,
+      text: entry.text,
+      view: () => (
+        <Show when={pluginRow(entry.id)}>
+          {(plugin) => <PluginSwitch title={entry.title} description={entry.description} on={isOn(plugin())} onChange={(on) => turn(plugin(), on)} />}
+        </Show>
+      ),
+    }));
 
     const section = SectionIds.appearance;
     slots.add(SettingsSections, {
@@ -232,7 +231,7 @@ export default defineWebPlugin({
       order: 10,
       section,
       title: "Theme",
-      entries: () => [schemeRow, ...(choosingLight() ? [lightRow()] : []), ...(choosingDark() ? [darkRow()] : []), accentRow],
+      entries: () => [schemeRow, ...(choosingLight() ? [lightRow] : []), ...(choosingDark() ? [darkRow] : []), accentRow],
     });
     slots.add(SettingsGroups, {
       id: "appearance.text",

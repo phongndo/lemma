@@ -1,4 +1,5 @@
-import { For, Show, createEffect, createMemo, createSignal, on, onCleanup, onMount, untrack } from "solid-js";
+import { For, Show, createEffect, createMemo, createSignal, mapArray, on, onCleanup, onMount, untrack } from "solid-js";
+import type { Accessor, JSX } from "solid-js";
 import { formatKeys, withKeys } from "@lemma/web/keys";
 import { shownKeysOf, Actions } from "@lemma/actions";
 import { filterGroups } from "./settings.ts";
@@ -8,50 +9,50 @@ import { NewThreadRoute } from "@lemma/sessions";
 import { SectionIds, Settings, SETTINGS_CONTRACT, SettingsGroups, SettingsMenu, SettingsRoute, SettingsSections } from "@lemma/settings";
 import { PromptCommands } from "@lemma/threads";
 import { Pages, Router, Slots, WebPlugins, defineWebPlugin, Contained } from "@lemma/web";
-import type { SettingsEntry, SettingsSection } from "@lemma/settings";
-import type { SlotItem, SlotsService } from "@lemma/web";
+import type { SettingsEntry, SettingsGroup, SettingsSection } from "@lemma/settings";
+import type { SlotItem } from "@lemma/web";
 import { ArrowLeftIcon, GearIcon, Popover, SearchIcon, SidebarIcon, SlidersIcon, XIcon } from "@lemma/look";
 import styles from "./settings.css?inline";
 
 type Section = SlotItem<SettingsSection>;
 
+/** A group and its entries, asked in a memo of its own: what one group reads changing asks no other group again. */
+type Asked = { readonly group: SettingsGroup; readonly entries: Accessor<readonly SettingsEntry[]> };
+
 /** A section's groups from every plugin, in order; groups with the same title merge. */
-const groupsOf = (slots: SlotsService, section: string): EntryGroup<SettingsEntry>[] => {
+const groupsOf = (asked: readonly Asked[], section: string): EntryGroup<SettingsEntry>[] => {
   const merged: { title?: string; entries: SettingsEntry[] }[] = [];
-  for (const group of slots.list(SettingsGroups)) {
+  for (const { group, entries } of asked) {
     if (group.section !== section) continue;
     const same = merged.find((candidate) => candidate.title === group.title);
-    if (same === undefined) merged.push({ ...(group.title === undefined ? {} : { title: group.title }), entries: [...group.entries()] });
-    else same.entries.push(...group.entries());
+    if (same === undefined) merged.push({ ...(group.title === undefined ? {} : { title: group.title }), entries: [...entries()] });
+    else same.entries.push(...entries());
   }
   return merged.filter((group) => group.entries.length > 0);
 };
 
-/** The key an untitled group is drawn by: merged groups have one title each, and untitled ones merge too. */
-const UNTITLED = "\u0000";
-
 /**
- * Groups by title and rows by entry, so a group asked again stays drawn wherever it moves, and an entry given again
- * (`SettingsGroup.entries`) keeps its row, and whatever is open in it.
+ * Draws a list by key: an item stays drawn, and what is open in it, while the list around it changes. `<For>` alone
+ * keys by object, and a list recomputed makes its objects anew.
  */
+function Keyed<T>(props: { each: readonly T[]; key: (item: T) => string; children: (item: Accessor<T>) => JSX.Element }) {
+  const byKey = createMemo(() => new Map(props.each.map((item) => [props.key(item), item])));
+  return <For each={[...byKey().keys()]}>{(key) => <Show when={byKey().get(key)}>{(item) => props.children(item)}</Show>}</For>;
+}
+
+/** Groups by title (merged, each title is one group's, untitled ones too) and rows by entry: an entry given again keeps its row. */
 function Groups(props: { groups: readonly EntryGroup<SettingsEntry>[] }) {
-  const byTitle = createMemo(() => new Map(props.groups.map((group) => [group.title ?? UNTITLED, group])));
   return (
-    <For each={[...byTitle().keys()]}>
-      {(key) => {
-        const group = () => byTitle().get(key);
-        return (
-          <section class="settings-group">
-            <Show when={group()?.title}>
-              <h2 class="settings-group-title">{group()?.title}</h2>
-            </Show>
-            <div class="settings-rows">
-              <For each={group()?.entries ?? []}>{(entry) => entry.view()}</For>
-            </div>
-          </section>
-        );
-      }}
-    </For>
+    <Keyed each={props.groups} key={(group) => group.title ?? "\u0000"}>
+      {(group) => (
+        <section class="settings-group">
+          <Show when={group().title}>{(title) => <h2 class="settings-group-title">{title()}</h2>}</Show>
+          <div class="settings-rows">
+            <For each={group().entries}>{(entry) => entry.view()}</For>
+          </div>
+        </section>
+      )}
+    </Keyed>
   );
 }
 
@@ -133,14 +134,20 @@ export default defineWebPlugin({
     const searching = () => query().trim() !== "";
     const sections = () => slots.list(SettingsSections);
     const current = (): Section | undefined => sections().find((candidate) => candidate.id === section()) ?? sections()[0];
+    // Each group's entries in a memo of its own, for as long as the group is there: a search, or another group's change,
+    // asks it nothing, so its rows stay drawn (`SettingsGroup.entries`).
+    const asked = mapArray(
+      () => slots.list(SettingsGroups),
+      (group): Asked => ({ group, entries: createMemo(() => group.entries()) }),
+    );
     const groups = createMemo(() => {
       const shown = section() === undefined ? undefined : current();
-      return shown === undefined ? [] : groupsOf(slots, shown.id);
+      return shown === undefined ? [] : groupsOf(asked(), shown.id);
     });
     const results = createMemo(() =>
       searching()
         ? sections()
-            .map((found) => ({ section: found, groups: filterGroups(groupsOf(slots, found.id), query()) }))
+            .map((found) => ({ section: found, groups: filterGroups(groupsOf(asked(), found.id), query()) }))
             .filter((found) => found.groups.length > 0)
         : [],
     );
@@ -276,22 +283,17 @@ export default defineWebPlugin({
               }
             >
               <Show when={results().length > 0} fallback={<p class="settings-empty">No settings match “{query().trim()}”</p>}>
-                {/* By section, so a result stays drawn, and what is open in its rows, as the search or its groups change. */}
-                <For each={results().map((found) => found.section.id)}>
-                  {(id) => (
-                    <Show when={results().find((found) => found.section.id === id)}>
-                      {(found) => (
-                        <section class="settings-result">
-                          <button class="settings-result-title" onClick={() => open(found().section.id)} data-tip={`Open ${found().section.title}`}>
-                            <Contained slot={SettingsSections} item={found().section} component={found().section.icon} />
-                            {found().section.title}
-                          </button>
-                          <Groups groups={found().groups} />
-                        </section>
-                      )}
-                    </Show>
+                <Keyed each={results()} key={(found) => found.section.id}>
+                  {(found) => (
+                    <section class="settings-result">
+                      <button class="settings-result-title" onClick={() => open(found().section.id)} data-tip={`Open ${found().section.title}`}>
+                        <Contained slot={SettingsSections} item={found().section} component={found().section.icon} />
+                        {found().section.title}
+                      </button>
+                      <Groups groups={found().groups} />
+                    </section>
                   )}
-                </For>
+                </Keyed>
               </Show>
             </Show>
           </div>

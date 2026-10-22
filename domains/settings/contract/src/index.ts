@@ -74,9 +74,9 @@ export interface SettingsGroup {
   readonly section: string;
   readonly title?: string;
   /**
-   * Asked again whenever what it reads changes, or the section's groups do. An entry given again (the same object)
-   * keeps its row, and whatever is open in it, such as a menu; one made anew draws its row again. So a row that reads
-   * its own state is made once, and one drawn from a snapshot of data is made with it.
+   * Asked again when what it reads changes, and only then. An entry given again (the same object) keeps its row, and
+   * whatever is open in it, such as a menu; one made anew draws its row again. So a group that reads state to choose
+   * its rows makes each row once, and a row drawn from a snapshot of data is made with it.
    */
   readonly entries: Accessor<readonly SettingsEntry[]>;
 }
