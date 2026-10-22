@@ -10,3 +10,4 @@ export * from "./summary.ts";
 export * from "./speed.ts";
 export * from "./commands.ts";
 export { THREADS_CONTRACT } from "./version.ts";
+export * from "./delete.tsx";

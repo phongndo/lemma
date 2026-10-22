@@ -27,17 +27,31 @@ export const SettingsRoute = defineRoute("settings", {
   search: Schema.Record(Schema.String, Schema.String),
 });
 
+/**
+ * A section of the settings. Every section opens on one head, which the settings page draws while it is browsed (not
+ * in search results): its title is in the page's breadcrumb, then a line with its `description` and its `actions`.
+ * Its rows, whether its groups' or a `body`'s own, sit on one grid: the foundation's `.setting-row`, with a
+ * `.setting-lead` (a picture, an icon, a checkbox) before its `.setting-text`, starting at the column's edge; a row
+ * picked or opened under the pointer adds `.setting-row-pick`, whose fill reaches past that edge.
+ */
 export interface SettingsSection {
   readonly title: string;
   readonly icon: Component;
-  /** Shown above the section's groups while browsing it, not in search results. */
+  /** What the section is for, in a line at the start of its head. */
+  readonly description?: string;
+  /** Shown under its head, above its groups, while browsing it. */
   readonly intro?: Component;
-  /** Buttons beside the title. */
+  /** The section's own buttons (New profile, Add an integration), at the end of its head. */
   readonly actions?: Component;
   /** Shown while browsing a section with no entries. */
   readonly empty?: Component;
   /** Something needing attention, shown in the nav and on the sidebar's settings button. */
   readonly badge?: Accessor<string | undefined>;
+  /**
+   * What the badge is: `error` (the default), trouble to fix, which the settings button counts and its menu offers a
+   * row for; or `info`, news (an update out), drawn neutrally, and only a dot on the button.
+   */
+  readonly badgeTone?: "error" | "info";
   /** Shown instead of the section's groups while browsing it, full width; its groups then only answer searches. */
   readonly body?: Component;
 }

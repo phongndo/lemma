@@ -178,7 +178,9 @@ export default defineWebPlugin({
       order: 95,
       title: "About",
       icon: QuestionIcon,
+      description: "Which Lemma this is, and whether a newer release is out.",
       badge: () => (status()?.newer ? "Update" : undefined),
+      badgeTone: "info",
     });
 
     const row = (text: string, title: string, value: () => string | undefined, description?: () => string | undefined) => ({

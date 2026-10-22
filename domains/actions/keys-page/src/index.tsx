@@ -353,6 +353,7 @@ export default defineWebPlugin({
       order: 15,
       title: "Keyboard",
       icon: CommandIcon,
+      description: "The keys for each command; a command's keys can be changed, or more added.",
       actions: () => (
         <Show when={Object.keys(overrides()).length > 0}>
           <button class="button small" onClick={plugin.action("reset keys", () => save({}))}>

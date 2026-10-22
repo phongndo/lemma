@@ -53,7 +53,10 @@ export interface MenuAction<Subject, Control = undefined> {
   readonly icon?: Component;
   /** Shown in red: it destroys something. */
   readonly danger?: boolean;
-  /** When it returns text, the first pick shows that and only a second pick runs the action. */
+  /**
+   * When it returns text, the first pick shows that, drawn as a danger button, and only a second pick runs the action.
+   * Deleting one thing says `CONFIRM_DELETE` (`@lemma/look`), as everywhere one thing is deleted in place.
+   */
   readonly confirm?: (subject: Subject) => string | undefined;
   readonly when?: (subject: Subject) => boolean;
   /** Starts a group: a separator comes before it. */

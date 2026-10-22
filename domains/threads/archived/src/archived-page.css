@@ -59,16 +59,6 @@
   white-space: nowrap;
 }
 
-.archived-grouping {
-  display: flex;
-  gap: 1px;
-}
-
-.archived-toolbar .archived-grouping [aria-pressed="true"] {
-  background: var(--bg-active);
-  color: var(--text);
-}
-
 /* While threads are selected, the search's row holds them too, beside it: how many (and how many it hides), and what to
    do with them, tinted as a mode. */
 .archived-selection {
@@ -146,9 +136,14 @@
   background: currentColor;
 }
 
-/* A row's and a heading's checkbox keep their place but show only when wanted: under the pointer, with the keyboard
-   on them, checked, or while anything is selected. */
-.archived-list .archived-check {
+/* A row's checkbox is its lead, quiet until the pointer or the keyboard is on the row, or anything is selected. */
+.archived-list:not(.selecting) .archived-row:not(:hover, :has(:focus-visible)) .archived-box {
+  border-color: var(--border-strong);
+}
+
+/* A heading's, which selects its day, keeps its place but shows only when wanted: under the pointer, with the
+   keyboard on it, or while anything is selected. */
+.archived-group-title .archived-check {
   opacity: 0;
 }
 
@@ -157,8 +152,7 @@
   height: 24px;
 }
 
-.archived-list.selecting .archived-check,
-.archived-row:is(:hover, .selected, :has(:focus-visible)) .archived-check,
+.archived-list.selecting .archived-group-title .archived-check,
 .archived-group-title:is(:hover, :has(:focus-visible)) .archived-check {
   opacity: 1;
 }
@@ -175,10 +169,11 @@
   gap: 2px;
 }
 
+/* Its checkbox in the rows' lead column, its words over their titles. */
 .archived-group-title {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 16px;
   margin: 0 0 2px;
   color: var(--text-3);
   font-size: calc(12.5px * var(--text-scale));
@@ -191,34 +186,14 @@
   gap: 2px;
 }
 
-/* No lines between rows: a soft fill under the pointer, and the accent's when selected. */
-.archived-row {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  min-height: 42px;
-  padding: 6px 10px 6px 0;
-  border-radius: var(--radius-sm);
-}
-
+/* Rows on the settings' row grid (`.setting-row-pick`): no lines between them, a soft fill under the pointer, and the
+   accent's when selected. */
 .archived-row {
   scroll-margin: calc(var(--head-height) + 64px) 0 16px;
 }
 
-.archived-row:is(:hover, :has(:focus-visible)) {
-  background: var(--bg-hover);
-}
-
 .archived-row.selected {
   background: var(--accent-soft);
-}
-
-.archived-text {
-  flex: 1;
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
 }
 
 .archived-line {
@@ -304,9 +279,6 @@
 
 /* At a row's end: when it was last used, and under the pointer or the keyboard, what to do with it. */
 .archived-side {
-  flex: none;
-  display: flex;
-  align-items: center;
   justify-content: flex-end;
   min-width: 64px;
 }
@@ -367,7 +339,7 @@
 
 /* Without a pointer to hover, they always show. */
 @media (hover: none) {
-  .archived-list .archived-check {
+  .archived-group-title .archived-check {
     opacity: 1;
   }
 
@@ -380,46 +352,11 @@
   }
 }
 
-/* Delete is a quiet icon until armed, when it says what a second click does. */
-.archived-delete {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 5px;
-  min-width: 26px;
-  height: 26px;
-  padding: 0 6px;
-  border: 0;
-  border-radius: var(--radius-sm);
-  background: transparent;
-  color: var(--text-3);
-  font-size: calc(12px * var(--text-scale));
-  font-weight: 500;
-  white-space: nowrap;
-}
-
-.archived-delete .icon {
-  width: 14px;
-  height: 14px;
-}
-
-.archived-delete:hover:not([aria-disabled="true"]),
-.archived-delete.armed {
-  background: var(--err-soft);
-  color: var(--err);
-}
-
-.archived-delete[aria-disabled="true"] {
-  opacity: 0.4;
-  cursor: default;
-}
-
 .archived-none {
   display: flex;
   flex-direction: column;
   align-items: flex-start;
   gap: 10px;
-  padding-left: 32px;
 }
 
 .archived-empty {
@@ -446,10 +383,6 @@
 
 .archived-empty p {
   margin: 0;
-}
-
-.archived-delete-running {
-  color: var(--warn);
 }
 
 @media (max-width: 820px) {

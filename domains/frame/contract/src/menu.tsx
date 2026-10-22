@@ -5,8 +5,10 @@ import type { MenuAction } from "./index.ts";
 
 /**
  * A menu's items for one subject, as `menu-item` buttons grouped by `section`.
- * An item with a `confirm` text arms on the first pick, showing the text, and
- * runs on the second. Draw it inside a popover; `close` closes it.
+ * An item with a `confirm` text arms on the first pick, showing the text
+ * (`data-armed`, which the foundation draws as a danger button, as
+ * `ConfirmDelete` in `@lemma/look` asks), and runs on the second. Draw it inside
+ * a popover; `close` closes it.
  */
 export function ActionMenu<Subject, Control>(props: {
   readonly subject: Subject;
@@ -29,6 +31,7 @@ export function ActionMenu<Subject, Control>(props: {
             <button
               class="menu-item"
               classList={{ "menu-danger": action.danger === true }}
+              data-armed={armed() === action ? "" : undefined}
               role="menuitem"
               // A native listener, not Solid's delegated one: a contract loads outside a page too (tests, the host), where delegation would reach for `window`.
               on:click={() => {

@@ -7,6 +7,7 @@ import { dragEdge } from "@lemma/web/drag";
 import {
   sessionTitle,
   ComposerRegion,
+  DeleteThreadsDialog,
   ComposerTakeovers,
   Pane,
   ThreadActions,
@@ -18,14 +19,14 @@ import {
   Views,
 } from "@lemma/threads";
 import { Actions, shownKeysOf } from "@lemma/actions";
-import { inDesktop, Layout } from "@lemma/frame";
+import { inDesktop, Layers, Layout } from "@lemma/frame";
 import { NewThreadRoute, ThreadRoute } from "@lemma/sessions";
 import { Client, Notify, Pages, Router, Slots, WebPlugins, defineWebPlugin, Contained, Each, First } from "@lemma/web";
 import { Workspace } from "@lemma/workspace/web";
 import type { Action } from "@lemma/actions";
 import type { SlotItem } from "@lemma/web";
 import type { ThreadAction } from "@lemma/threads";
-import { ArchiveIcon, CopyIcon, LogIcon, PenSquareIcon, PencilIcon, PinIcon, SidebarIcon, Spinner, StopIcon, TrashIcon } from "@lemma/look";
+import { ArchiveIcon, CONFIRM_DELETE, CopyIcon, LogIcon, PenSquareIcon, PencilIcon, PinIcon, SidebarIcon, Spinner, StopIcon, TrashIcon } from "@lemma/look";
 import { copyAndTell } from "@lemma/web/clipboard";
 import { CostRow } from "./card.tsx";
 import { createInspector } from "./inspector.tsx";
@@ -165,18 +166,26 @@ export default defineWebPlugin({
         },
       },
       {
+        // With no row to ask on in place, it asks in a dialog.
         id: "thread.delete",
         order: 17,
-        title: "Delete thread",
+        title: "Delete thread…",
         category: "Thread",
         icon: TrashIcon,
         when: () => threads.active() !== undefined,
-        run: () => {
-          const session = threads.active();
-          if (session !== undefined) void threads.remove(session.id);
-        },
+        run: () => setDeleting(threads.activeId()),
       },
     );
+    /** The thread the palette's Delete thread asks about. */
+    const [deleting, setDeleting] = createSignal<string>();
+    const asked = () => threads.list().find((session) => session.id === deleting());
+    slots.add(Layers, {
+      id: "thread.delete",
+      order: 35,
+      component: () => (
+        <Show when={asked()}>{(session) => <DeleteThreadsDialog threads={threads} sessions={[session()]} close={() => setDeleting(undefined)} />}</Show>
+      ),
+    });
 
     // A thread's menu (its header's ⋯, a right-click on its row) goes through the slot other plugins add theirs to.
     const menuItem = (id: string, order: number, action: ThreadAction) => slots.add(ThreadActions, { id, order, ...action });
@@ -196,7 +205,7 @@ export default defineWebPlugin({
       icon: TrashIcon,
       danger: true,
       section: true,
-      confirm: () => "Delete for good?",
+      confirm: () => CONFIRM_DELETE,
       run: (session) => void threads.remove(session.id),
     });
     // The inspection pane opens and closes from the keyboard and the header's button, at the tab it last showed; with

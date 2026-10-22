@@ -74,28 +74,9 @@
   background: var(--ok);
 }
 
-/* Settings › Profiles: a row each, as Providers lists its providers. */
-.profiles-row {
-  display: flex;
-  align-items: center;
-  column-gap: 12px;
-  min-height: 52px;
-  padding: 6px 0;
-}
-
-.profiles-info {
-  flex: 1;
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-}
-
+/* Settings › Profiles: a row each, on the settings' row grid (`.setting-row`). */
 .profiles-name {
   overflow: hidden;
-  font-size: calc(13.5px * var(--text-scale));
-  font-weight: 500;
-  color: var(--text);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -108,18 +89,6 @@
   padding: 0 7px;
   font-size: calc(13.5px * var(--text-scale));
   font-weight: 500;
-}
-
-.profiles-desc {
-  overflow: hidden;
-  font-size: calc(12px * var(--text-scale));
-  color: var(--text-3);
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.profiles-action {
-  flex: none;
 }
 
 .profiles-dialog {
@@ -140,10 +109,11 @@
   color: var(--err);
 }
 
-/* A profile's avatar in its settings row, which opens its picture's choices. */
+/* A profile's avatar in its settings row, which opens its picture's choices: its ring of hover outside the row's lead. */
 .profiles-picture {
   display: inline-grid;
   place-items: center;
+  margin: -2px;
   padding: 2px;
   border: 0;
   border-radius: 50%;

@@ -21,18 +21,20 @@ const addable = (kind: Kind) => kind.catalog !== undefined || kind.add !== undef
 /** A heading mid-sentence: its first letter lower, unless the word is an acronym (`MCP servers`). */
 const quiet = (title: string) => (/^[A-Z]{2}/.test(title) ? title : title.charAt(0).toLowerCase() + title.slice(1));
 
-/** An item's row: its icon, name, version, status in words (a dot only for trouble), and its switch. */
+/** An item's row, on the settings' row grid: its icon, name, version, status in words (a dot only for trouble), and its switch. */
 function Row(props: { kind: Kind; item: IntegrationItem; selected: boolean; open: () => void }) {
   return (
-    <div class="integration-row" classList={{ selected: props.selected, off: props.item.status.tone === "off" }}>
+    <div class="setting-row setting-row-pick integration-row" classList={{ selected: props.selected, off: props.item.status.tone === "off" }}>
       <button type="button" class="integration-row-main" aria-current={props.selected ? "true" : undefined} onClick={() => props.open()}>
-        <Mark kind={props.kind} logo={props.item.logo} icon={props.item.icon} iconDark={props.item.iconDark} />
-        <span class="integration-row-text">
-          <span class="integration-row-title">
+        <span class="setting-lead">
+          <Mark kind={props.kind} logo={props.item.logo} icon={props.item.icon} iconDark={props.item.iconDark} />
+        </span>
+        <span class="setting-text">
+          <span class="setting-title integration-row-title">
             {props.item.title}
             <Show when={props.item.version}>{(version) => <code class="integration-version">v{version()}</code>}</Show>
           </span>
-          <span class="integration-row-status" data-tone={props.item.status.tone}>
+          <span class="setting-desc integration-row-status" data-tone={props.item.status.tone}>
             <Show when={dotted(props.item.status.tone)}>
               <span class="integration-dot" aria-hidden="true" />
             </Show>
@@ -47,19 +49,12 @@ function Row(props: { kind: Kind; item: IntegrationItem; selected: boolean; open
   );
 }
 
-/** What shows beside the list with nothing open: what the page is, and adding one. */
-function Overview(props: { add: () => void }) {
+/** What shows beside the list with nothing open: a line saying what to do; the section's head has Add. */
+function Overview(props: { empty: boolean }) {
   return (
-    <div class="integrations-overview">
-      <PlugIcon />
-      <h2>Integrations</h2>
-      <div class="integrations-overview-kinds">
-        <button type="button" class="button" onClick={() => props.add()}>
-          <PlusIcon />
-          Add an integration
-        </button>
-      </div>
-    </div>
+    <p class="settings-empty">
+      {props.empty ? "None yet: add one to give agents more to work with." : "Pick one to see its state, how it is reached, and what it offers."}
+    </p>
   );
 }
 
@@ -309,19 +304,11 @@ function IntegrationsPage(props: { slots: SlotsService; settings: SettingsServic
     const id = params()["item"];
     return kind === undefined || id === undefined ? undefined : kind.items().find((item) => item.id === id);
   };
-  const add = (kind: string) => props.settings.setParams({ add: kind });
   return (
     <div class="integrations">
       <aside class="integrations-list" aria-label="Integrations">
         <div class="integrations-list-head">
-          <SearchField value={query()} onInput={setQuery} placeholder="Filter" label="Filter integrations">
-            {/* With nothing open, the overview beside the list has the add button. */}
-            <Show when={kinds().some(addable) && openItem() !== undefined}>
-              <button type="button" class="icon-button" aria-label="Add an integration" data-tip="Add an integration" onClick={() => add(ALL)}>
-                <PlusIcon />
-              </button>
-            </Show>
-          </SearchField>
+          <SearchField value={query()} onInput={setQuery} placeholder="Filter" label="Filter integrations" />
         </div>
         <div class="integrations-groups">
           <For each={kinds()}>
@@ -362,7 +349,10 @@ function IntegrationsPage(props: { slots: SlotsService; settings: SettingsServic
         </div>
       </aside>
       <main class="integrations-detail">
-        <Show when={openKind() !== undefined && openItem() !== undefined} fallback={<Overview add={() => add(ALL)} />}>
+        <Show
+          when={openKind() !== undefined && openItem() !== undefined}
+          fallback={<Overview empty={kinds().every((kind) => kind.loaded() && kind.items().length === 0)} />}
+        >
           <Show when={`${openKind()!.id}:${openItem()!.id}`} keyed>
             {(_key: string) => <Contained slot={IntegrationKinds} item={openKind()!} component={openKind()!.detail} props={{ id: openItem()!.id, close }} />}
           </Show>
@@ -399,6 +389,14 @@ export default defineWebPlugin({
       order: 30,
       title: "Integrations",
       icon: PlugIcon,
+      description: "What Lemma works with besides its own models, such as the MCP servers that give agents tools.",
+      actions: () => (
+        <Show when={slots.list(IntegrationKinds).some(addable)}>
+          <button type="button" class="button small" onClick={() => settings.setParams({ add: ALL })}>
+            <PlusIcon /> Add an integration
+          </button>
+        </Show>
+      ),
       badge: () => {
         const count = troubled(items());
         return count === 0 ? undefined : String(count);

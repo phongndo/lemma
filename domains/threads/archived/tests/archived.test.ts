@@ -1,6 +1,17 @@
 import { describe, expect, it } from "vitest";
 import type { SessionInfo } from "@lemma/sessions";
-import { archivedOf, dayLabel, extendSelection, filterArchived, groupBy, rangeOf, selectionOf, threadCount, withSelection } from "../src/archived.ts";
+import {
+  archivedOf,
+  dayLabel,
+  extendSelection,
+  filterArchived,
+  groupBy,
+  notArchived,
+  rangeOf,
+  selectionOf,
+  threadCount,
+  withSelection,
+} from "../src/archived.ts";
 
 const session = (id: string, cwd: string, updatedAt: number, archived = true, title?: string): SessionInfo => ({
   id,
@@ -105,6 +116,12 @@ describe("selection", () => {
     const order = ["a", "b", "c", "d"];
     expect([...extendSelection(new Set(["a", "c", "d"]), order, "b", "d")].sort()).toEqual(["a"]);
     expect([...extendSelection(new Set(["a"]), order, undefined, "c")].sort()).toEqual(["a", "c"]);
+  });
+
+  it("finds the selected threads unarchived or deleted since, to drop", () => {
+    const sessions = [session("a", "/p", 10), session("b", "/p", 20, false), session("c", "/p", 30)];
+    expect(notArchived(new Set(["a", "b", "gone"]), sessions)).toEqual(["b", "gone"]);
+    expect(notArchived(new Set(["a", "c"]), sessions)).toEqual([]);
   });
 
   it("says whether all, some, or none of a list is selected", () => {
