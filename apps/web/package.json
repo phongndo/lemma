@@ -25,6 +25,7 @@
     "@lemma/context-compaction": "workspace:*",
     "@lemma/contracts": "workspace:*",
     "@lemma/core": "workspace:*",
+    "@lemma/credentials": "workspace:*",
     "@lemma/devtools": "workspace:*",
     "@lemma/devtools-dock": "workspace:*",
     "@lemma/devtools-trace": "workspace:*",

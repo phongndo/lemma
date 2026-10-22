@@ -1,17 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { ProviderInfo } from "@lemma/llm";
 import { usesPlan } from "../src/llm.ts";
-import {
-  browserPlace,
-  customProviderProblem,
-  customProviderSpec,
-  describeProvider,
-  logoProblem,
-  logoSource,
-  providerGroups,
-  signInReturn,
-  timeLeft,
-} from "../src/web/providers.ts";
+import { customProviderProblem, customProviderSpec, describeProvider, providerGroups, signInReturn, timeLeft } from "../src/web/providers.ts";
 
 const key = { type: "api_key", name: "API key", interactive: true } as const;
 const oauth = { type: "oauth", name: "Sign in", interactive: true } as const;
@@ -77,18 +67,6 @@ describe("customProviderSpec", () => {
   });
 });
 
-describe("custom logos", () => {
-  it("takes SVG files and refuses anything else", () => {
-    expect(logoProblem(`<?xml version="1.0"?>\n<!-- made by hand -->\n<svg viewBox="0 0 24 24"><path d="M0 0h24v24H0z"/></svg>\n`)).toBeUndefined();
-    expect(logoProblem("<html><body>no</body></html>")).toMatch(/SVG/);
-    expect(logoProblem(`<svg>${"x".repeat(40_000)}</svg>`)).toMatch(/KB/);
-  });
-
-  it("draws one as an image", () => {
-    expect(logoSource(` <svg viewBox="0 0 1 1"/> `)).toBe(`data:image/svg+xml;charset=utf-8,${encodeURIComponent(`<svg viewBox="0 0 1 1"/>`)}`);
-  });
-});
-
 describe("a provider's connection, as the page says it", () => {
   const signedIn = (fields: Partial<ProviderInfo>): ProviderInfo => ({
     ...provider("openai", "OpenAI", true, [key, { ...oauth, subscription: true }]),
@@ -107,11 +85,7 @@ describe("a provider's connection, as the page says it", () => {
 });
 
 describe("a sign-in from this page", () => {
-  it("says whether the browser is on the host's machine, and where to come back to", () => {
-    expect(browserPlace("localhost")).toBe("here");
-    expect(browserPlace("127.0.0.1")).toBe("here");
-    expect(browserPlace("[::1]")).toBe("here");
-    expect(browserPlace("devbox.local")).toBe("elsewhere");
+  it("says where to come back to", () => {
     // A web tab opened from the page has no host token: only the desktop app is offered, the one the person came from.
     expect(signInReturn(undefined)).toBeUndefined();
     expect(signInReturn({ deepLinkScheme: "lemma" })).toBe("lemma://settings/providers");

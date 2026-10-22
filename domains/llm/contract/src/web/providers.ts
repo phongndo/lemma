@@ -218,33 +218,6 @@ export const customProviderProblem = (draft: CustomProviderDraft): string | unde
   return undefined;
 };
 
-/** The largest logo file a custom provider takes; logos live in config.jsonc. */
-const MAX_LOGO_BYTES = 32 * 1024;
-
-/** What is wrong with an SVG file's text as a logo, if anything. */
-export const logoProblem = (svg: string): string | undefined => {
-  if (new Blob([svg]).size > MAX_LOGO_BYTES) return `Logos are at most ${MAX_LOGO_BYTES / 1024} KB`;
-  const body = svg
-    .trim()
-    .replace(/^<\?xml[\s\S]*?\?>/, "")
-    .replace(/<!--[\s\S]*?-->/g, "")
-    .trim();
-  return /^<svg[\s>]/i.test(body) && /<\/svg>$/i.test(body) ? undefined : "That is not an SVG file";
-};
-
-/**
- * A logo as an image source. Drawn with `<img>`, never inline, so scripts and
- * handlers in the file do not run and its ids cannot clash with the page's.
- */
-export const logoSource = (svg: string): string => `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg.trim())}`;
-
-/**
- * Where the person's browser is, for a login (`LoginOptions.browser`): on the host's machine when this page came from
- * it (`localhost`), elsewhere otherwise. A page reached through an SSH port forward says `here` too, so `here` makes no
- * choice for the person; only `elsewhere` does.
- */
-export const browserPlace = (hostname: string): "here" | "elsewhere" => (/^(localhost|127(\.\d+){3}|\[::1\])$/.test(hostname) ? "here" : "elsewhere");
-
 /**
  * Where a sign-in's page in the browser offers to go back to: the desktop app's Providers page, which opens in its
  * window, at its bridge's scheme (`lemma://`, a checkout's `lemma-dev://`), so it is the app the person came from. A

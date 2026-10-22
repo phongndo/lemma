@@ -312,6 +312,9 @@ importers:
       '@lemma/core':
         specifier: workspace:*
         version: link:../../packages/core
+      '@lemma/credentials':
+        specifier: workspace:*
+        version: link:../../domains/credentials/contract
       '@lemma/devtools':
         specifier: workspace:*
         version: link:../../domains/devtools/contract
@@ -1246,12 +1249,21 @@ importers:
 
   domains/credentials/contract:
     dependencies:
+      '@lemma/contracts':
+        specifier: workspace:*
+        version: link:../../../packages/contracts
       '@lemma/core':
         specifier: workspace:*
         version: link:../../../packages/core
+      '@lemma/web':
+        specifier: workspace:*
+        version: link:../../../packages/web
       effect:
         specifier: 4.0.5
         version: 4.0.5
+      solid-js:
+        specifier: 1.9.17
+        version: 1.9.17
     devDependencies:
       '@types/node':
         specifier: 24.19.2
@@ -1799,6 +1811,9 @@ importers:
       '@lemma/contracts':
         specifier: workspace:*
         version: link:../../../packages/contracts
+      '@lemma/credentials':
+        specifier: workspace:*
+        version: link:../../credentials/contract
       '@lemma/llm':
         specifier: workspace:*
         version: link:../contract
@@ -1957,6 +1972,9 @@ importers:
       '@lemma/contracts':
         specifier: workspace:*
         version: link:../../../packages/contracts
+      '@lemma/credentials':
+        specifier: workspace:*
+        version: link:../../credentials/contract
       '@lemma/frame':
         specifier: workspace:*
         version: link:../../frame/contract
@@ -2209,6 +2227,9 @@ importers:
       '@lemma/core':
         specifier: workspace:*
         version: link:../../../packages/core
+      '@lemma/credentials':
+        specifier: workspace:*
+        version: link:../../credentials/contract
       '@lemma/integrations':
         specifier: workspace:*
         version: link:../../integrations/contract

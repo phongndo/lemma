@@ -222,12 +222,14 @@
   color: var(--text-3);
 }
 
-.connect-form {
+.connect-form,
+.connect-paste form {
   display: flex;
   gap: 8px;
 }
 
-.connect-form .field {
+.connect-form .field,
+.connect-paste form .field {
   flex: 1;
   min-width: 0;
 }
@@ -317,13 +319,20 @@
   gap: 10px;
 }
 
+/* An SVG file dragged over the button that takes one. */
+.custom-provider-logo .button[data-over] {
+  background: var(--accent-soft);
+  color: var(--accent-text);
+}
+
 .custom-provider-problem {
   flex: 1;
   font-size: calc(12px * var(--text-scale));
   color: var(--text-3);
 }
 
-.connect-form > .button {
+.connect-form > .button,
+.connect-paste form > .button {
   height: auto;
 }
 

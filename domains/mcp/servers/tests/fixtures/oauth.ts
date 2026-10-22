@@ -30,13 +30,17 @@ export interface OAuthFixture {
   failRefreshes: boolean;
   /** The MCP endpoint answers `500` with the address it was asked at while this is set. */
   broken: boolean;
+  /** The MCP endpoint refuses every request with a `403` that asks for no scope (no `WWW-Authenticate`) while this is set. */
+  forbidden: boolean;
+  /** The authorization server forgets the clients it registered: a refresh with one is refused `invalid_client`. */
+  readonly forgetClients: () => void;
   readonly counts: { registrations: number; refreshes: number; refusals: number };
   /** The scope each authorization asked for, in order. */
   readonly scopes: (string | null)[];
   /** Settles once the MCP endpoint has refused `count` requests for want of a token it accepts. */
   readonly refusals: (count: number) => Promise<void>;
-  /** Holds every refresh at the token endpoint until the returned function lets them go. */
-  readonly holdRefreshes: () => () => void;
+  /** Holds every refresh at the token endpoint until `release`; `arrived` settles once one is held. */
+  readonly holdRefreshes: () => { readonly release: () => void; readonly arrived: Promise<void> };
   readonly close: () => Promise<void>;
 }
 
@@ -86,8 +90,10 @@ export async function startOAuthServer(options: OAuthOptions = {}): Promise<OAut
     refresh.set(`refresh-${next}`, { client, scope });
     return { access_token: `token-${next}`, token_type: "Bearer", expires_in: 3600, refresh_token: `refresh-${next}`, scope };
   };
+  const clients = new Set<string>();
   let base = "";
   let held: Promise<void> = Promise.resolve();
+  let holding: (() => void) | undefined;
   const waiters: { readonly count: number; readonly resolve: () => void }[] = [];
   const refuse = () => {
     counts.refusals++;
@@ -105,6 +111,7 @@ export async function startOAuthServer(options: OAuthOptions = {}): Promise<OAut
       response.writeHead(500, { "content-type": "text/plain" });
       return response.end(`refused ${request.url}`);
     }
+    if (url.pathname === "/mcp" && fixture.forbidden) return json(response, 403, { error: "forbidden" });
     if (options.open === true && url.pathname !== "/mcp") return json(response, 404, { error: "not_found" });
     if (
       url.pathname === (options.metadataPath ?? "") ||
@@ -124,6 +131,7 @@ export async function startOAuthServer(options: OAuthOptions = {}): Promise<OAut
       });
     if (url.pathname === "/register" && options.client === undefined) {
       counts.registrations++;
+      clients.add(`client-${counts.registrations}`);
       return json(response, 201, { ...JSON.parse(body.toString("utf8")), client_id: `client-${counts.registrations}` });
     }
     if (url.pathname === "/authorize") {
@@ -145,9 +153,10 @@ export async function startOAuthServer(options: OAuthOptions = {}): Promise<OAut
     if (url.pathname === "/token") {
       const form = new URLSearchParams(body.toString("utf8"));
       const client = form.get("client_id") ?? "";
-      if (options.client !== undefined && (client !== options.client.id || form.get("client_secret") !== options.client.secret))
+      if (options.client === undefined ? !clients.has(client) : client !== options.client.id || form.get("client_secret") !== options.client.secret)
         return json(response, 401, { error: "invalid_client" });
       if (form.get("grant_type") === "refresh_token") {
+        holding?.();
         await held;
         if (fixture.failRefreshes) return json(response, 503, { error: "temporarily_unavailable" });
         const granted = refresh.get(form.get("refresh_token") ?? "");
@@ -204,15 +213,22 @@ export async function startOAuthServer(options: OAuthOptions = {}): Promise<OAut
     },
     failRefreshes: false,
     broken: false,
+    forbidden: false,
+    forgetClients: () => clients.clear(),
     counts,
     scopes,
     refusals: (count) => (counts.refusals >= count ? Promise.resolve() : new Promise<void>((resolve) => waiters.push({ count, resolve }))),
     holdRefreshes: () => {
       let release!: () => void;
       held = new Promise<void>((resolve) => (release = resolve));
-      return () => {
-        held = Promise.resolve();
-        release();
+      const arrived = new Promise<void>((resolve) => (holding = resolve));
+      return {
+        arrived,
+        release: () => {
+          held = Promise.resolve();
+          holding = undefined;
+          release();
+        },
       };
     },
     close: async () => {

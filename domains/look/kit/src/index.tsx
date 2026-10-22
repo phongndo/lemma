@@ -5,6 +5,7 @@ import { Dialog } from "./components/dialog.tsx";
 import { PlainFileIcon } from "./components/file-icon.tsx";
 import { DefaultIcon } from "./components/icons.tsx";
 import { Markdown } from "./components/markdown.tsx";
+import { Picture, SvgDrop } from "./components/picture.tsx";
 import { Popover } from "./components/popover.tsx";
 import { ProviderLogo } from "./components/provider-logo.tsx";
 import { Segmented, SettingRow } from "./components/setting-row.tsx";
@@ -19,10 +20,12 @@ import {
   FileIconPart,
   IconPart,
   MarkdownPart,
+  PicturePart,
   PopoverPart,
+  SearchFieldPart,
   SegmentedPart,
   SettingRowPart,
-  SearchFieldPart,
+  SvgDropPart,
   TogglePart,
 } from "@lemma/look";
 import { Slots, defineWebPlugin } from "@lemma/web";
@@ -53,6 +56,8 @@ export default defineWebPlugin({
     add(SegmentedPart, Segmented);
     add(ConfigFormPart, ConfigForm);
     add(ProviderLogoPart, ProviderLogo);
+    add(PicturePart, Picture);
+    add(SvgDropPart, SvgDrop);
     add(IconPart, DefaultIcon);
     add(FileIconPart, PlainFileIcon);
     add(AvatarPart, IdenticonAvatar);

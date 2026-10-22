@@ -1,17 +1,8 @@
 import { For, Show, createSignal } from "solid-js";
-import { CUSTOM_APIS, customProviderProblem, logoProblem, logoSource } from "@lemma/llm/web";
+import { CUSTOM_APIS, customProviderProblem } from "@lemma/llm/web";
 import type { CustomProviderDraft } from "@lemma/llm/web";
-import { Dialog, PlusIcon, Spinner } from "@lemma/look";
+import { Dialog, PlusIcon, Spinner, SvgDrop, svgSource } from "@lemma/look";
 import { usePlugin } from "@lemma/web";
-
-/** Asks for an SVG file and hands over its text. */
-export const pickSvg = (use: (svg: string) => void) => {
-  const input = document.createElement("input");
-  input.type = "file";
-  input.accept = ".svg,image/svg+xml";
-  input.onchange = () => void input.files?.[0]?.text().then(use);
-  input.click();
-};
 
 /** Adding a provider of the user's: its endpoint, wire API, models, an optional key, and a logo. Closes once it is added (and connected, with a key). */
 export function CustomProviderDialog(props: {
@@ -26,12 +17,6 @@ export function CustomProviderDialog(props: {
   const [key, setKey] = createSignal("");
   const [logo, setLogo] = createSignal<string>();
   const [logoError, setLogoError] = createSignal<string>();
-  const chooseLogo = () =>
-    pickSvg((svg) => {
-      const problem = logoProblem(svg);
-      setLogoError(problem);
-      if (problem === undefined) setLogo(svg);
-    });
   const draft = (): CustomProviderDraft => ({ name: name(), baseUrl: baseUrl(), api: api(), models: modelIds(), hasKey: key() !== "" });
   const problem = () => customProviderProblem(draft());
   const touched = () => name() !== "" || baseUrl() !== "" || modelIds() !== "";
@@ -50,7 +35,7 @@ export function CustomProviderDialog(props: {
         <span class="connect-title">
           <span class="custom-provider-mark" aria-hidden="true">
             <Show when={logo()} fallback={<PlusIcon />}>
-              {(svg) => <img class="provider-logo" src={logoSource(svg())} alt="" />}
+              {(svg) => <img class="provider-logo" src={svgSource(svg())} alt="" />}
             </Show>
           </span>
           <span>
@@ -127,9 +112,9 @@ export function CustomProviderDialog(props: {
         <div class="custom-provider-field">
           <span>Logo</span>
           <span class="custom-provider-logo">
-            <button type="button" class="button small" onClick={chooseLogo}>
+            <SvgDrop class="button small" tip="Choose an SVG, or drop one here" onSvg={setLogo} onProblem={setLogoError}>
               {logo() === undefined ? "Choose SVG…" : "Change…"}
-            </button>
+            </SvgDrop>
             <Show when={logo() !== undefined}>
               <button type="button" class="link-button" onClick={() => setLogo(undefined)}>
                 Remove

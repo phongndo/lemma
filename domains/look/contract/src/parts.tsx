@@ -240,6 +240,36 @@ export interface AvatarProps {
  */
 export const AvatarPart = definePart<AvatarProps>("avatar");
 
+export interface PictureProps {
+  readonly src: string | undefined;
+  /** The image for a dark theme, where it has one of its own. */
+  readonly dark?: string | undefined;
+  /** Drawn while there is no image, or it fails to load (an address that is gone, an image that is not one). */
+  readonly fallback: JSX.Element;
+}
+
+/**
+ * An image from an address a plugin or person gives (an MCP server's icon): fetched once in view, without telling its
+ * host the page it is on, styled by the plugin drawing it through its own class.
+ */
+export const PicturePart = definePart<PictureProps>("picture");
+
+export interface SvgDropProps {
+  readonly class?: string;
+  /** Its accessible name, when what it holds gives none. */
+  readonly label?: string;
+  readonly tip?: string;
+  /** The file's text, read and checked (`readSvg`). */
+  readonly onSvg: (svg: string) => void;
+  /** What is wrong with a file that is not one to take; nothing once one is. */
+  readonly onProblem: (problem: string | undefined) => void;
+  /** What it holds: the image, or words. */
+  readonly children: JSX.Element;
+}
+
+/** A button that takes an SVG file of the person's own, picked with a click or dropped on it; `data-over` while a file is dragged over it. */
+export const SvgDropPart = definePart<SvgDropProps>("svg-drop");
+
 export const Markdown = partView(MarkdownPart);
 
 export const Dialog = partView(DialogPart);
@@ -253,6 +283,10 @@ export const SearchField = partView(SearchFieldPart);
 export const CopyButton = partView(CopyButtonPart);
 
 export const SettingRow = partView(SettingRowPart);
+
+export const Picture = partView(PicturePart);
+
+export const SvgDrop = partView(SvgDropPart);
 
 /** Typed by its options' values; the part itself takes strings. */
 export const Segmented = partView(SegmentedPart) as unknown as <T extends string>(props: {

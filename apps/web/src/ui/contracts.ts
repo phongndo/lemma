@@ -1,5 +1,6 @@
 import * as actions from "@lemma/actions";
 import * as commands from "@lemma/commands/web";
+import * as credentials from "@lemma/credentials/web";
 import * as devtools from "@lemma/devtools/web";
 import * as frame from "@lemma/frame";
 import * as integrations from "@lemma/integrations";
@@ -36,6 +37,7 @@ export const contractModules = {
   "@lemma/llm/web": llm,
   "@lemma/workspace/web": workspace,
   "@lemma/commands/web": commands,
+  "@lemma/credentials/web": credentials,
   "@lemma/sessions": { NewThreadRoute, ThreadRoute, latestDetails, customEvents, lastPromptText, modelEntries },
 };
 

@@ -16,6 +16,7 @@
     "@lemma/agent": "workspace:*",
     "@lemma/contracts": "workspace:*",
     "@lemma/core": "workspace:*",
+    "@lemma/credentials": "workspace:*",
     "@lemma/integrations": "workspace:*",
     "@lemma/llm": "workspace:*",
     "@lemma/look": "workspace:*",

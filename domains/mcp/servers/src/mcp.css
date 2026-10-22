@@ -130,14 +130,20 @@
 
 .mcp-paste > p {
   margin: 6px 0;
+  color: var(--text-3);
+  font-size: calc(12px * var(--text-scale));
 }
 
-.mcp-paste-form {
+.mcp-paste > p[role="alert"] {
+  color: var(--err);
+}
+
+.mcp-paste form {
   display: flex;
   gap: 8px;
 }
 
-.mcp-paste-form .field {
+.mcp-paste form .field {
   flex: 1;
   min-width: 0;
 }
@@ -171,7 +177,7 @@
 }
 
 .mcp-icon-drop:hover,
-.mcp-icon-drop.over {
+.mcp-icon-drop[data-over] {
   border-color: var(--accent);
   background: var(--accent-soft);
   color: var(--text-2);
@@ -187,16 +193,6 @@
 .mcp-icon-drop > svg {
   width: 18px;
   height: 18px;
-}
-
-/* An icon with one for a dark theme: each shows on its own. */
-.mcp-icon-dark,
-:root[data-theme="dark"] .mcp-icon-light {
-  display: none;
-}
-
-:root[data-theme="dark"] .mcp-icon-dark {
-  display: block;
 }
 
 /* A label with its add button at the end of the row (environment variables, headers). */

@@ -391,6 +391,13 @@
     display: none;
   }
 
+  /* A picture with a dark theme's image (`PicturePart`): the one the theme does not use hides, and the other keeps
+     the display its plugin gives it. */
+  :root:not([data-theme="dark"]) .picture-dark,
+  :root[data-theme="dark"] .picture-light {
+    display: none;
+  }
+
   :root[data-theme="dark"] .logo-dark {
     display: block;
   }

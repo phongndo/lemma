@@ -1,9 +1,8 @@
 import { For, Index, Match, Show, Switch, createEffect, createMemo, createSignal, onCleanup } from "solid-js";
-import type { JSX } from "solid-js";
+import { SignInPaste } from "@lemma/credentials/web";
 import { IntegrationKinds } from "@lemma/integrations";
 import { PromptCommands } from "@lemma/threads";
 import type { IntegrationAddProps, IntegrationDetailProps, IntegrationItem, IntegrationStatus } from "@lemma/integrations";
-import { browserPlace } from "@lemma/llm/web";
 import { McpChannels } from "@lemma/mcp";
 import type { Exposure, McpAuthStatus, McpServerChange, McpServerConfig, McpServerStatus, McpState, McpToolInfo } from "@lemma/mcp";
 import { Client, Notify, Slots, defineWebPlugin, usePlugin } from "@lemma/web";
@@ -15,17 +14,20 @@ import {
   HammerIcon,
   ImageIcon,
   PencilIcon,
+  Picture,
   PlusIcon,
   PuzzleIcon,
   QuestionIcon,
   RefreshIcon,
   Segmented,
   Spinner,
+  SvgDrop,
+  svgSource,
   Toggle,
   TrashIcon,
   XIcon,
 } from "@lemma/look";
-import { draftOf, entryOf, parsePasted, isImageAddress, svgBytes, svgIcon, svgProblem } from "./form.ts";
+import { draftOf, entryOf, parsePasted, isImageAddress } from "./form.ts";
 import type { Rows, ServerDraft } from "./form.ts";
 import styles from "./mcp.css?inline";
 
@@ -103,60 +105,6 @@ function Countdown(props: { inMs: number }) {
 }
 
 /**
- * For a browser that cannot reach Lemma (on another device than the host): the address it lands on after approving
- * finishes the sign-in. Open from the start when this page itself came from another machine.
- */
-function PasteAddress(props: { server: string; actions: Actions }) {
-  const plugin = usePlugin();
-  const [value, setValue] = createSignal("");
-  const [error, setError] = createSignal<string>();
-  const [sending, setSending] = createSignal(false);
-  // Its failure (an address from another sign-in, say) shows under the field.
-  const submit = plugin.action("finish sign-in", async () => {
-    if (value().trim() === "") return;
-    setSending(true);
-    setError(undefined);
-    try {
-      await props.actions.finishSignIn(props.server, value().trim());
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : String(cause));
-    } finally {
-      setSending(false);
-    }
-  });
-  return (
-    <details class="mcp-paste" open={browserPlace(location.hostname) === "elsewhere"}>
-      <summary>Browser on another device?</summary>
-      <p class="integration-hint">
-        After you approve, the browser may land on a page that doesn't load. That's expected: copy the page's address from the address bar and paste it here.
-      </p>
-      <form
-        class="mcp-paste-form"
-        onSubmit={(event) => {
-          event.preventDefault();
-          submit();
-        }}
-      >
-        <input
-          class="field"
-          type="text"
-          autocomplete="off"
-          spellcheck={false}
-          aria-label="The address the browser landed on"
-          placeholder="http://localhost:…/callback?code=…"
-          value={value()}
-          onInput={(event) => setValue(event.currentTarget.value)}
-        />
-        <button type="submit" class="button small" disabled={sending() || value().trim() === ""}>
-          {sending() ? "Signing in…" : "Continue"}
-        </button>
-      </form>
-      <Show when={error()}>{(message) => <p class="integration-error">{message()}</p>}</Show>
-    </details>
-  );
-}
-
-/**
  * Signing in to a remote server that asks: a button while it has no sign-in, the page to approve on (here, or in a
  * browser anywhere, with the address it lands on pasted back) while one waits, and signing out once it has one.
  */
@@ -198,7 +146,11 @@ function SignInSection(props: { server: string; auth: McpAuthStatus; actions: Ac
                   <Spinner />
                   <span>Waiting for you to approve in the browser</span>
                 </p>
-                <PasteAddress server={props.server} actions={props.actions} />
+                <SignInPaste
+                  class="mcp-paste"
+                  placeholder="http://localhost:…/callback?code=…"
+                  submit={(address) => props.actions.finishSignIn(props.server, address)}
+                />
               </>
             )}
           </Show>
@@ -321,83 +273,32 @@ function RowsEditor(props: { label: string; rows: Rows; onChange: (rows: Rows) =
 }
 
 /**
- * An image, or `fallback` while there is none or it fails to load (an address that is gone, an image that is not one);
- * with `dark`, that one on a dark theme. Fetched without telling its host the page it is on.
- */
-function Picture(props: { src: string | undefined; dark?: string | undefined; fallback: JSX.Element }) {
-  const [failed, setFailed] = createSignal<readonly string[]>([]);
-  const fail = (src: string) => setFailed((all) => [...all, src]);
-  const usable = (src: string | undefined) => (src !== undefined && !failed().includes(src) ? src : undefined);
-  return (
-    <Show when={usable(props.src)} fallback={props.fallback}>
-      {(src) => (
-        <>
-          <img src={src()} classList={{ "mcp-icon-light": usable(props.dark) !== undefined }} alt="" referrerPolicy="no-referrer" onError={() => fail(src())} />
-          <Show when={usable(props.dark)}>
-            {(dark) => <img src={dark()} class="mcp-icon-dark" alt="" referrerPolicy="no-referrer" onError={() => fail(dark())} />}
-          </Show>
-        </>
-      )}
-    </Show>
-  );
-}
-
-const kilobytes = (bytes: number) => (bytes < 1024 ? `${bytes} B` : `${(bytes / 1024).toFixed(1)} KB`);
-
-/**
  * A server's icon: an SVG file of the user's (picked, or dropped on the tile), written into its entry, or an image's
  * address; empty, the one the server declares.
  */
 function IconField(props: { value: string; onChange: (icon: string) => void }) {
-  const plugin = usePlugin();
   const [problem, setProblem] = createSignal<string>();
-  const [over, setOver] = createSignal(false);
-  let picker!: HTMLInputElement;
   const icon = () => props.value.trim();
-  const uploaded = () => svgBytes(icon());
-  const read = plugin.action("read an icon file", async (file: File | undefined) => {
-    if (file === undefined) return;
-    const svg = file.type === "image/svg+xml" || /\.svg$/i.test(file.name) ? await file.text() : undefined;
-    const wrong = svg === undefined ? "Choose an SVG file" : svgProblem(svg);
-    setProblem(wrong);
-    if (svg !== undefined && wrong === undefined) props.onChange(svgIcon(svg));
-  });
+  const change = (next: string) => {
+    setProblem(undefined);
+    props.onChange(next);
+  };
   return (
     <div class="integration-field">
       <span>Icon</span>
       <div class="mcp-icon-field">
-        <button
-          type="button"
-          class="mcp-icon-drop"
-          classList={{ over: over(), empty: !isImageAddress(icon()) }}
-          aria-label="Choose an SVG file for its icon"
-          data-tip="Choose an SVG, or drop one here"
-          onClick={() => picker.click()}
-          onDragOver={(event) => {
-            event.preventDefault();
-            setOver(true);
-          }}
-          onDragLeave={() => setOver(false)}
-          onDrop={(event) => {
-            event.preventDefault();
-            setOver(false);
-            read(event.dataTransfer?.files[0]);
-          }}
+        <SvgDrop
+          class={isImageAddress(icon()) ? "mcp-icon-drop" : "mcp-icon-drop empty"}
+          label="Choose an SVG file for its icon"
+          tip="Choose an SVG, or drop one here"
+          onSvg={(svg) => change(svgSource(svg))}
+          onProblem={setProblem}
         >
           <Picture src={isImageAddress(icon()) ? icon() : undefined} fallback={<ImageIcon />} />
-        </button>
-        <input
-          ref={picker}
-          type="file"
-          accept=".svg,image/svg+xml"
-          hidden
-          onChange={(event) => {
-            read(event.currentTarget.files?.[0]);
-            event.currentTarget.value = "";
-          }}
-        />
+        </SvgDrop>
+        {/* An image written into the entry, whole, is shown by the tile, not as its address. */}
         <Show
-          when={uploaded()}
+          when={icon().startsWith("data:") && isImageAddress(icon())}
           fallback={
             <input
               class="field"
@@ -405,26 +306,14 @@ function IconField(props: { value: string; onChange: (icon: string) => void }) {
               placeholder="https://example.com/icon.svg"
               aria-label="Icon address"
               spellcheck={false}
-              onInput={(event) => {
-                setProblem(undefined);
-                props.onChange(event.currentTarget.value);
-              }}
+              onInput={(event) => change(event.currentTarget.value)}
             />
           }
         >
-          {(bytes) => <span class="mcp-icon-file">SVG · {kilobytes(bytes())}</span>}
+          <span class="mcp-icon-file">An image of your own</span>
         </Show>
         <Show when={icon() !== ""}>
-          <button
-            type="button"
-            class="icon-button"
-            aria-label="Remove the icon"
-            data-tip="Remove"
-            onClick={() => {
-              setProblem(undefined);
-              props.onChange("");
-            }}
-          >
+          <button type="button" class="icon-button" aria-label="Remove the icon" data-tip="Remove" onClick={() => change("")}>
             <XIcon />
           </button>
         </Show>

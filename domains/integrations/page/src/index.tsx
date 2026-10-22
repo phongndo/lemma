@@ -1,8 +1,8 @@
 import { For, Show, createMemo, createSignal } from "solid-js";
-import type { Component, JSX } from "solid-js";
+import type { Component } from "solid-js";
 import { IntegrationKinds, INTEGRATIONS_CONTRACT, IntegrationsSection } from "@lemma/integrations";
 import type { IntegrationItem, IntegrationKind, IntegrationOffer } from "@lemma/integrations";
-import { AlertIcon, ArrowLeftIcon, CheckIcon, Dialog, PlugIcon, PlusIcon, SearchField, SearchIcon, Spinner, Toggle } from "@lemma/look";
+import { AlertIcon, ArrowLeftIcon, CheckIcon, Dialog, Picture, PlugIcon, PlusIcon, SearchField, SearchIcon, Spinner, Toggle } from "@lemma/look";
 import { Settings, SettingsGroups, SettingsSections } from "@lemma/settings";
 import type { SettingsService } from "@lemma/settings";
 import { Contained, Isolated, Slots, defineWebPlugin, usePlugin } from "@lemma/web";
@@ -68,35 +68,6 @@ interface Choice {
   readonly key: string;
   readonly kind: Kind;
   readonly offer?: IntegrationOffer;
-}
-
-/**
- * An image, or `fallback` while there is none or it fails to load (an address that is gone, an image that is not one);
- * with `dark`, that one on a dark theme. Fetched without telling its host the page it is on, and only once in view.
- */
-function Picture(props: { src: string | undefined; dark?: string | undefined; fallback: JSX.Element }) {
-  const [failed, setFailed] = createSignal<readonly string[]>([]);
-  const fail = (src: string) => setFailed((all) => [...all, src]);
-  const usable = (src: string | undefined) => (src !== undefined && !failed().includes(src) ? src : undefined);
-  return (
-    <Show when={usable(props.src)} fallback={props.fallback}>
-      {(src) => (
-        <>
-          <img
-            src={src()}
-            classList={{ "integration-icon-light": usable(props.dark) !== undefined }}
-            alt=""
-            loading="lazy"
-            referrerPolicy="no-referrer"
-            onError={() => fail(src())}
-          />
-          <Show when={usable(props.dark)}>
-            {(dark) => <img src={dark()} class="integration-icon-dark" alt="" loading="lazy" referrerPolicy="no-referrer" onError={() => fail(dark())} />}
-          </Show>
-        </>
-      )}
-    </Show>
-  );
 }
 
 /** A mark for the Add dialog's rows and the list's: a logo, an image (one for a dark theme besides), or the kind's icon. */

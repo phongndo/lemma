@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { draftOf, entryOf, isImageAddress, joinCommand, MAX_SVG_BYTES, parsePasted, splitCommand, svgBytes, svgIcon, svgProblem } from "../src/form.ts";
+import { draftOf, entryOf, isImageAddress, joinCommand, parsePasted, splitCommand } from "../src/form.ts";
 
 describe("the server form", () => {
   it("splits a command line into words, quotes and escapes kept together, and joins them back", () => {
@@ -66,30 +66,10 @@ describe("the server form", () => {
     });
   });
 
-  it("takes an SVG file of the user's as its icon, written into the entry as base64 without what draws nothing", () => {
-    const file = `<?xml version="1.0" encoding="UTF-8"?>
-<!-- Exported -->
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
-  <title>Café</title>
-  <circle cx="12" cy="12" r="10" fill="#10a37f"/>
-</svg>
-`;
-    const drawn = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><title>Café</title><circle cx="12" cy="12" r="10" fill="#10a37f"/></svg>';
-    expect(svgProblem(file)).toBeUndefined();
-    const icon = svgIcon(file);
-    expect(icon.startsWith("data:image/svg+xml;base64,")).toBe(true);
-    expect(Buffer.from(icon.slice("data:image/svg+xml;base64,".length), "base64").toString("utf8")).toBe(drawn);
+  it("takes an SVG file of the user's as its icon, written into the entry as an image's address", () => {
+    // As `svgSource` (`@lemma/look`) writes one.
+    const icon = `data:image/svg+xml;base64,${Buffer.from('<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/></svg>').toString("base64")}`;
     expect(isImageAddress(icon)).toBe(true);
     expect(entryOf({ ...draftOf("files", undefined), command: "x", icon })).toMatchObject({ entry: { icon } });
-    // Bytes, not characters: é is two.
-    expect(svgBytes(icon)).toBe(Buffer.byteLength(drawn));
-    expect(svgBytes(`data:image/svg+xml,${encodeURIComponent(drawn)}`)).toBe(Buffer.byteLength(drawn));
-    expect(svgBytes("https://example.com/icon.svg")).toBeUndefined();
-    expect(svgProblem("<html><body/></html>")).toBe("That is not an SVG file");
-    expect(svgProblem(`<svg>${" ".repeat(MAX_SVG_BYTES)}</svg>`)).toBe("An icon's SVG is at most 32 KB");
-    // The largest it takes is a third larger written: base64, not percent-encoding, which can triple it.
-    const largest = `<svg>${"<g/>".repeat(Math.floor((MAX_SVG_BYTES - 11) / 4))}</svg>`;
-    expect(svgProblem(largest)).toBeUndefined();
-    expect(svgIcon(largest).length).toBeLessThan(MAX_SVG_BYTES * 1.34 + 32);
   });
 });

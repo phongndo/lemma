@@ -39,7 +39,8 @@ its row as the default of `ProviderRowPart`
   sign-in; the dialog says the provider honors it until it is revoked there,
   and links where a key is deleted.
 - **Custom providers.** The form asks a name, a base URL, a wire API, model
-  ids, and optionally a key and an SVG logo (checked by `logoProblem`). The
+  ids, and optionally a key and an SVG logo (chosen, or dropped on its button,
+  as `SvgDrop` in `@lemma/look` takes one). The
   key never enters config: it answers the new provider's `api_key` sign-in,
   so the host checks and stores it as it does any key; a key it refuses opens
   the connect dialog to take another. Removing a custom provider logs out

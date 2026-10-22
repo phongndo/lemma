@@ -10,6 +10,7 @@ import type {
   StoredOAuthTokens,
 } from "@modelcontextprotocol/client";
 import type { McpOAuthConfig } from "@lemma/mcp";
+import { isObject } from "./values.ts";
 import { loadedSdk, loadSdk } from "./sdk.ts";
 import type { Sdk } from "./sdk.ts";
 
@@ -23,8 +24,6 @@ export interface StoredSignIn {
   readonly tokens?: StoredOAuthTokens;
   readonly discovery?: OAuthDiscoveryState;
 }
-
-const isObject = (value: unknown): value is Record<string, unknown> => typeof value === "object" && value !== null && !Array.isArray(value);
 
 /**
  * The sign-ins Lemma holds, by server name, in a file of their own (mode 0600). Read once; this host is the only
@@ -177,16 +176,24 @@ const without = (stored: StoredSignIn, keys: readonly (keyof StoredSignIn)[]): S
  * The SDK's OAuth client for one server: what it registers, stores, and sends the browser to. It reads the store
  * afresh each time and writes onto what the store holds then, so two at once never put back what the other replaced.
  * With a `flow`, a browser sign-in is under way: what it learns stays in the flow until its code is exchanged. Without
- * one, Lemma can only renew the sign-in it holds: a renewal the authorization server refuses needs the person
- * (`NeedsSignIn`), and one that failed otherwise, its refresh token kept, is for another try (`RenewalFailed`).
+ * one, Lemma can only renew the sign-in it holds, with the client it holds: a renewal the authorization server refuses
+ * needs the person (`NeedsSignIn`), and one that failed otherwise, its refresh token kept, is for another try
+ * (`RenewalFailed`).
  */
+/** Whether a client stamped with `stamped` (none: from before stamps) is the authorization server `issuer`'s, as the SDK tells them: one trailing slash apart is the same. */
+const sameIssuer = (stamped: string | undefined, issuer: string | undefined) =>
+  stamped === undefined || issuer === undefined || stamped.replace(/\/$/, "") === issuer.replace(/\/$/, "");
+
 function provider(store: SignInStore, target: SignInTarget, flow: Flow | undefined): OAuthClientProvider {
   const current = () => store.get(target.name, target.url);
   const patch = (fields: Partial<StoredSignIn>) => store.set(target.name, { ...(current() ?? { url: target.url }), ...fields, url: target.url });
   const redirectUrl = flow?.redirectUrl ?? current()?.redirectUrl;
   const { clientId, clientSecret, scopes } = target.oauth ?? {};
-  /** The refresh token a renewal starts with: one replaced meanwhile was renewed by another, whose tokens stay. */
-  const renewing = current()?.tokens?.refresh_token;
+  /**
+   * The refresh token the SDK last read, which it renews: what it saves or forgets of the tokens holds only while the
+   * store still has that one, so tokens a sign-in or another renewal put there meanwhile stay.
+   */
+  let renewing = current()?.tokens?.refresh_token;
   /** The client the entry configures, the same object each time, so the SDK stamps it once rather than storing it. */
   const configured: StoredOAuthClientInformation | undefined =
     clientId === undefined ? undefined : { client_id: clientId, ...(clientSecret === undefined ? {} : { client_secret: clientSecret }) };
@@ -210,7 +217,13 @@ function provider(store: SignInStore, target: SignInTarget, flow: Flow | undefin
       };
     },
     state: () => flow?.state ?? newState(),
-    clientInformation: () => configured ?? flow?.client ?? (flow?.newClient === true ? undefined : storedClient()),
+    clientInformation: (context) => {
+      const client = configured ?? flow?.client ?? (flow?.newClient === true ? undefined : storedClient());
+      // A renewal without a client, or with one another authorization server issued (its issuer moved), would register
+      // one, which only a sign-in in the browser can use: it stops first.
+      if (flow === undefined && (client === undefined || (configured === undefined && !sameIssuer(client.issuer, context?.issuer)))) throw new NeedsSignIn();
+      return client;
+    },
     // A configured client, its secret included, is the entry's and is never stored.
     saveClientInformation: async (client) => {
       if (configured !== undefined) {
@@ -218,13 +231,20 @@ function provider(store: SignInStore, target: SignInTarget, flow: Flow | undefin
         return;
       }
       if (flow !== undefined) flow.client = client;
-      // A renewal stamps the client it has; registering one would need the browser.
-      else if (current()?.client === undefined) throw new NeedsSignIn();
-      else await patch({ client });
+      // A renewal stamps the client it has, unless another sign-in replaced it meanwhile.
+      else if (current()?.client?.client_id === client.client_id) await patch({ client });
     },
-    tokens: () => current()?.tokens,
+    tokens: () => {
+      const tokens = current()?.tokens;
+      renewing = tokens?.refresh_token;
+      return tokens;
+    },
     saveTokens: async (tokens) => {
-      if (flow?.exchanging !== true) return patch({ tokens });
+      // Renewed (or stamped) tokens lose to those a sign-in put there since the SDK read them.
+      if (flow?.exchanging !== true) {
+        if (current()?.tokens?.refresh_token === renewing) await patch({ tokens });
+        return;
+      }
       // The sign-in succeeded: its client and what it found replace the stored ones with its tokens.
       const client = configured === undefined ? (flow.client ?? storedClient()) : undefined;
       const discovery = flow.discovery ?? current()?.discovery;

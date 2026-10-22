@@ -12,6 +12,7 @@
   },
   "dependencies": {
     "@lemma/contracts": "workspace:*",
+    "@lemma/credentials": "workspace:*",
     "@lemma/llm": "workspace:*",
     "@lemma/web": "workspace:*",
     "solid-js": "1.9.17"
