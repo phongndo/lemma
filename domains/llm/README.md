@@ -7,7 +7,7 @@ Models and their providers: what the agent asks, and how a person connects one. 
 | [`llm.pi-ai`](pi-ai/README.md)       | host   | Provides `Llm` over pi-ai's providers, the user's own, and those plugins add; serves it as the `llm.*` channels |
 | [`llm.commands`](commands/README.md) | host   | The model providers' commands: log out of one                                                                   |
 | [`llm.client`](client/)              | web    | Providers and models as the host reports them, and this browser's choices: provides `Models`                    |
-| [`llm.model-picker`](model-picker/)  | web    | The model and reasoning pickers                                                                                 |
+| [`llm.model-picker`](model-picker/)  | web    | The model and reasoning pickers, which `mod+shift+m` and `mod+shift+e` open in the composer                     |
 | [`llm.providers`](providers/)        | web    | Settings › Providers: connecting providers, and adding your own                                                 |
 | [`llm.cli`](cli/README.md)           | host   | The `lemma` command's `models`, `providers`, `login`, `logout`, and a check for `lemma doctor`                  |
 

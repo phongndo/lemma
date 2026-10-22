@@ -285,6 +285,26 @@ export const stepFrom = (order: readonly SessionInfo[], id: string | undefined, 
   return order[Math.max(0, Math.min(order.length - 1, at + step))]?.id;
 };
 
+/**
+ * The next thread after `id` in `order` that `needs` the person, going round past the end (`step` -1: the one before
+ * it, round past the start); from none, the first or the last that does. Never `id` itself: none when no other does.
+ */
+export const nextNeeding = (
+  order: readonly SessionInfo[],
+  id: string | undefined,
+  step: 1 | -1,
+  needs: (session: SessionInfo) => boolean,
+): string | undefined => {
+  const count = order.length;
+  const at = order.findIndex((session) => session.id === id);
+  const from = at !== -1 ? at : step > 0 ? -1 : count;
+  for (let moved = 1; moved <= count; moved++) {
+    const session = order[(((from + step * moved) % count) + count) % count]!;
+    if (session.id !== id && needs(session)) return session.id;
+  }
+  return undefined;
+};
+
 /** Where to go once `id`, shown, is archived: the thread after it in `order`, else the one before it; none when it was the last. */
 export const afterArchiving = (order: readonly SessionInfo[], id: string): string | undefined => {
   const at = order.findIndex((session) => session.id === id);

@@ -1,5 +1,6 @@
 import { RouteOutlet } from "@lemma/router-solid";
 import type { RouteFailure } from "@lemma/router-solid";
+import { Actions } from "@lemma/actions";
 import { MainRegion } from "@lemma/frame";
 import { NewThreadRoute } from "@lemma/sessions";
 import { SectionIds, SettingsRoute } from "@lemma/settings";
@@ -13,7 +14,8 @@ import styles from "./pages.css?inline";
  * with the plugin, at the same address; an address no route names says that.
  * Pages that share a component share its instance across their routes. A page
  * that throws fails alone: the rest of the app stays, the failure names its
- * plugin, and it is tried again on retry or the next navigation.
+ * plugin, and it is tried again on retry or the next navigation. Its keys go back
+ * and forward through the addresses.
  */
 export default defineWebPlugin({
   id: "frame.pages",
@@ -85,5 +87,26 @@ export default defineWebPlugin({
       />
     );
     slots.add(MainRegion, { id: "pages", phase: "default", component: Outlet });
+    // As Codex and T3 Code have them, in the desktop app too, which has no back button. Back stops at the first address
+    // the app showed in this tab, where the browser's back would leave the app.
+    slots.add(Actions, {
+      id: "pages.back",
+      order: 30,
+      title: "Go back",
+      category: "View",
+      keywords: ["history", "previous"],
+      keys: "mod+[",
+      when: () => router.location().index > 0,
+      run: () => router.back(),
+    });
+    slots.add(Actions, {
+      id: "pages.forward",
+      order: 31,
+      title: "Go forward",
+      category: "View",
+      keywords: ["history", "next"],
+      keys: "mod+]",
+      run: () => router.go(1),
+    });
   },
 });

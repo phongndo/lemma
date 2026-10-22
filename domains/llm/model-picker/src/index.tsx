@@ -1,4 +1,5 @@
-import { For, Show, createMemo, createSignal } from "solid-js";
+import { For, Show, createMemo, createSignal, onCleanup } from "solid-js";
+import type { Accessor, Setter } from "solid-js";
 import { usesPlan } from "@lemma/llm";
 import type { ModelInfo, ThinkingLevel } from "@lemma/llm";
 import { contextSize } from "./context-size.ts";
@@ -26,7 +27,13 @@ const LEVEL_LABEL: Record<ThinkingLevel, string> = {
  * The selected model's own reasoning levels; the choice is remembered per model. `quiet`: in the composer's row, after
  * the model with a dot, its level alone, with no chevron.
  */
-function ThinkingPicker(props: { models: ModelsService; placement?: Placement; afterPick?: () => void; quiet?: boolean }) {
+function ThinkingPicker(props: {
+  models: ModelsService;
+  placement?: Placement;
+  afterPick?: () => void;
+  controller?: (handle: { readonly open: () => void }) => void;
+  quiet?: boolean;
+}) {
   const { selected: selectedModel, thinking: effectiveThinking, chooseThinking } = props.models;
   const levels = createMemo(() => thinkingLevels(selectedModel()));
   return (
@@ -41,6 +48,7 @@ function ThinkingPicker(props: { models: ModelsService; placement?: Placement; a
         tip={`Reasoning for ${selectedModel()?.name ?? "this model"}`}
         triggerClass={props.quiet ? "select-chip quiet" : "select-chip"}
         placement={props.placement ?? "top-start"}
+        {...(props.controller === undefined ? {} : { controller: props.controller })}
         trigger={
           <>
             <Show when={!props.quiet}>
@@ -356,7 +364,15 @@ export default defineWebPlugin({
   styles,
   requires: { models: Models, slots: Slots },
   setup: ({ models, slots }, plugin) => {
+    // The composer's pickers, opened by their actions while they are drawn (the reasoning one, while the model reasons).
     const [open, setOpen] = createSignal<() => void>();
+    const [openThinking, setOpenThinking] = createSignal<() => void>();
+    const keep = (get: Accessor<(() => void) | undefined>, set: Setter<(() => void) | undefined>) => (handle: { readonly open: () => void }) => {
+      set(() => handle.open);
+      onCleanup(() => {
+        if (get() === handle.open) set(undefined);
+      });
+    };
     /** Other plugins' actions, run when they exist: focus the prompt, open the providers settings. */
     const runAction = (id: string) => slots.get(Actions, id)?.run();
     const providers = () => (slots.get(Actions, LlmActionIds.providers) === undefined ? undefined : () => runAction(LlmActionIds.providers));
@@ -370,7 +386,7 @@ export default defineWebPlugin({
             models={models}
             afterPick={() => runAction(ThreadsActionIds.focusComposer)}
             onProviders={providers()}
-            controller={(handle) => setOpen(() => handle.open)}
+            controller={keep(open, setOpen)}
           />
         ),
       }),
@@ -379,7 +395,9 @@ export default defineWebPlugin({
       slots.add(ComposerControls, {
         id: "thinking",
         order: 10,
-        component: () => <ThinkingPicker quiet models={models} afterPick={() => runAction(ThreadsActionIds.focusComposer)} />,
+        component: () => (
+          <ThinkingPicker quiet models={models} afterPick={() => runAction(ThreadsActionIds.focusComposer)} controller={keep(openThinking, setOpenThinking)} />
+        ),
       }),
     );
     /** The models `query` names: the one with that ref first, then those a search finds, in the picker's order. */
@@ -444,8 +462,24 @@ export default defineWebPlugin({
         category: "Model",
         keywords: ["provider", "llm"],
         icon: BrainIcon,
+        // As Codex and T3 Code have it.
+        keys: "mod+shift+m",
         when: () => open() !== undefined,
         run: () => open()?.(),
+      }),
+    );
+    add(
+      slots.add(Actions, {
+        id: "model-picker.thinking",
+        order: 2,
+        title: "Switch reasoning level…",
+        category: "Model",
+        keywords: ["thinking", "effort"],
+        icon: BrainIcon,
+        // As T3 Code has it: E for effort.
+        keys: "mod+shift+e",
+        when: () => openThinking() !== undefined,
+        run: () => openThinking()?.(),
       }),
     );
     add(

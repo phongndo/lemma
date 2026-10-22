@@ -11,6 +11,7 @@
     "check": "tsrs --noEmit"
   },
   "dependencies": {
+    "@lemma/actions": "workspace:*",
     "@lemma/frame": "workspace:*",
     "@lemma/router-solid": "workspace:*",
     "@lemma/sessions": "workspace:*",
