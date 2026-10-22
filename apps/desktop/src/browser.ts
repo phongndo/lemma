@@ -1,6 +1,7 @@
 import { BrowserWindow, clipboard, ipcMain, Menu, session, shell } from "electron";
 import type { BrowserWindowConstructorOptions, ContextMenuParams, Input, MenuItemConstructorOptions, WebContents } from "electron";
 import { matchesKeys } from "@lemma/web/keys";
+import { isDefaultProfile } from "@lemma/contracts/profiles";
 
 /**
  * The web app's browser pages (`threads.browser`): each a `<webview>` in the window, so a page is Chromium's, with its
@@ -14,7 +15,7 @@ import { matchesKeys } from "@lemma/web/keys";
  * other profile's (`@lemma/contracts/profiles`). The default profile's is the one pages had before there were profiles.
  */
 export const browserPartition = (profile: string | undefined): string =>
-  profile === undefined || profile === "default" ? "persist:lemma-browser" : `persist:lemma-browser-${profile}`;
+  profile === undefined || isDefaultProfile(profile) ? "persist:lemma-browser" : `persist:lemma-browser-${profile}`;
 
 /** What a page may use without asking: the rest (the clipboard's contents, location, notifications) is refused. */
 const ALLOWED = new Set(["clipboard-sanitized-write", "fullscreen"]);

@@ -386,7 +386,7 @@ describe("resume", () => {
       replay: "safe",
       execute: (_, { offered }) => new ToolResult({ content: [{ type: "text", text: `offered: ${offered?.join(",")}` }] }),
     };
-    // As a profile leaving the tool out does.
+    // As a mode leaving the tool out does.
     const select = definePlugin({
       id: "select",
       layer: Layer.effectDiscard(

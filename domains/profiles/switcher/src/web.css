@@ -1,54 +1,18 @@
 /*
- * A profile's pattern is drawn in one of these hues (`pattern.ts`), on `--profile-pattern-bg`, per theme: change one
- * from a UI stylesheet (`--profile-hue-3: …`).
+ * A profile's pattern, until it has a picture: its seed's identicon in its hue (`--profile-hue`, set on each), at one
+ * saturation and lightness for all (`--profile-ink`), on `--profile-pattern-bg`, per theme.
  */
 :root {
-  --profile-hue-0: #1a85d4;
-  --profile-hue-1: #17a5af;
-  --profile-hue-2: #199f43;
-  --profile-hue-3: #c99a0c;
-  --profile-hue-4: #d47628;
-  --profile-hue-5: #d52c36;
-  --profile-hue-6: #d32a61;
-  --profile-hue-7: #693acf;
   --profile-pattern-bg: #ececef;
 }
 
 :root[data-theme="dark"] {
-  --profile-hue-0: #69b1ff;
-  --profile-hue-1: #64d1db;
-  --profile-hue-2: #5ecc71;
-  --profile-hue-3: #ffd452;
-  --profile-hue-4: #ffa359;
-  --profile-hue-5: #ff6762;
-  --profile-hue-6: #ff678d;
-  --profile-hue-7: #9d6afb;
   --profile-pattern-bg: #2a2a2e;
 }
 
-.profiles-hue-0 {
-  color: var(--profile-hue-0);
-}
-.profiles-hue-1 {
-  color: var(--profile-hue-1);
-}
-.profiles-hue-2 {
-  color: var(--profile-hue-2);
-}
-.profiles-hue-3 {
-  color: var(--profile-hue-3);
-}
-.profiles-hue-4 {
-  color: var(--profile-hue-4);
-}
-.profiles-hue-5 {
-  color: var(--profile-hue-5);
-}
-.profiles-hue-6 {
-  color: var(--profile-hue-6);
-}
-.profiles-hue-7 {
-  color: var(--profile-hue-7);
+.profiles-pattern {
+  --profile-ink: hsl(var(--profile-hue, 210) 55% 55%);
+  color: var(--profile-ink);
 }
 
 /* A profile's avatar, in a circle as a browser draws one: its picture, or its pattern. What tells one window from another at a glance. */

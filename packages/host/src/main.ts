@@ -108,14 +108,17 @@ const launch = {
 delete process.env.LEMMA_STARTED_BY;
 // The profile it runs for (`LEMMA_PROFILE`), said before anything starts when it is no name, or one never made (a typo,
 // one removed), whose home it would make with no port of its own, taking the default profile's.
+const noProfile = (why: string): never => {
+  console.error(`lemma: LEMMA_PROFILE: ${why}`);
+  process.exit(1);
+};
 const profile = profileOf(process.env);
 const profileProblem = profile === undefined ? undefined : profileNameProblem(profile);
+if (profileProblem !== undefined) noProfile(profileProblem);
 // `pnpm start` runs from packages/host; INIT_CWD is where the user invoked it.
-const paths = resolvePaths({ env: profileProblem === undefined ? process.env : {}, cwd: process.env.INIT_CWD ?? process.cwd() });
-if (profileProblem !== undefined || (paths.profile !== undefined && !existsSync(paths.home))) {
-  console.error(`lemma: LEMMA_PROFILE: ${profileProblem ?? `there is no profile "${profile}"; \`lemma profile create ${profile}\` makes one`}`);
-  process.exit(1);
-}
+const paths = resolvePaths({ env: process.env, cwd: process.env.INIT_CWD ?? process.cwd() });
+if (paths.profile !== undefined && !existsSync(paths.home))
+  noProfile(`there is no profile "${paths.profile}"; \`lemma profile create ${paths.profile}\` makes one`);
 // Never on the other kind's home (`otherHomeProblem`): an installed Lemma's, from a checkout, or a checkout's, from a release.
 const otherHome = otherHomeProblem(paths.root, process.env);
 if (otherHome !== undefined) {

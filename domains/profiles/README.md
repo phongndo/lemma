@@ -1,13 +1,11 @@
 # profiles
 
-The other Lemmas on a machine: each profile is a home of its own, with its own
-plugins, config, look, threads, and logins, served by a host of its own, as a
-browser's profiles are. Where they live and how a host or client picks one is
-the runtime's (`@lemma/contracts/profiles`, and
-[Configuration](../../docs/configuration.md#profiles)), decided before any
-plugin runs; this domain lists and makes them (`@lemma/profiles/local`, Node
-only), and is how a client reaches one from another. Its contract is
-[`@lemma/profiles`](contract/src/profiles.ts).
+The other Lemmas on a machine
+([profiles](../../docs/configuration.md#profiles)). Where they live and how a
+host or client picks one is the runtime's (`@lemma/contracts/profiles`),
+decided before any plugin runs; this domain lists and makes them
+(`@lemma/profiles/local`, Node only), and is how a client reaches one from
+another. Its contract is [`@lemma/profiles`](contract/src/profiles.ts).
 
 | Plugin                                    | Halves     | What it does                                                                                                                                                                                                 |
 | ----------------------------------------- | ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |

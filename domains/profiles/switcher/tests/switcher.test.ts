@@ -72,11 +72,55 @@ describe("profiles.switcher", () => {
     expect(made.port).toBeGreaterThanOrEqual(7534);
   });
 
-  it("refuses to make a profile twice, or one named default or no name at all", async () => {
+  it("refuses to make a profile twice, or one named default, core, or no name at all, or shown as Core", async () => {
     await ok(call("profiles.create", { name: "work" }));
     expect(await failure(call("profiles.create", { name: "work" }))).toMatchObject({ reason: "Exists" });
-    expect(await failure(call("profiles.create", { name: "default" }))).toMatchObject({ reason: "Name" });
-    expect(await failure(call("profiles.create", { name: "../up" }))).toMatchObject({ reason: "Name" });
+    for (const name of ["default", "core", "../up"]) expect(await failure(call("profiles.create", { name }))).toMatchObject({ reason: "Name" });
+    expect(await failure(call("profiles.create", { name: "other", title: "core" }))).toMatchObject({ reason: "Title" });
+    expect(await failure(call("profiles.rename", { name: "work", title: "Core" }))).toMatchObject({ reason: "Title" });
+    // The default may be shown as Core again, and opened as core, in any case.
+    await ok(call("profiles.rename", { name: "default", title: "Core" }));
+    await running(undefined, 7433);
+    expect(await ok<OpenedProfile>(call("profiles.open", { name: "Core" }, { profile: "work" }))).toMatchObject({ name: "default", port: 7433 });
+  });
+
+  it("gives profiles made at once a port each", async () => {
+    const made = await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const core = yield* makeCore([pathsPlugin(root, { root }), switcher]);
+          const registries = yield* core.run(Registries);
+          return yield* Effect.forEach(
+            ["a", "b", "c", "d"],
+            (name) => callServed(registries, "profiles.create", { name }) as Effect.Effect<ProfileInfo, unknown>,
+            { concurrency: "unbounded" },
+          );
+        }),
+      ),
+    );
+    expect(new Set(made.map((profile) => profile.port)).size).toBe(4);
+  });
+
+  it("waits on another process making a profile, and takes back a lock one that stopped left", async () => {
+    const lock = path.join(root, "profiles", ".making");
+    await fs.mkdir(lock, { recursive: true });
+    const making = ok<ProfileInfo>(call("profiles.create", { name: "after" }));
+    // While the lock is held it makes nothing, over far more turns of the loop than making one takes.
+    for (let turn = 0; turn < 200; turn++) await fs.stat(root);
+    expect(await fs.readdir(path.join(root, "profiles"))).toEqual([".making"]);
+    await fs.rm(lock, { recursive: true });
+    expect((await making).name).toBe("after");
+    // Left by one killed while it held it, a minute ago and more.
+    await fs.mkdir(lock);
+    const old = new Date(Date.now() - 120_000);
+    await fs.utimes(lock, old, old);
+    expect((await ok<ProfileInfo>(call("profiles.create", { name: "stale" }))).name).toBe("stale");
+    expect(
+      await fs.stat(lock).then(
+        () => true,
+        () => false,
+      ),
+    ).toBe(false);
   });
 
   it("opens a profile whose host runs: its address on its machine, its port, and its token", async () => {

@@ -8,7 +8,7 @@ import { Effect } from "effect";
 import { appUrl } from "@lemma/contracts";
 import { findTarget, readDiscovery } from "@lemma/contracts/discovery";
 import type { Discovery, Target } from "@lemma/contracts/discovery";
-import { DEFAULT_PROFILE, profileHome, profileNameProblem, profileOf } from "@lemma/contracts/profiles";
+import { DEFAULT_PROFILE, isDefaultProfile, profileHome, profileNameProblem, profileOf } from "@lemma/contracts/profiles";
 import { callChannel, makeHostRpcHttp } from "@lemma/client";
 import { CliChannels } from "@lemma/cli";
 import { HOST_FLAGS } from "@lemma/host/launch";
@@ -307,12 +307,15 @@ ipcMain.handle("lemma:reload", async (event) => {
   }
 });
 
+/** A profile's name as this app keeps it: the default's under one name, whichever of its names (`core`) it was given. */
+const canonicalProfile = (name: string) => (isDefaultProfile(name) ? DEFAULT_PROFILE : name);
+
 // A page's switch to another profile (`profiles.switcher`): its window, or a new one, from this machine or the remote's.
 ipcMain.handle("lemma:open-profile", async (event, name: unknown) => {
   if (senderOf(event) === undefined) throw new Error("Only an app window's page can open a profile.");
-  if (typeof name !== "string" || (name !== DEFAULT_PROFILE && profileNameProblem(name) !== undefined))
+  if (typeof name !== "string" || (!isDefaultProfile(name) && profileNameProblem(name) !== undefined))
     throw new Error(`No profile can be named ${JSON.stringify(name)}.`);
-  await openProfile(name);
+  await openProfile(canonicalProfile(name));
 });
 
 // A page deleted a profile (`profiles.switcher`): its windows close, and what its pages kept (their browser view's
@@ -320,7 +323,7 @@ ipcMain.handle("lemma:open-profile", async (event, name: unknown) => {
 // with none of it. Only for a profile of this machine that is gone.
 ipcMain.handle("lemma:profile-removed", async (event, name: unknown) => {
   if (senderOf(event) === undefined) throw new Error("Only an app window's page can say a profile was deleted.");
-  if (typeof name !== "string" || name === DEFAULT_PROFILE || profileNameProblem(name) !== undefined)
+  if (typeof name !== "string" || isDefaultProfile(name) || profileNameProblem(name) !== undefined)
     throw new Error(`No profile can be named ${JSON.stringify(name)}.`);
   if (remote !== undefined || existsSync(profileHome(paths.root, name))) return;
   const served = hosts.get(name)?.served;
@@ -571,7 +574,7 @@ if (!app.requestSingleInstanceLock()) {
       // A link for another profile opens its window; one that cannot be opened (no such profile, a name none can be)
       // is said so, and the first profile's window opens instead.
       let name = first;
-      const wanted = link?.profile;
+      const wanted = link?.profile === undefined ? undefined : canonicalProfile(link.profile);
       if (wanted !== undefined && wanted !== first) {
         try {
           if (wanted !== DEFAULT_PROFILE && profileNameProblem(wanted) !== undefined) throw new Error(`No profile can be named ${JSON.stringify(wanted)}`);

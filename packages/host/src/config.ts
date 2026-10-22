@@ -125,31 +125,16 @@ const FORMAT = { formattingOptions: { insertSpaces: true, tabSize: 2, eol: "\n" 
  * key; in the project file it is written out, because only an explicit `true`
  * overrides a user row that says `false`. `values` edits single keys of the
  * row's `config` (null removes one), dropping a `config` left empty. `add`
- * and `remove` edit list keys by their items' `id`. A row under one of a
- * plugin's former ids (`formerly`, by plugin) becomes its own first, beneath
- * any it has, so the change decides alone. The text must be valid JSONC (or
- * empty); check with `parseConfig` first.
+ * and `remove` edit list keys by their items' `id`. The text must be valid
+ * JSONC (or empty); check with `parseConfig` first.
  */
-export function patchConfig(
-  text: string,
-  rows: Readonly<Record<string, PluginChange>>,
-  scope: ConfigScope = "user",
-  formerly: Readonly<Record<string, readonly string[]>> = {},
-): string {
+export function patchConfig(text: string, rows: Readonly<Record<string, PluginChange>>, scope: ConfigScope = "user"): string {
   let next = text;
   const rowOf = (id: string): Record<string, unknown> => {
     const current: unknown = parseJsonc(next, [], { allowTrailingComma: true })?.plugins?.[id];
     return Predicate.isObject(current) ? { ...current } : {};
   };
   for (const [id, row] of Object.entries(rows)) {
-    for (const former of formerly[id] ?? []) {
-      const old = rowOf(former);
-      if (Object.keys(old).length === 0) continue;
-      const own = rowOf(id);
-      const config = Predicate.isObject(old.config) && Predicate.isObject(own.config) ? { ...old.config, ...own.config } : (own.config ?? old.config);
-      next = applyEdits(next, modify(next, ["plugins", id], { ...old, ...own, ...(config === undefined ? {} : { config }) }, FORMAT));
-      next = applyEdits(next, modify(next, ["plugins", former], undefined, FORMAT));
-    }
     const edits: Record<string, unknown> = {};
     if (row.enabled !== undefined) edits.enabled = row.enabled && scope === "user" ? undefined : row.enabled;
     if (row.config !== undefined) edits.config = row.config;
@@ -250,16 +235,11 @@ const writeConfig = async (path: string, text: string): Promise<void> => {
 };
 
 /** Applies `patchConfig` to the file at `path`, creating it and its directory if needed. */
-export function updateConfig(
-  path: string,
-  rows: Readonly<Record<string, PluginChange>>,
-  scope: ConfigScope = "user",
-  formerly: Readonly<Record<string, readonly string[]>> = {},
-): Effect.Effect<ConfigUpdate, Diagnostic> {
+export function updateConfig(path: string, rows: Readonly<Record<string, PluginChange>>, scope: ConfigScope = "user"): Effect.Effect<ConfigUpdate, Diagnostic> {
   return Effect.gen(function* () {
     const previous = yield* readConfigText(path);
     if (previous !== undefined && previous.trim() !== "") yield* Effect.fromResult(parseConfig(path, previous));
-    const text = patchConfig(previous ?? "", rows, scope, formerly);
+    const text = patchConfig(previous ?? "", rows, scope);
     yield* Effect.tryPromise({
       try: () => writeConfig(path, text),
       catch: (cause) =>

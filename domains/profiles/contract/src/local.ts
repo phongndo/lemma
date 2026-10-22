@@ -1,11 +1,12 @@
 import { mkdir, readdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import { createServer } from "node:net";
 import { join } from "node:path";
-import { Data, Effect, Schema } from "effect";
+import { Data, Effect, Schema, Semaphore } from "effect";
+import type { Scope } from "effect";
 import { readDiscovery } from "@lemma/contracts/discovery";
 import type { Discovery } from "@lemma/contracts/discovery";
 import { errorCode, readJsonFile, writeFileAtomic } from "@lemma/contracts/fs";
-import { DEFAULT_PROFILE, profileFilePath, profileHome, profileNameProblem, profilesDir, readProfileFile } from "@lemma/contracts/profiles";
+import { DEFAULT_PROFILE, isDefaultProfile, profileFilePath, profileHome, profileNameProblem, profilesDir, readProfileFile } from "@lemma/contracts/profiles";
 import type { ProfileFile } from "@lemma/contracts/profiles";
 import { MAX_PICTURE_BYTES, titleProblem } from "./profiles.ts";
 import type { AvatarChange, ProfileAvatar } from "./profiles.ts";
@@ -34,12 +35,15 @@ const entryOf = (root: string, name: string): Effect.Effect<ProfileEntry> =>
     return { name, home, ...(file?.port === undefined ? {} : { port: file.port }), ...(running === undefined ? {} : { running }) };
   });
 
-/** The profiles under `root`: the default first, then the others by name. A folder whose name is no profile name is none. */
+/**
+ * The profiles under `root`: the default first, then the others by name. A folder whose name is no profile name, or
+ * the default's (`isDefaultProfile`), is none.
+ */
 export const listProfiles = (root: string): Effect.Effect<readonly ProfileEntry[]> =>
   Effect.gen(function* () {
     const folders = yield* Effect.promise(async () => {
       const entries = await readdir(profilesDir(root), { withFileTypes: true }).catch(() => []);
-      const named = entries.filter((entry) => profileNameProblem(entry.name) === undefined && entry.name !== DEFAULT_PROFILE);
+      const named = entries.filter((entry) => profileNameProblem(entry.name) === undefined && !isDefaultProfile(entry.name));
       // A folder, or a link to one, as `--profile` reaches it.
       const isFolder = (name: string) =>
         stat(join(profilesDir(root), name)).then(
@@ -78,7 +82,10 @@ const isFree = (port: number): Promise<boolean> =>
     server.listen(port, "127.0.0.1", () => server.close(() => resolve(true)));
   });
 
-/** The lowest port from `first` that no profile under `root` keeps, and nothing listens on now. */
+/**
+ * The lowest port from `first` that no profile under `root` keeps, and nothing listens on now. Not held for the caller:
+ * `createProfile` keeps it in the profile's `profile.json` before it picks another.
+ */
 export const freeProfilePort = (root: string, first = FIRST_PROFILE_PORT): Effect.Effect<number> =>
   Effect.gen(function* () {
     const taken = new Set((yield* listProfiles(root)).flatMap((entry) => [entry.port, portOf(entry)].filter((port) => port !== undefined)));
@@ -90,9 +97,9 @@ export const freeProfilePort = (root: string, first = FIRST_PROFILE_PORT): Effec
 
 /**
  * A profile cannot be made, deleted, renamed, or given a picture: `Name`, its name is none (`profileNameProblem`) or
- * `default`, which is never made or deleted; `Title`, what it was to be shown by is no name (`titleProblem`);
- * `Exists`, a folder of the name is there; `Running`, its host runs, so it is not deleted; `Picture`, what was given
- * is no picture it takes; `Write`, a file could not be written or deleted.
+ * the default's (`isDefaultProfile`), which is never made or deleted; `Title`, what it was to be shown by is no name
+ * (`titleProblem`); `Exists`, a folder of the name is there; `Running`, its host runs, so it is not deleted;
+ * `Picture`, what was given is no picture it takes; `Write`, a file could not be written or deleted.
  */
 export class ProfileError extends Data.TaggedError("ProfileError")<{
   readonly reason: "Name" | "Title" | "Exists" | "Running" | "Picture" | "Write";
@@ -103,8 +110,47 @@ const failedWrite = (what: string, cause: unknown) =>
   new ProfileError({ reason: "Write", message: `${what}: ${cause instanceof Error ? cause.message : String(cause)}` });
 
 /** Why `name` names no profile that can be made or deleted under `root`: none, or the default's, which is `root` itself. */
-const ownNameProblem = (root: string, name: string) =>
-  name === DEFAULT_PROFILE ? `"${DEFAULT_PROFILE}" is the profile ${root} itself` : profileNameProblem(name);
+const ownNameProblem = (root: string, name: string) => (isDefaultProfile(name) ? `"${name}" is the default profile, ${root} itself` : profileNameProblem(name));
+
+/** One profile made at a time in this process: another being made picks its port once this one's `profile.json` keeps its own. */
+const making = Semaphore.makeUnsafe(1);
+
+/** How old a lock another process left (killed while it made a profile) is before it is taken back. */
+const STALE_LOCK_MS = 60_000;
+
+/**
+ * And one at a time across processes (the CLI, another profile's host): `<root>/profiles/.making`, a folder, as mkdir is
+ * atomic, held while one is made. No profile is named with a dot, so none is it.
+ */
+const makingLock = (root: string): Effect.Effect<void, ProfileError, Scope.Scope> => {
+  const lock = join(profilesDir(root), ".making");
+  const take = Effect.gen(function* () {
+    yield* Effect.tryPromise({
+      try: () => mkdir(profilesDir(root), { recursive: true, mode: 0o700 }),
+      catch: (cause) => failedWrite(`Cannot make ${profilesDir(root)}`, cause),
+    });
+    while (
+      !(yield* Effect.tryPromise({
+        try: () =>
+          mkdir(lock).then(
+            () => true,
+            (error: unknown) => (errorCode(error) === "EEXIST" ? false : Promise.reject(error)),
+          ),
+        catch: (cause) => failedWrite(`Cannot make ${lock}`, cause),
+      }))
+    ) {
+      const age = yield* Effect.promise(() =>
+        stat(lock).then(
+          (found) => Date.now() - found.mtimeMs,
+          () => 0,
+        ),
+      );
+      if (age > STALE_LOCK_MS) yield* Effect.promise(() => rm(lock, { recursive: true, force: true }));
+      else yield* Effect.sleep("25 millis");
+    }
+  });
+  return Effect.asVoid(Effect.acquireRelease(take, () => Effect.promise(() => rm(lock, { recursive: true, force: true }))));
+};
 
 /**
  * Makes the profile `name` under `root`: its home, empty but for a `profile.json` naming a port of its own, from
@@ -115,26 +161,34 @@ export const createProfile = (root: string, name: string, title?: string, firstP
   Effect.gen(function* () {
     const problem = ownNameProblem(root, name);
     if (problem !== undefined) return yield* new ProfileError({ reason: "Name", message: problem });
-    const wrong = title === undefined ? undefined : titleProblem(title);
+    const wrong = title === undefined ? undefined : titleProblem(title, { default: false });
     if (wrong !== undefined) return yield* new ProfileError({ reason: "Title", message: wrong });
     const home = profileHome(root, name);
-    const port = yield* freeProfilePort(root, firstPort);
-    yield* Effect.tryPromise({
-      try: async () => {
-        await mkdir(profilesDir(root), { recursive: true, mode: 0o700 });
-        // Not recursive: an existing folder is an error, so a profile is never made over another.
-        await mkdir(home, { mode: 0o700 });
-      },
-      catch: (cause) =>
-        errorCode(cause) === "EEXIST"
-          ? new ProfileError({ reason: "Exists", message: `A profile "${name}" is there already: ${home}` })
-          : failedWrite(`Cannot make ${home}`, cause),
-    });
-    yield* Effect.tryPromise({
-      try: () => writeFileAtomic(profileFilePath(home), `${JSON.stringify({ port } satisfies ProfileFile, null, 2)}\n`),
-      catch: (cause) => failedWrite(`Cannot write ${profileFilePath(home)}`, cause),
-    });
-    if (title !== undefined) yield* writeTitle(home, title);
+    const port = yield* making.withPermits(1)(
+      Effect.scoped(
+        Effect.gen(function* () {
+          yield* makingLock(root);
+          const port = yield* freeProfilePort(root, firstPort);
+          yield* Effect.tryPromise({
+            try: async () => {
+              await mkdir(profilesDir(root), { recursive: true, mode: 0o700 });
+              // Not recursive: an existing folder is an error, so a profile is never made over another.
+              await mkdir(home, { mode: 0o700 });
+            },
+            catch: (cause) =>
+              errorCode(cause) === "EEXIST"
+                ? new ProfileError({ reason: "Exists", message: `A profile "${name}" is there already: ${home}` })
+                : failedWrite(`Cannot make ${home}`, cause),
+          });
+          yield* Effect.tryPromise({
+            try: () => writeFileAtomic(profileFilePath(home), `${JSON.stringify({ port } satisfies ProfileFile, null, 2)}\n`),
+            catch: (cause) => failedWrite(`Cannot write ${profileFilePath(home)}`, cause),
+          });
+          return port;
+        }),
+      ),
+    );
+    if (title !== undefined) yield* writeTitle(home, title, { default: false });
     return { name, home, port };
   });
 
@@ -170,9 +224,9 @@ export const readTitle = (home: string): Effect.Effect<string | undefined> =>
   Effect.promise(() => readJsonFile(titleFile(home), TitleFile)).pipe(Effect.map((file) => file?.title.trim() || undefined));
 
 /** Gives the profile whose home is `home` the name `title` to be shown by; a blank one gives it back the one its name makes. */
-export const writeTitle = (home: string, title: string): Effect.Effect<void, ProfileError> =>
+export const writeTitle = (home: string, title: string, profile: { readonly default: boolean }): Effect.Effect<void, ProfileError> =>
   Effect.gen(function* () {
-    const problem = titleProblem(title);
+    const problem = titleProblem(title, profile);
     if (problem !== undefined) return yield* new ProfileError({ reason: "Title", message: problem });
     const given = title.trim();
     yield* Effect.tryPromise({

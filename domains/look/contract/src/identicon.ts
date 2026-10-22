@@ -1,7 +1,8 @@
 /**
  * An identicon, as GitHub draws an account's default avatar: a 5×5 grid of cells, its two left columns mirrored on the
- * right, the cells and the color both from a hash of a seed (an agent's session id). The same seed draws the same
- * picture everywhere, with nothing stored. Pure, so the `avatar` part's default and its replacements share it.
+ * right, the cells and the color both from a hash of a seed (an agent's session id, a profile's name). The same seed
+ * draws the same picture everywhere, with nothing stored. Pure, so whatever draws one shares it: the `avatar` part's
+ * default and its replacements, and a profile's pattern.
  */
 export interface Identicon {
   /** The cells of the left three columns, row by row (15): the right two mirror the left two. */
@@ -25,12 +26,25 @@ const hash = (text: string): number => {
   return h >>> 0;
 };
 
+/** The hues a picture is drawn in: eight, apart enough that two pictures side by side never look nearly the same. */
+const HUES = 8;
+
+/** How many of its 15 cells a picture fills, at least and at most: a mark, not a dot or a block. */
+const FEWEST = 5;
+const MOST = 11;
+
+const filledCount = (bits: number) => {
+  let count = 0;
+  for (let at = 0; at < 15; at++) count += (bits >>> at) & 1;
+  return count;
+};
+
 export const identicon = (seed: string): Identicon => {
-  const bits = hash(seed);
+  // Hashed again, salted, until it fills between FEWEST and MOST cells (a few tries at most; past 64, as it is).
+  let bits = hash(seed);
+  for (let salt = 1; salt <= 64 && (filledCount(bits) < FEWEST || filledCount(bits) > MOST); salt++) bits = hash(`${seed}#${salt}`);
   const cells = Array.from({ length: 15 }, (_, at) => ((bits >>> at) & 1) === 1);
-  // Never blank: the middle cell, which no mirror doubles.
-  if (!cells.some(Boolean)) cells[7] = true;
-  return { cells, hue: hash(`${seed}#hue`) % 360 };
+  return { cells, hue: (hash(`${seed}#hue`) % HUES) * (360 / HUES) };
 };
 
 /** Whether the cell at `row`, `column` (0–4 each) is filled. */

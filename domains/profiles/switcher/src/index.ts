@@ -4,7 +4,7 @@ import { definePlugin } from "@lemma/core";
 import { Channels, Paths, serveChannel } from "@lemma/contracts";
 import { readDiscovery } from "@lemma/contracts/discovery";
 import type { Discovery } from "@lemma/contracts/discovery";
-import { DEFAULT_PROFILE, profileNameProblem } from "@lemma/contracts/profiles";
+import { DEFAULT_PROFILE, isDefaultProfile, profileNameProblem } from "@lemma/contracts/profiles";
 import { createProfile, listProfiles, portOf, readAvatar, readTitle, removeProfile, writeAvatar, writeTitle } from "@lemma/profiles/local";
 import type { ProfileEntry } from "@lemma/profiles/local";
 import { ProfileChannels, PROFILES_CONTRACT } from "@lemma/profiles";
@@ -44,7 +44,8 @@ const STOP_TIMEOUT: Duration.Input = "60 seconds";
  * The profiles on this machine, for clients: lists them (`profiles.list`), opens one (`profiles.open`), starting its
  * host as `lemma serve --detach` does when none runs, makes one (`profiles.create`), renames one and changes its
  * picture (`profiles.rename`, `profiles.set-avatar`), stops one's host (`profiles.stop`), and deletes one
- * (`profiles.remove`). Its web half switches between them, and only shows itself once there is more than one.
+ * (`profiles.remove`). Its web half manages them in Settings › Profiles, and switches between them once there is more
+ * than one.
  */
 export default definePlugin({
   id: "profiles.switcher",
@@ -119,30 +120,30 @@ export default definePlugin({
 
     /**
      * Runs `lemma stop --force` for `entry`, which stops its host whoever started it (the desktop app, a service), and
-     * waits for it to exit. Not this host's own, which answers.
+     * waits for it to exit. Not this host's own, which answers. Holds no permit: run it under `changing`.
      */
-    const stop = (entry: ProfileEntry): Effect.Effect<void, ProfileUnavailable> => {
+    const stopping = (entry: ProfileEntry): Effect.Effect<void, ProfileUnavailable> => {
       if (entry.name === own)
         return Effect.fail(new ProfileUnavailable({ reason: "Current", message: `This is the host for "${entry.name}", which cannot stop itself from here` }));
       const notStopped = (why: string) => new ProfileUnavailable({ reason: "NotStopped", message: `The host for "${entry.name}" did not stop: ${why}` });
-      return changing.withPermits(1)(
-        Effect.gen(function* () {
-          if ((yield* readDiscovery(entry.home)) === undefined) return;
-          const cli = owner.config.cli;
-          if (cli === undefined)
-            return yield* new ProfileUnavailable({
-              reason: "NotStopped",
-              message: `Stop the host for "${entry.name}" with \`lemma --profile ${entry.name} stop\``,
-            });
-          const said = yield* lemma(cli, entry, "stop --force --json", STOP_TIMEOUT, notStopped);
-          if ((yield* readDiscovery(entry.home)) === undefined) return;
-          return yield* new ProfileUnavailable({ reason: "NotStopped", message: `The host for "${entry.name}" did not stop${saying(said)}` });
-        }),
-      );
+      return Effect.gen(function* () {
+        if ((yield* readDiscovery(entry.home)) === undefined) return;
+        const cli = owner.config.cli;
+        if (cli === undefined)
+          return yield* new ProfileUnavailable({
+            reason: "NotStopped",
+            message: `Stop the host for "${entry.name}" with \`lemma --profile ${entry.name} stop\``,
+          });
+        const said = yield* lemma(cli, entry, "stop --force --json", STOP_TIMEOUT, notStopped);
+        if ((yield* readDiscovery(entry.home)) === undefined) return;
+        return yield* new ProfileUnavailable({ reason: "NotStopped", message: `The host for "${entry.name}" did not stop${saying(said)}` });
+      });
     };
 
-    const find = (name: string) =>
+    /** The profile `asked` names: `default`, or `core` in any case, is the default's (`isDefaultProfile`). */
+    const find = (asked: string) =>
       Effect.gen(function* () {
+        const name = isDefaultProfile(asked) ? DEFAULT_PROFILE : asked;
         const problem = name === DEFAULT_PROFILE ? undefined : profileNameProblem(name);
         if (problem !== undefined) return yield* new ProfileUnavailable({ reason: "Name", message: problem });
         const entry = (yield* listProfiles(paths.root)).find((candidate) => candidate.name === name);
@@ -162,7 +163,7 @@ export default definePlugin({
           const entry = yield* find(name);
           // Its own: this host, which answers.
           const running = entry.running ?? (yield* start(entry));
-          return { name, url: running.url, port: Number(new URL(running.url).port), token: running.token };
+          return { name: entry.name, url: running.url, port: Number(new URL(running.url).port), token: running.token };
         }),
       ),
     );
@@ -175,7 +176,7 @@ export default definePlugin({
       serveChannel(ProfileChannels.rename, ({ name, title }) =>
         Effect.gen(function* () {
           const entry = yield* find(name);
-          yield* writeTitle(entry.home, title);
+          yield* writeTitle(entry.home, title, { default: entry.name === DEFAULT_PROFILE });
           return yield* infoOf(entry);
         }),
       ),
@@ -184,7 +185,7 @@ export default definePlugin({
       Channels,
       serveChannel(ProfileChannels.stop, ({ name }) =>
         Effect.gen(function* () {
-          yield* stop(yield* find(name));
+          yield* changing.withPermits(1)(Effect.flatMap(find(name), stopping));
           return yield* infoOf(yield* find(name));
         }),
       ),
@@ -193,16 +194,20 @@ export default definePlugin({
       Channels,
       serveChannel(ProfileChannels.remove, ({ name }) =>
         Effect.gen(function* () {
-          if (name === DEFAULT_PROFILE)
+          if (isDefaultProfile(name))
             return yield* new ProfileUnavailable({
               reason: "Name",
               message: `The default profile is this machine's home itself (${paths.root}), which is never deleted`,
             });
           if (name === own)
             return yield* new ProfileUnavailable({ reason: "Current", message: `"${name}" is the profile of this host: delete it from another profile` });
-          const entry = yield* find(name);
-          yield* stop(entry);
-          yield* removeProfile(paths.root, name);
+          // Stopped and deleted under one permit, so no `profiles.open` starts its host again in between.
+          yield* changing.withPermits(1)(
+            Effect.gen(function* () {
+              yield* stopping(yield* find(name));
+              yield* removeProfile(paths.root, name);
+            }),
+          );
         }),
       ),
     );

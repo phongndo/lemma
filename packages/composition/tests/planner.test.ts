@@ -79,40 +79,6 @@ describe("planComposition", () => {
     expect(messages(plan({ rows: { renamed: { required: true } } }), "error")).toEqual([`"renamed" is required, but no plugin has that id`]);
   });
 
-  test("applies a row under a plugin's former id to it, beneath a row of its own, and says to rename it", () => {
-    const renamed = definePlugin({
-      id: "model",
-      formerly: ["llm"],
-      provides: [Llm],
-      config: Schema.Struct({ model: Schema.optional(Schema.String), effort: Schema.optional(Schema.String) }),
-      layer: Layer.succeed(Llm, "model"),
-    });
-    const planned = plan({ bundled: [renamed, agent, compaction, transport], rows: { llm: { enabled: false, config: { model: "big", effort: "low" } } } });
-    expect(planned.composition.plugins.model).toEqual({ enabled: false, config: { model: "big", effort: "low" } });
-    expect(messages(planned, "warning")).toContain(`The row for "llm" applies to "model", its id since a rename`);
-    expect(messages(planned, "warning").some((message) => message.includes("names no plugin"))).toBe(false);
-    // Its own row wins, `config` key by key, so a setting edited under the new id keeps the others.
-    const both = plan({
-      bundled: [renamed, agent, compaction, transport],
-      rows: { llm: { enabled: false, config: { model: "big", effort: "low" } }, model: { enabled: true, config: { effort: "high" } } },
-    });
-    expect(both.composition.plugins.model).toEqual({ enabled: true, config: { model: "big", effort: "high" } });
-    // The other app says it when it checks the plugin's config.
-    expect(
-      plan({ bundled: [renamed, agent, compaction, transport], rows: { llm: { config: { model: "big" } } }, keysCheckedElsewhere: (id) => id === "model" })
-        .diagnostics,
-    ).toEqual([]);
-  });
-
-  test("a file's plugin with a bundled plugin's former id replaces it still, and is told its new id", () => {
-    const renamed = definePlugin({ id: "model", formerly: ["llm"], provides: [Llm], layer: Layer.succeed(Llm, "model") });
-    const mine = definePlugin({ id: "llm", provides: [Llm], layer: Layer.succeed(Llm, "mine") });
-    const planned = plan({ bundled: [renamed, agent, compaction, transport], local: [{ plugin: mine, source: "user" }], rows: { llm: { config: {} } } });
-    expect(planned.known.map(({ plugin }) => plugin.id)).toEqual(["agent", "compaction", "transport", "llm"]);
-    expect(planned.known.find(({ plugin }) => plugin.id === "llm")).toMatchObject({ source: "user", shadows: true });
-    expect(messages(planned, "warning")).toEqual([`"llm" replaces "model", its id since a rename`]);
-  });
-
   test("a required plugin that a row leaves unable to load is an error, not a warning", () => {
     // `compaction` needs `agent`, which a row turns off: required, it must not quietly stay unloaded.
     const halted = plan({ rows: { compaction: { required: true }, agent: { enabled: false } } });

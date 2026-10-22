@@ -3,10 +3,9 @@ import { MAX_TITLE_LENGTH, ProfileChannels, profileNameFor, profilePage, profile
 import type { AvatarChange, ProfileAvatar, ProfileInfo } from "@lemma/profiles";
 import { Dialogs, Layers } from "@lemma/frame";
 import { SettingsGroups, SettingsMenu, SettingsRoute, SettingsSections } from "@lemma/settings";
-import { Dialog, LaptopIcon, PlusIcon, Popover } from "@lemma/look";
+import { Dialog, filled, identicon, LaptopIcon, PlusIcon, Popover } from "@lemma/look";
 import { copyAndTell } from "@lemma/web/clipboard";
 import { Client, Notify, Router, Slots, defineWebPlugin } from "@lemma/web";
-import { patternOf, randomSeed } from "./pattern.ts";
 import styles from "./web.css?inline";
 
 const SECTION = "profiles";
@@ -29,13 +28,38 @@ const PICTURE_SIZE = 128;
 /** What a profile is called when it was given no name: Core for the default, else its name in words. */
 const ownTitle = (profile: ProfileInfo) => profileTitle({ name: profile.name, default: profile.default });
 
-/** A pattern, as an SVG of its filled cells in its hue (`--profile-hue-<n>`), inset so a circle holds it whole. */
+/** A seed no profile is likely to have had: for a pattern of its own. */
+const randomSeed = (): string => Array.from(crypto.getRandomValues(new Uint8Array(6)), (byte) => byte.toString(16).padStart(2, "0")).join("");
+
+/** Rows and columns of a pattern. */
+const CELLS = [0, 1, 2, 3, 4];
+
+/**
+ * A pattern: the seed's identicon (`identicon` in `@lemma/look`), as GitHub draws an account with no picture, its cells
+ * in the seed's hue (`--profile-hue`), inset so a circle holds it whole. Drawn apart from the `avatar` part's tile, which
+ * a circle would cut; its cells follow its seed (`<Show>`), as `<For>`'s rows are drawn once.
+ */
 function PatternImage(props: { seed: string }) {
-  const pattern = createMemo(() => patternOf(props.seed));
-  const filled = () => pattern().cells.flatMap((on, index) => (on ? [index] : []));
+  const picture = createMemo(() => identicon(props.seed));
   return (
-    <svg class={`profiles-pattern profiles-hue-${pattern().hue}`} viewBox="-1.25 -1.25 7.5 7.5" shape-rendering="crispEdges" aria-hidden="true">
-      <For each={filled()}>{(index) => <rect x={index % 5} y={Math.floor(index / 5)} width="1" height="1" fill="currentColor" />}</For>
+    <svg
+      class="profiles-pattern"
+      viewBox="-1.25 -1.25 7.5 7.5"
+      style={{ "--profile-hue": String(picture().hue) }}
+      shape-rendering="crispEdges"
+      aria-hidden="true"
+    >
+      <For each={CELLS}>
+        {(row) => (
+          <For each={CELLS}>
+            {(column) => (
+              <Show when={filled(picture(), row, column)}>
+                <rect x={column} y={row} width="1" height="1" fill="currentColor" />
+              </Show>
+            )}
+          </For>
+        )}
+      </For>
     </svg>
   );
 }
@@ -98,7 +122,7 @@ function MenuItem(props: { label: string; close: () => void; run: () => void; da
  * window of its own in the desktop app, else a tab at that profile's address, its host started when none runs.
  * Settings › Profiles lists them, a row each: its picture, its name, opening it, and its menu (renaming it, stopping
  * its host, copying how to reach it, deleting it); and makes another. A profile's avatar is a pattern its name makes
- * (`pattern.ts`), until another pattern or a picture of its own is chosen.
+ * (`PatternImage`), until another pattern or a picture of its own is chosen.
  */
 export default defineWebPlugin({
   id: "profiles.switcher",
@@ -353,7 +377,7 @@ export default defineWebPlugin({
             const state = () => {
               if (stopping() === profile().name) return "Stopping…";
               if (opening() === profile().name && !profile().running) return "Starting…";
-              if (profile().current) return "This one";
+              if (profile().current) return "Current";
               return profile().running ? "Running" : "Stopped";
             };
             return (
@@ -363,7 +387,7 @@ export default defineWebPlugin({
                   <Show when={editing()} fallback={<span class="profiles-name">{profileTitle(profile())}</span>}>
                     <NameField profile={profile()} done={() => setEditing(false)} />
                   </Show>
-                  <span class="profiles-desc">{profile().default ? state() : `${state()} · --profile ${profile().name}`}</span>
+                  <span class="profiles-desc">{state()}</span>
                 </span>
                 <Show when={!profile().current}>
                   <button class="button small profiles-action" disabled={opening() === profile().name} onClick={() => open(profile().name)}>
@@ -450,15 +474,15 @@ export default defineWebPlugin({
           title(),
           profiles().map((profile) => profile.name),
         );
-      const wrong = () => titleProblem(title());
+      const wrong = () => titleProblem(title(), { default: false });
       const make = plugin.action("create profile", async () => {
         const wanted = title().trim();
         if (wanted === "" || wrong() !== undefined || busy()) return;
         setBusy(true);
         setProblem(undefined);
         try {
-          const made = await client.channel.call(ProfileChannels.create, { name: name(), title: wanted });
-          notify.toast({ level: "info", message: `Made ${profileTitle(made)}` });
+          // Its new row says it was made.
+          await client.channel.call(ProfileChannels.create, { name: name(), title: wanted });
           props.close();
         } catch (error) {
           setProblem(messageOf(error));
@@ -503,13 +527,7 @@ export default defineWebPlugin({
           </form>
           <Show
             when={problem() ?? wrong()}
-            fallback={
-              <p class="profiles-dialog-text muted">
-                <Show when={title().trim() !== ""} fallback="A separate Lemma with its own plugins, look, threads, and logins.">
-                  <code>lemma --profile {name()}</code>
-                </Show>
-              </p>
-            }
+            fallback={<p class="profiles-dialog-text muted">A separate Lemma with its own plugins, look, threads, and logins.</p>}
           >
             {(text) => <p class="profiles-dialog-text profiles-problem">{text()}</p>}
           </Show>

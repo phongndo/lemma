@@ -47,11 +47,18 @@ describe("a profile's name", () => {
     expect(titleProblem("x".repeat(61))).toBeDefined();
   });
 
+  it("is Core for the default alone, as `--profile core` is", () => {
+    expect(titleProblem(" core ", { default: false })).toBe("Core is the default profile's name");
+    expect(titleProblem("Core", { default: true })).toBeUndefined();
+    expect(titleProblem("Core desk", { default: false })).toBeUndefined();
+  });
+
   it("makes a new profile's command-line name, numbered past those taken", () => {
     expect(profileNameFor("Trading Desk 📈", [])).toBe("trading-desk");
     expect(profileNameFor("Café Société", [])).toBe("cafe-societe");
     expect(profileNameFor("Research", ["default", "research", "research-2"])).toBe("research-3");
     expect(profileNameFor("Default", ["default"])).toBe("default-2");
+    expect(profileNameFor("Core", ["default"])).toBe("core-2");
     expect(profileNameFor("📈", [])).toBe("profile");
     expect(profileNameFor("a".repeat(80), [])).toMatch(/^a{36}$/);
     for (const title of ["Trading Desk 📈", "  --x--  ", "Ünïcödé", "a".repeat(80)]) expect(profileNameFor(title, [])).toMatch(/^[a-z0-9][a-z0-9_-]{0,39}$/);

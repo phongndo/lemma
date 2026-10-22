@@ -6,14 +6,13 @@ import { CheckIcon, ChevronDownIcon, Popover, SettingRow, SlidersIcon } from "@l
 import { SectionIds, SettingsGroups } from "@lemma/settings";
 import { Client, Slots, defineWebPlugin } from "@lemma/web";
 import { load, save } from "@lemma/web/storage";
-import { ModeChannels, MODES_PLUGIN, MODES_PLUGIN_FORMERLY, offeredFor } from "@lemma/agent";
+import { ModeChannels, MODES_PLUGIN, offeredFor } from "@lemma/agent";
 import type { ModeInfo } from "@lemma/agent";
 import { firstMode, RENAMED } from "./mode.ts";
 import styles from "./web.css?inline";
 
-/** The mode a new thread starts with, kept in this browser; before modes were named so, under `lemma.profiles.next`. */
+/** The mode a new thread starts with, kept in this browser. */
 const NEXT_KEY = "lemma.modes.next";
-const FORMER_NEXT_KEY = "lemma.profiles.next";
 
 /** A mode's name as the picker shows it: `work` is Work. */
 const titled = (name: string) => name.charAt(0).toUpperCase() + name.slice(1);
@@ -28,7 +27,6 @@ const isThinking = (value: string | undefined): value is ThinkingLevel => value 
  */
 export default defineWebPlugin({
   id: MODES_PLUGIN,
-  formerly: [MODES_PLUGIN_FORMERLY],
   styles,
   requires: { client: Client, threads: Threads, models: Models, slots: Slots },
   setup: ({ client, threads, models, slots }, plugin) => {
@@ -36,7 +34,7 @@ export default defineWebPlugin({
     const [all, setAll] = createSignal<readonly ModeInfo[]>([]);
     const modes = createMemo(() => all().filter((mode) => offeredFor(mode, "thread")));
     const [fallback, setFallback] = createSignal<string | undefined>(undefined);
-    const [next, setNext] = createSignal<string | undefined>(load(NEXT_KEY) ?? load(FORMER_NEXT_KEY));
+    const [next, setNext] = createSignal<string | undefined>(load(NEXT_KEY));
 
     const cwd = createMemo(() => threads.active()?.cwd ?? threads.pendingCwd());
     createEffect(

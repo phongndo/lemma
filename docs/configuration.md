@@ -158,8 +158,7 @@ look, threads, and logins, in a home of its own, served by a host of its own.
 Make one when what differs is the plugins or the interface, a coding agent
 beside a research desk; when it is the same app with another agent, that is a
 mode ([agent.modes](../domains/agent/modes/README.md)). Until you make one
-there is only the default, `~/.lemma` itself, shown as Core, and nothing about
-profiles shows.
+there is only the default, `~/.lemma` itself, shown as Core.
 
 ```sh
 lemma profile create research    # an empty home, ~/.lemma/profiles/research, with a port of its own
@@ -169,32 +168,37 @@ lemma profile                    # the profiles, their ports, and which hosts ru
 
 - **Where.** `<home>/profiles/<name>/`, laid out as the home is: its own
   `config.jsonc`, `plugins/`, sessions, `auth.json`, and `trustedProjects`.
-  Its `profile.json` keeps the port its host listens on unless its config
-  names another, so its address stays the same, and with it what a browser
-  keeps for the address.
+  `<home>/profiles/` holds profiles and nothing else. A profile's
+  `profile.json` keeps the port its host listens on unless its config names
+  another, so its address stays the same, and with it what a browser keeps
+  for the address.
 - **Which one.** `--profile <name>` for one command, `LEMMA_PROFILE` for
-  every command and host started from that shell; `default`, or unset, is the
-  home's own. A host's tools run `lemma` in their own profile. The desktop app
-  opens its first window on `LEMMA_PROFILE`'s profile, and another profile in
-  a window of its own.
+  every command and host started from that shell; `default`, `core` in any
+  case, or unset, is the home's own. A host's tools run `lemma` in their own
+  profile. The desktop app opens its first window on `LEMMA_PROFILE`'s
+  profile, and another profile in a window of its own.
 - **Nothing is shared.** Not plugins, rows, logins, threads, or trusted
   projects: a new profile starts as a fresh install does. Link a plugin file
   or folder into each profile's `plugins/` to run it in each; log in from the
   profile, or set the provider's API key variable where its host starts, to
   use the same provider.
-- **Switching.** Once there is more than one, the web app's sidebar shows the
-  profile a page is as an avatar icon, as a browser does: a pattern made from
-  its name until you choose another or a picture of your own. Its menu opens
-  another, starting its host when none runs; Settings › Profiles makes,
-  renames, stops, and deletes them
+- **Names.** A profile's name (`research`: lowercase letters, digits, `-` and
+  `_`) is its folder's and what `--profile` takes, and never changes. The name
+  it is shown by is any text on one line, at most 60 characters, kept in its
+  home's `title.json`; without one, it is its name in words (`trading-desk` is
+  Trading desk), and the default's is Core. Core is the default's alone:
+  `--profile core` is the default, and no other profile is named or shown so.
+- **Settings › Profiles** lists them, makes one (named from what it is to be
+  shown by), and renames, stops, and deletes them. Once there is more than
+  one, the web app's sidebar shows the profile a page is as its avatar, as a
+  browser does, and its menu opens another, starting its host when none runs
   ([profiles.switcher](../domains/profiles/switcher/README.md)). A profile on
   a server is reached at its own port ([remote access](remote.md#profiles)).
-- **Names.** A profile's name (`research`) is its folder's and what
-  `--profile` takes, and never changes. Settings › Profiles gives it any other
-  name to be shown by, the default's too.
-- **Removing.** Settings › Profiles deletes one, stopping its host first;
-  `lemma profile remove <name>` does once its host is stopped. The default,
-  the home the others live in, is never deleted.
+- **Removing.** `lemma profile remove <name>` or Settings › Profiles deletes
+  one and everything in its home, stopping its host first, whoever started
+  it. A user service that starts its host (`lemma --profile <name> service`)
+  stays: uninstall it first. The default, the home the others live in, is
+  never deleted.
 
 Profiles keep work apart; they do not keep it safe from each other. Every
 host runs as you, so one profile's tools (a shell) can read another's files,

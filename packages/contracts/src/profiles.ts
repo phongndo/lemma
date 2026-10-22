@@ -18,10 +18,13 @@ export const DEFAULT_PROFILE = "default";
 export const profileNameProblem = (name: string): string | undefined =>
   /^[a-z0-9][a-z0-9_-]{0,39}$/.test(name) ? undefined : `"${name}" is no profile name: use lowercase letters, digits, - and _ (at most 40)`;
 
-/** The profile `LEMMA_PROFILE` names; undefined for the default (unset, blank, or `default`). Not checked: see `profileNameProblem`. */
+/** Whether `name` is the default's: `default`, or `core` in any case (shown as Core), so no other profile takes it. */
+export const isDefaultProfile = (name: string): boolean => name === DEFAULT_PROFILE || name.toLowerCase() === "core";
+
+/** The profile `LEMMA_PROFILE` names; undefined for the default (unset, blank, or `isDefaultProfile`). Not checked: see `profileNameProblem`. */
 export const profileOf = (env: Readonly<Record<string, string | undefined>>): string | undefined => {
   const name = env.LEMMA_PROFILE?.trim();
-  return name === undefined || name === "" || name === DEFAULT_PROFILE ? undefined : name;
+  return name === undefined || name === "" || isDefaultProfile(name) ? undefined : name;
 };
 
 /** The folder the profiles other than the default live in. */

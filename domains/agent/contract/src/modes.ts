@@ -10,12 +10,6 @@ import { defineChannel } from "@lemma/contracts";
 export const MODES_PLUGIN = "agent.modes";
 
 /**
- * The plugin's id before modes were named so (`agent.profiles`): the key older threads' `turn-start` events logged their
- * mode under, which `MODES_PLUGIN`'s reader takes too.
- */
-export const MODES_PLUGIN_FORMERLY = "agent.profiles";
-
-/**
  * Where a mode is offered: as a new thread's (`thread`, the Mode picker), as an agent's a thread hands a task to
  * (`agent`, `tools.delegate`'s `mode`), or both, which a mode naming neither is.
  */

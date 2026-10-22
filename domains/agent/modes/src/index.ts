@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url";
 import { Effect, Schema } from "effect";
 import { definePlugin, Events } from "@lemma/core";
 import { Channels, HostControl, Notice, Paths, resourcesOf, serveChannel } from "@lemma/contracts";
-import { AgentInputHook, AgentRequestHook, ModeChannels, MODES_PLUGIN, MODES_PLUGIN_FORMERLY, PromptSections } from "@lemma/agent";
+import { AgentInputHook, AgentRequestHook, ModeChannels, MODES_PLUGIN, PromptSections } from "@lemma/agent";
 import type { RequestDraft } from "@lemma/agent";
 import { Sessions } from "@lemma/sessions";
 import type { SessionEvent } from "@lemma/sessions";
@@ -27,10 +27,7 @@ export type Config = typeof Config.Type;
 const BUNDLED = fileURLToPath(new URL("../modes", import.meta.url));
 
 /** The id of the system prompt's section a mode is (`PromptSections`). */
-const SECTION = "profile";
-
-/** The folder modes were read from before they were named so: `<home>/profiles`, and a project's `.lemma/profiles`. */
-const FORMER_FOLDER = "profiles";
+const SECTION = "mode";
 
 /**
  * Reads the `.md` files of a directory as modes, caching each by its size and mtime, so finding a request's mode costs
@@ -65,14 +62,12 @@ const modeReader = () => {
  * section of the system prompt, and in `AgentRequestHook`'s `select` phase it keeps the tools and sections it allows
  * of what every `shape` handler offered. Found by the session's directory: bundled, then those plugins' packages bring
  * (`"resources": { "modes": "./modes" }`), then `~/.lemma/modes`, then the project's `.lemma/modes`, a later one of a
- * name winning; each of the last three also where modes were before they were named so (`profiles`), beneath the
- * new one, said once. Modes are data: they carry no code, and narrow what plugins offer, so a project's load as its
+ * name winning. Modes are data: they carry no code, and narrow what plugins offer, so a project's load as its
  * `AGENTS.md` and skills do. Each request reads the mode from its turn's branch, so a resumed turn keeps it and its
  * requests rebuild from the log.
  */
 export default definePlugin({
   id: MODES_PLUGIN,
-  formerly: [MODES_PLUGIN_FORMERLY],
   uses: ["lemma/agent@2"],
   config: Config,
   requires: { paths: Paths, host: HostControl, sessions: Sessions },
@@ -81,45 +76,18 @@ export default definePlugin({
     const events = yield* Events;
     const readDir = modeReader();
     const told = new Set<string>();
-    /** Says once that modes were found where they were kept before they were named so. */
-    const formerly = (where: string, move: string) =>
-      told.has(where)
-        ? Effect.void
-        : Effect.andThen(
-            Effect.sync(() => told.add(where)),
-            events.publish(Notice, {
-              level: "warning",
-              source: owner.id,
-              message: `Modes are read from ${where}, their folder before they were named so: ${move}`,
-            }),
-          );
-    /** The modes in `dir`, and those in the folder beside it they were kept in before (`former`), beneath them. */
-    const readBoth = (dir: string, former: string, source: Mode["source"]) =>
-      Effect.flatMap(
-        Effect.promise(() => Promise.all([readDir(former, source), readDir(dir, source)])),
-        ([old, current]) => Effect.as(old.length === 0 ? Effect.void : formerly(former, `move them to ${dir}`), [...old, ...current]),
-      );
     const load = (cwd: string) =>
       Effect.gen(function* () {
-        const plugins = yield* host.plugins;
-        const packs = yield* Effect.forEach(
-          [
-            ...resourcesOf(plugins, FORMER_FOLDER).map((entry) => ({ ...entry, former: true })),
-            ...resourcesOf(plugins, "modes").map((entry) => ({ ...entry, former: false })),
-          ],
-          ({ dir, source, former }) =>
-            Effect.flatMap(
-              Effect.promise(() => readDir(dir, source)),
-              (found) =>
-                Effect.as(
-                  former && found.length > 0 ? formerly(dir, `name it "modes", not "${FORMER_FOLDER}", in its package's "lemma.resources"`) : Effect.void,
-                  found,
-                ),
-            ),
+        const packs = resourcesOf(yield* host.plugins, "modes");
+        const found = yield* Effect.promise(() =>
+          Promise.all([
+            readDir(BUNDLED, "bundled"),
+            ...packs.map(({ dir, source }) => readDir(dir, source)),
+            readDir(path.join(paths.home, "modes"), "user"),
+            readDir(path.join(cwd, ".lemma", "modes"), "project"),
+          ]),
         );
-        const user = yield* readBoth(path.join(paths.home, "modes"), path.join(paths.home, FORMER_FOLDER), "user");
-        const project = yield* readBoth(path.join(cwd, ".lemma", "modes"), path.join(cwd, ".lemma", FORMER_FOLDER), "project");
-        return byName([...(yield* Effect.promise(() => readDir(BUNDLED, "bundled"))), ...packs.flat(), ...user, ...project]);
+        return byName(found.flat());
       });
     /**
      * The mode of a request's thread: the one its first turn logged (`firstMode`), kept for the thread, else the
@@ -144,8 +112,6 @@ export default definePlugin({
     yield* owner.add(
       PromptSections,
       {
-        // `profile`, its id from before modes were named so: a request extends the one before it, so another id would
-        // send every thread's mode again, as a section gone and another come (`prompt-update`).
         id: SECTION,
         text: ({ cwd, branch }) => Effect.map(active(cwd, branch), (mode) => (mode === undefined || mode.prompt === "" ? undefined : mode.prompt)),
       },

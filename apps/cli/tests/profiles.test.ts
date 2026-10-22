@@ -34,15 +34,22 @@ describe("profiles: separate Lemmas on this machine", () => {
     for (const argv of [
       ["profile", "create", "Desk"],
       ["profile", "create", "default"],
+      ["profile", "create", "core"],
       ["profile", "remove", "default"],
+      ["profile", "remove", "Core"],
       ["status", "--profile", "../up"],
     ])
       expect((await invoke(argv, root)).code, argv.join(" ")).toBe(ExitCode.usage);
+    // Core, as the default is shown, names it, in any case.
+    expect(JSON.parse((await invoke(["profile", "--profile", "Core", "--json"], root)).out).using).toBe("default");
+    expect(JSON.parse((await invoke(["config", "path", "--json"], root, "/", { LEMMA_PROFILE: "core" })).out)).toMatchObject({ home: root });
     expect((await invoke(["status"], root, "/", { LEMMA_PROFILE: "No Name" })).code).toBe(ExitCode.usage);
 
     // No terminal to ask at: nothing is deleted without --force.
     expect(JSON.parse((await invoke(["profile", "remove", "desk", "--json"], root)).err).error.code).toBe("NotConfirmed");
     expect(existsSync(join(root, "profiles", "desk"))).toBe(true);
+    // Not from inside it: an agent's shell under the desk host would stop that host.
+    expect(JSON.parse((await invoke(["profile", "remove", "desk", "--force", "--json"], root, "/", { LEMMA_PROFILE: "desk" })).err).error.code).toBe("Current");
     expect(JSON.parse((await invoke(["profile", "remove", "desk", "--force", "--json"], root)).out)).toMatchObject({ removed: true, name: "desk" });
     expect(existsSync(join(root, "profiles", "desk"))).toBe(false);
   });
@@ -125,5 +132,12 @@ describe("profiles: one opened from another's host", () => {
     });
     const tunnel = await invoke(["status", "--profile", "desk", "--json"], other);
     expect(JSON.parse(tunnel.err).error).toMatchObject({ code: "Unreachable", message: expect.stringContaining("loopback") });
+
+    // Deleting it stops its host first, as Settings › Profiles does.
+    const removed = await invoke(["profile", "remove", "desk", "--force", "--json"], lemma.home);
+    expect(removed.code, removed.err).toBe(ExitCode.ok);
+    expect(existsSync(deskHome)).toBe(false);
+    expect(() => process.kill(desk!.pid, 0)).toThrow();
+    desk = undefined;
   }, 60_000);
 });
