@@ -22,8 +22,10 @@ plugin could serve:
 - **This machine's host and setup:** `serve`, `stop`, `restart`, `logs`,
   `service`, `env`, `token`, `config`, `trust`, `profile`, `doctor`,
   `plugins check`. They need no host running.
-- **This lemma:** `version`, and `update`, which installs another release with
-  the installer the release carries ([updating](../../docs/installation.md#updating)).
+- **This lemma:** `version`, which says what installed it, and `update`, which
+  installs another release that way: with the installer the release carries,
+  or the package manager that installed it (`src/installers.ts`;
+  [updating](../../docs/installation.md#updating)).
 - **The runtime's:** `status`, `plugins`, `reload`, `kernel`, `inspectors`,
   `channels`, `events`, `questions`, `answer`, `dismiss`, `open`: what the host
   serves itself (`RuntimeRpcs`), whatever plugins run.
@@ -61,7 +63,7 @@ plugin shadows one.
   unless `--force`; a host the desktop app started is the app's to stop, one a
   service runs is stopped through the service manager. `restart` stops it as
   `stop` does and starts it again on this lemma: through the service manager,
-  whose definition names the `lemma` the installer links, or else in the
+  whose definition names the `lemma` the installer or package manager links, or else in the
   background, for the project and on the port it had. The host writes what it
   prints to `<home>/logs/host.log`, which `logs` reads.
 - **A plugin's command runs on the host.** It outlives a dropped connection

@@ -5,7 +5,8 @@ build, whether a newer release is out on its channel, and installing one
 ([versioning](../../docs/versioning.md), [installation](../../docs/installation.md#updating)).
 Its contract is [`@lemma/release`](contract/src/index.ts): the channels
 `ReleaseChannels`, and what they answer, with what a release is (`Build`,
-`Channel`) and `compareVersions`, which the `lemma` command shares.
+`Channel`), what installed it (`Installer`, and which of those `lemma update`
+replaces, `UPDATABLE`), and `compareVersions`, which the `lemma` command shares.
 
 | Plugin                        | Halves     | What it does                                                                                               |
 | ----------------------------- | ---------- | ---------------------------------------------------------------------------------------------------------- |

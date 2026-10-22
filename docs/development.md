@@ -288,10 +288,13 @@ Every build is a release, and stable is the one marked latest:
   it already. It numbers it the next patch in the minor version
   `apps/cli/package.json` names (`0.2.0` is `0.2`: `v0.2.0`, `v0.2.1`, …), builds every
   platform's archive on one runner and the desktop app made from each (macOS's
-  on a macOS runner), installs and runs each on its platform,
-  and publishes them as a GitHub prerelease with its installer, its notes
-  listing the pull requests since the release before. Nightlies a month old
-  that were not promoted are deleted, with their tags.
+  on a macOS runner), installs and runs each on its platform (with the
+  installer, npm's launcher, and Homebrew's formula, made for the files where
+  they are and installed from a tap of its own, and on macOS its cask too),
+  and publishes them as a GitHub prerelease with its installer and Homebrew's
+  formula and cask (`lemma.rb`, `lemma-cask.rb`, from `scripts/homebrew.ts`),
+  its notes listing the pull requests since the release before. Nightlies a
+  month old that were not promoted are deleted, with their tags.
 - **Promote** (`.github/workflows/promote.yml`), by hand, makes a nightly (the
   newest, or the version you give) the stable release: it marks it latest and
   not a prerelease, and rewrites its notes to cover everything since the last
@@ -299,7 +302,13 @@ Every build is a release, and stable is the one marked latest:
   stable one unless asked to roll back: then that release is the stable one
   again, for new installs; a stable user already on the newer one stays there
   until they go back by version (`lemma update 0.2.5`) or a newer release is
-  promoted.
+  promoted. Then the package managers that install stable releases get it:
+  npm's `lemma-harness` at its version (`packaging/npm`), or, published
+  already, tagged `latest` again; the Nix package's `nix/release.json`, built
+  and run, then committed to `main`; and Homebrew's tap, which takes up the
+  release's formula and cask within the hour, or at once when
+  `HOMEBREW_TAP_TOKEN` (a token that may dispatch phongndo/homebrew-tap's
+  workflows) lets Promote tell it.
 
 To ship a change: merge it, let a nightly carry it (or run the Nightly
 workflow), use that nightly yourself, then promote it:
@@ -312,3 +321,10 @@ one before back: `gh workflow run promote.yml -f version=0.2.5 -f rollback=true`
 
 The Nightly workflow attests each file's build provenance before publishing
 it ([verifying a release](installation.md#verifying-a-release)).
+
+npm publishes `lemma-harness` by trusted publishing: npm's settings for the
+package name `promote.yml` in this repository as its publisher, so Promote
+needs no token. A package's first publish comes before it has those settings,
+so it takes `NPM_TOKEN`, an npm token that may publish it, as a secret, which
+Promote uses while it is set; so does tagging a version published already
+`latest` again (a rollback), which trusted publishing does not cover.

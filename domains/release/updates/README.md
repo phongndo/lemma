@@ -2,9 +2,11 @@
 
 What this Lemma is, and updating it. Its host half serves `ReleaseChannels`
 ([`@lemma/release`](../contract/src/index.ts)) by asking the `lemma` command,
-which knows a release from a checkout and how to replace one: the one beside
-the host for what the host runs, and the one the installer links, the release
-installed last, for the channel to follow and what to install:
+which knows a release from a checkout, what installed it (the installer,
+Homebrew's formula or cask, mise, npm, Nix, or the desktop app's download), and
+how to replace one: the one beside the host for what the host runs, and the
+one the installer or package manager links, the release installed last, for
+the channel to follow and what to install:
 
 - `release.status` (`read`): what `lemma version` says (asked again until it
   answers, then kept), the channel, and what the last check found.
@@ -12,18 +14,23 @@ installed last, for the channel to follow and what to install:
   channel's newest release with what the host runs. A release installed by
   version follows no channel, and is offered none.
 - `release.update` (`change`): installs the channel's newest release, or the
-  version given (`lemma update`), and unless the host runs it already, once it
-  has answered, has the installer's `lemma` restart the host on it
+  version given (`lemma update`, the way this Lemma was installed), and unless
+  the host runs it already, once it has answered, has the `lemma` that update
+  names (the installer's or package manager's) restart the host on it
   (`lemma restart --force`), apart from the host so that it outlives it, its
-  output in `<home>/logs/restart.log`. One update runs at a time, until its
+  output in `<home>/logs/restart.log`. A host the desktop app runs, whose app
+  Homebrew's cask replaced, is not restarted: the update says to reopen the
+  app (`reopen`), which the page offers. One update runs at a time, until its
   restart stops the host or fails: a restart that fails before stopping the
   host leaves it running, which says why in its status (`restartError`) and a
-  notice.
+  notice. Nix's, and the desktop app from its download, it does not replace:
+  it fails `NotInstalled`, saying how to update them.
 
 It checks by itself a minute after the host starts, then every six hours, and
 says once per release, as a notice, when a newer one is out: the channel's
 newest, or a release a terminal installed since the host started, when that is
-newer, as updating would restart on it. A pinned install follows no channel,
+newer, as updating would restart on it; for one it cannot replace, with how to
+update it. A pinned install follows no channel,
 so it neither checks nor offers to. It adds
 `lemma doctor`'s Updates check, which asks now. Its web half is Settings ›
 About, whose badge says when an update is out ([updating](../../../docs/installation.md#updating)).
@@ -52,11 +59,18 @@ another RPC protocol counts too.
   with no host. Asking it keeps one way of doing each, and lets a user's
   replacement do the same with no more than a shell.
 - **A checkout updates with git.** Its status says it is one; it checks for
-  nothing and refuses to update (`Checkout`), as does a release the installer
-  did not install (`NotInstalled`).
+  nothing and refuses to update (`Checkout`), as does a release nothing
+  installed (`NotInstalled`).
+- **Each install updates its own way.** A package manager owns the files it
+  installed, so `lemma update` runs it (brew, mise, npm) rather than the
+  installer, and a package manager follows stable. Nix's is the user's
+  configuration's to change, and the desktop app from its download is
+  downloaded again: the check still says when a newer release is out, and how
+  to update.
 - **The channel is the install's.** The installer records it with each
   release, and `lemma update --channel` switches it, so it is not a setting
-  here: each install on a machine may follow its own.
+  here: each install on a machine may follow its own. A package manager's is
+  stable.
 - **Going back is asked for by version.** A channel whose newest is older
   than what runs (a stable release rolled back) offers nothing, as
   `lemma update` with no version installs nothing older: an update never

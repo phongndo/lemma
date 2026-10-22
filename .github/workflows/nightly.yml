@@ -3,8 +3,10 @@ name: Nightly
 # Publishes the newest commit on main that passed Check as the next release in its minor version
 # (docs/development.md#releases): `v0.2.7` after `v0.2.6`, a GitHub prerelease, which the installer's nightly channel
 # installs. Every platform's archive is built on one runner, and the desktop app made from each (macOS's on macOS),
-# then installed and run on its own platform (scripts/dist-check.ts, dist-desktop-check.ts). The Promote workflow
-# makes a nightly the stable release. Daily, and by hand; a day with nothing new on main publishes nothing.
+# then installed and run on its own platform (scripts/dist-check.ts, dist-desktop-check.ts), with the installer, npm's
+# lemma-harness, and Homebrew's formula, and on macOS its cask (scripts/homebrew.ts), which the release carries for the
+# tap. The Promote workflow makes a nightly the stable release. Daily, and by hand; a day with nothing new on main
+# publishes nothing.
 on:
   schedule:
     - cron: "41 5 * * *"
@@ -77,6 +79,13 @@ jobs:
       - run: nix develop .#desktop -c node scripts/dist-desktop.ts "dist/lemma-v$VERSION-linux-x64.tar.gz" "dist/lemma-v$VERSION-linux-arm64.tar.gz"
         env:
           VERSION: ${{ needs.resolve.outputs.version }}
+      # Every archive's checksum, which Homebrew's formula names: a job that has its own archive alone makes it too.
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: lemma-sums
+          path: dist/lemma-v*.tar.gz.sha256
+          if-no-files-found: error
+          retention-days: 7
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: lemma-darwin-arm64
@@ -123,6 +132,10 @@ jobs:
         with:
           name: lemma-${{ matrix.target }}
           path: dist
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: lemma-sums
+          path: dist
       - run: node scripts/dist-check.ts "dist/lemma-v$VERSION-$TARGET.tar.gz"
         env:
           VERSION: ${{ needs.resolve.outputs.version }}
@@ -140,6 +153,25 @@ jobs:
         env:
           VERSION: ${{ needs.resolve.outputs.version }}
           TARGET: ${{ matrix.target }}
+      # Homebrew's formula for these files where they are, from a tap of its own, as the tap's installs it: its style,
+      # its install and test, and that lemma says Homebrew installed it, so lemma update upgrades it with brew.
+      - uses: Homebrew/actions/setup-homebrew@dc7099b3e807f1e2ecc61f3ecabc840eedd5586a
+      - run: |
+          tap=$RUNNER_TEMP/tap
+          mkdir -p "$tap/Formula"
+          node scripts/homebrew.ts --version "$VERSION" --dist dist --base-url "file://$PWD/dist" --formula "$tap/Formula/lemma.rb"
+          git -C "$tap" init --quiet
+          git -C "$tap" add Formula
+          git -C "$tap" -c user.name=ci -c user.email=ci@example.invalid commit --quiet -m formula
+          brew tap lemma/test "$tap"
+          brew style lemma/test/lemma
+          brew install lemma/test/lemma
+          brew test lemma/test/lemma
+          "$(brew --prefix)/bin/lemma" version --json | tee "$RUNNER_TEMP/version.json"
+          grep -q '"installer": "homebrew"' "$RUNNER_TEMP/version.json"
+        env:
+          VERSION: ${{ needs.resolve.outputs.version }}
+          HOMEBREW_NO_AUTO_UPDATE: "1"
 
   # macOS's archive, checked as verify checks Linux's; then the desktop app made from it, on macOS as its disk image is,
   # signed ad hoc (scripts/dist-desktop.ts), and opened.
@@ -161,6 +193,10 @@ jobs:
         with:
           name: lemma-darwin-arm64
           path: dist
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: lemma-sums
+          path: dist
       - run: node scripts/dist-check.ts "dist/lemma-v$VERSION-darwin-arm64.tar.gz"
         env:
           VERSION: ${{ needs.resolve.outputs.version }}
@@ -171,6 +207,30 @@ jobs:
       - run: node scripts/dist-desktop-check.ts "dist/lemma-desktop-v$VERSION-darwin-arm64.dmg"
         env:
           VERSION: ${{ needs.resolve.outputs.version }}
+      # Homebrew's formula, as on Linux, then its cask: the app in Applications, and the lemma inside it on PATH, which
+      # says the cask installed it.
+      - uses: Homebrew/actions/setup-homebrew@dc7099b3e807f1e2ecc61f3ecabc840eedd5586a
+      - run: |
+          tap=$RUNNER_TEMP/tap
+          mkdir -p "$tap/Formula" "$tap/Casks"
+          node scripts/homebrew.ts --version "$VERSION" --dist dist --base-url "file://$PWD/dist" --formula "$tap/Formula/lemma.rb" --cask "$tap/Casks/lemma.rb"
+          git -C "$tap" init --quiet
+          git -C "$tap" add Formula Casks
+          git -C "$tap" -c user.name=ci -c user.email=ci@example.invalid commit --quiet -m formula
+          brew tap lemma/test "$tap"
+          brew style lemma/test
+          brew install --formula lemma/test/lemma
+          brew test lemma/test/lemma
+          "$(brew --prefix)/bin/lemma" version --json | tee "$RUNNER_TEMP/version.json"
+          grep -q '"installer": "homebrew"' "$RUNNER_TEMP/version.json"
+          brew uninstall --formula lemma/test/lemma
+          brew install --cask lemma/test/lemma
+          test -d /Applications/Lemma.app
+          "$(brew --prefix)/bin/lemma" version --json | tee "$RUNNER_TEMP/version.json"
+          grep -q '"installer": "homebrew-cask"' "$RUNNER_TEMP/version.json"
+        env:
+          VERSION: ${{ needs.resolve.outputs.version }}
+          HOMEBREW_NO_AUTO_UPDATE: "1"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: lemma-desktop-darwin-arm64
@@ -200,6 +260,13 @@ jobs:
           pattern: lemma-*
           merge-multiple: true
           path: dist
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+      # Homebrew's formula and cask for the release, from its checksums, which the tap takes up from a stable one.
+      - run: node scripts/homebrew.ts --version "$VERSION" --dist dist
+        env:
+          VERSION: ${{ needs.resolve.outputs.version }}
       - uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
         with:
           subject-path: |
@@ -223,7 +290,7 @@ jobs:
           notes=(--generate-notes)
           if [[ -n "$PREVIOUS" ]]; then notes+=(--notes-start-tag "$PREVIOUS"); fi
           gh release create "$TAG" --draft --prerelease --target "$SHA" --title "Lemma $TAG" "${notes[@]}"
-          gh release upload "$TAG" dist/*.tar.gz dist/*.dmg dist/*.AppImage dist/*.deb dist/*.sha256 scripts/install.sh
+          gh release upload "$TAG" dist/*.tar.gz dist/*.dmg dist/*.AppImage dist/*.deb dist/*.sha256 dist/lemma.rb dist/lemma-cask.rb scripts/install.sh
           gh release edit "$TAG" --draft=false
 
           cutoff=$(date -u -d '30 days ago' +%s)

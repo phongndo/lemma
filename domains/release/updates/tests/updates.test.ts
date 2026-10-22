@@ -51,6 +51,8 @@ const release = (fields: Record<string, unknown> = {}) => ({
   root: "/home/me/.local/share/lemma/releases/lemma-v0.2.7-linux-x64.AbC",
   commit: "a".repeat(40),
   built: "2026-10-21T05:41:00Z",
+  installer: "script",
+  update: "lemma update",
   channel: "nightly",
   link: join(dir, "link"),
   dataDir: "/home/me/.local/share/lemma",
@@ -274,6 +276,55 @@ describe("release.updates", () => {
     expect(notices).toContainEqual(
       expect.objectContaining({ level: "error", message: `Lemma 0.2.9 is installed, but the host did not restart on it: ${status?.restartError}` }),
     );
+  });
+
+  it("updates through the package manager that installed it, and restarts on the lemma that lemma update names", async () => {
+    const brew = { installer: "homebrew", update: "brew upgrade phongndo/tap/lemma", channel: "stable", dataDir: undefined };
+    await write("version.json", release(brew));
+    await write("check.json", checked("0.2.9", "stable"));
+    await write("update.json", { updated: true, version: "0.2.9", installer: "homebrew", command: join(dir, "lemma") });
+    const { status, result } = await withPlugin(({ channels }) =>
+      Effect.gen(function* () {
+        const status = (yield* resultOf(channels.check, undefined)) as ReleaseStatus;
+        return { status, result: (yield* resultOf(channels.update, {})) as UpdateResult };
+      }),
+    );
+    expect(status).toMatchObject({ updatable: true, channel: "stable", newest: "0.2.9", newer: true });
+    expect(result).toEqual({ version: "0.2.9", updated: true, restarting: true });
+    await settled(() => readFile(join(dir, "restarted"), "utf8"), undefined, 10_000);
+    expect(await asked()).toEqual(expect.arrayContaining(["link update --check --json", "link update --json", "lemma restart --force"]));
+  });
+
+  it("restarts the host on Homebrew's cask's new app when the host does not run in the app", async () => {
+    await write(
+      "version.json",
+      release({ installer: "homebrew-cask", update: "brew upgrade --cask phongndo/tap/lemma", channel: "stable", dataDir: undefined }),
+    );
+    await write("update.json", { updated: true, version: "0.2.9", reopen: true, command: join(dir, "link") });
+    expect(await withPlugin(({ channels }) => resultOf(channels.update, {}))).toEqual({ version: "0.2.9", updated: true, restarting: true });
+    await settled(() => readFile(join(dir, "restarted"), "utf8"), undefined, 10_000);
+    expect(await asked()).toContain("link restart --force");
+  });
+
+  it("tells of a newer release for Nix's, with how to update it, and replaces nothing", async () => {
+    const how = "update the flake input that brings Lemma (nix flake update lemma) and rebuild, or: nix profile upgrade lemma";
+    await write("version.json", release({ installer: "nix", update: how, channel: "stable", link: undefined, dataDir: undefined }));
+    await write("check.json", checked("0.2.9", "stable"));
+    const { status, update, outcome, notices } = await withPlugin(({ channels, doctor, notices }) =>
+      Effect.gen(function* () {
+        const status = (yield* resultOf(channels.check, undefined)) as ReleaseStatus;
+        const update = yield* Effect.flip(resultOf(channels.update, {}));
+        const outcome = yield* doctor;
+        yield* Effect.yieldNow;
+        return { status, update, outcome, notices };
+      }),
+    );
+    expect(status).toMatchObject({ updatable: false, channel: "stable", newest: "0.2.9", newer: true });
+    expect(update).toMatchObject({ reason: "NotInstalled", message: `This release was installed with Nix, so Lemma cannot replace it: ${how}` });
+    expect(outcome).toEqual({ status: "warn", message: "Lemma 0.2.9 is out on stable, and this is 0.2.7", fix: how });
+    expect(notices.map((notice) => notice.message)).toEqual([`Lemma 0.2.9 is out on stable, and this is 0.2.7: ${how}`]);
+    // With no lemma of its own linked, it asks the one beside the host.
+    expect(await asked()).toContain("lemma update --check --json");
   });
 
   it("leaves a checkout to git: nothing to check, and no update", async () => {

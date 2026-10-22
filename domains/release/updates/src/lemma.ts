@@ -22,8 +22,17 @@ export const CheckAnswer = Schema.Struct({
 });
 export type CheckAnswer = typeof CheckAnswer.Type;
 
-/** What `lemma update --json` answers: the release installed, and whether that took installing. */
-export const UpdateAnswer = Schema.Struct({ updated: Schema.Boolean, version: Schema.String });
+/**
+ * What `lemma update --json` answers: the release installed, whether that took installing, the `lemma` to restart the
+ * host with (the one the installer or package manager links, else the release's own), and whether the desktop app it
+ * is in was replaced (Homebrew's cask), which runs it once reopened.
+ */
+export const UpdateAnswer = Schema.Struct({
+  updated: Schema.Boolean,
+  version: Schema.String,
+  command: Schema.optional(Schema.String),
+  reopen: Schema.optional(Schema.Boolean),
+});
 
 /** What a failed `lemma` said: its JSON error's message on stderr, else what it printed. */
 const said = (stderr: string, code: number | null): { readonly code?: string; readonly message: string } => {

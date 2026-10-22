@@ -2,15 +2,15 @@ import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { Schema } from "effect";
-import { Channel } from "@lemma/release";
-import type { Build } from "@lemma/release";
+import type { Build, Channel } from "@lemma/release";
+import { installOf } from "./installers.ts";
+import type { Install } from "./installers.ts";
 
 /*
  * What this `lemma` is, and which release is newest: what `lemma version` shows, and what `lemma update` and
  * `lemma service install` act on (docs/versioning.md). A release's archive says what built it (`release.json`, from
- * scripts/dist.ts), and the installer what installed it (`install.json`, from scripts/install.sh); a checkout says
- * neither.
+ * scripts/dist.ts), and what installed it says so (`install.json`, from scripts/install.sh, Homebrew's formula, npm's
+ * launcher, or Nix), or where it lies does (installers.ts); a checkout says neither.
  */
 
 const lemmaRoot = resolve(fileURLToPath(new URL("../../..", import.meta.url)));
@@ -26,21 +26,21 @@ const readJson = (path: string): Record<string, unknown> | undefined => {
 
 const text = (value: unknown): string | undefined => (typeof value === "string" && value !== "" ? value : undefined);
 
-/** The `lemma` whose files are at `root`, this one's by default. A checkout's commit comes from git, which may say nothing. */
-export const readBuild = (root = lemmaRoot): Build => {
+/** Who installed the release at `root`, with what it recorded: `readBuild`'s, and the package manager's own command. */
+export const readInstall = (root: string, env: Readonly<Record<string, string | undefined>> = process.env): Install =>
+  installOf(root, readJson(join(root, "install.json")), env);
+
+/**
+ * The `lemma` whose files are at `root`, this one's by default, and who installed it (`installOf`, which reads
+ * `env` for Homebrew's prefix). A checkout's commit comes from git, which may say nothing.
+ */
+export const readBuild = (root = lemmaRoot, env: Readonly<Record<string, string | undefined>> = process.env): Build => {
   const node = process.versions.node;
   const release = readJson(join(root, "release.json"));
   const version = text(release?.version);
   if (version !== undefined) {
-    const install = readJson(join(root, "install.json"));
-    const channel = install?.channel;
-    const fields = {
-      commit: text(release?.commit),
-      built: text(release?.built),
-      channel: Schema.is(Channel)(channel) ? channel : undefined,
-      link: text(install?.link),
-      dataDir: text(install?.dataDir),
-    };
+    const { installer, update, channel, link, dataDir } = readInstall(root, env);
+    const fields = { commit: text(release?.commit), built: text(release?.built), installer, update, channel, link, dataDir };
     return { version, kind: "release", root, node, ...Object.fromEntries(Object.entries(fields).filter(([, value]) => value !== undefined)) };
   }
   const git = spawnSync("git", ["-C", root, "rev-parse", "HEAD"], { encoding: "utf8" });

@@ -4,7 +4,9 @@ name: Promote
 # installs, as GitHub's latest. Nothing is built: stable users get the files nightly users ran. Its notes are rewritten
 # to cover everything since the stable release before it. With rollback, an older release becomes the stable one again,
 # its notes as they were: new installs get it, and stable users already past it go back only by version
-# (`lemma update 0.2.5`).
+# (`lemma update 0.2.5`). Then the package managers that install stable releases get it: npm's lemma-harness, the Nix
+# package's release (nix/release.json, committed to main), and Homebrew's tap, told at once when HOMEBREW_TAP_TOKEN
+# lets it, else within the hour.
 on:
   workflow_dispatch:
     inputs:
@@ -31,8 +33,11 @@ jobs:
     timeout-minutes: 5
     permissions:
       contents: write
+    outputs:
+      tag: ${{ steps.promote.outputs.tag }}
     steps:
-      - shell: bash
+      - id: promote
+        shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
@@ -53,6 +58,7 @@ jobs:
             [[ "$ROLLBACK" == true ]] ||
               { echo "::error::$tag is older than the stable release, $stable: run with rollback to make it the stable release again"; exit 1; }
             gh release edit "$tag" --prerelease=false --latest
+            echo "tag=$tag" >> "$GITHUB_OUTPUT"
             echo "::notice::$tag is the stable release again, in place of $stable"
             exit 0
           fi
@@ -62,4 +68,107 @@ jobs:
           else
             gh release edit "$tag" --prerelease=false --latest
           fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
           echo "::notice::$tag is the stable release"
+
+  # npm's lemma-harness at the release's version, its launcher as the release's commit has it (packaging/npm), tagged
+  # latest: published by trusted publishing (npm's own setting for this workflow), or with NPM_TOKEN when that is set,
+  # as the first publish needs. One published already (a rollback, or a promotion again) is tagged latest again, which
+  # takes NPM_TOKEN. A release from before lemma-harness has none.
+  npm:
+    needs: promote
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      TAG: ${{ needs.promote.outputs.tag }}
+      NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.promote.outputs.tag }}
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+      - shell: bash
+        run: |
+          set -euo pipefail
+          version=${TAG#v}
+          if [[ "$(npm view "lemma-harness@$version" version 2>/dev/null || true)" == "$version" ]]; then
+            [[ -n "$NODE_AUTH_TOKEN" ]] || { echo "::warning::lemma-harness@$version is published: tag it latest by hand (npm dist-tag add lemma-harness@$version latest), or set NPM_TOKEN"; exit 0; }
+            npm dist-tag add "lemma-harness@$version" latest
+            exit 0
+          fi
+          [[ -d packaging/npm ]] || { echo "::notice::$TAG is from before lemma-harness"; exit 0; }
+          cd packaging/npm
+          cp ../../LICENSE .
+          npm version "$version" --no-git-tag-version
+          npm publish --provenance --access public
+          echo "::notice::Published lemma-harness@$version"
+
+  # The Nix package's release (nix/release.json): each platform's archive and its hash, from the release's checksums;
+  # built and run here before it is committed to main, which the flake's users then update to.
+  nix:
+    needs: promote
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: write
+    env:
+      TAG: ${{ needs.promote.outputs.tag }}
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: main
+      - uses: cachix/install-nix-action@448cde739abec1eaf0646249e3d25bb8d9bc7702 # v31.11.2
+      - shell: bash
+        run: |
+          set -euo pipefail
+          version=${TAG#v}
+          sums=$(mktemp -d)
+          gh release download "$TAG" --pattern 'lemma-v*.tar.gz.sha256' --dir "$sums"
+          hash() { nix hash convert --hash-algo sha256 --to sri "$(awk '{print $1}' "$sums/lemma-v$version-$1.tar.gz.sha256")"; }
+          archive() { printf '    "%s": {\n      "url": "https://github.com/%s/releases/download/%s/lemma-v%s-%s.tar.gz",\n      "hash": "%s"\n    }' "$1" "$GH_REPO" "$TAG" "$version" "$2" "$(hash "$2")"; }
+          {
+            printf '{\n  "version": "%s",\n  "archives": {\n' "$version"
+            archive aarch64-darwin darwin-arm64; printf ',\n'
+            archive aarch64-linux linux-arm64; printf ',\n'
+            archive x86_64-linux linux-x64; printf '\n'
+            printf '  }\n}\n'
+          } > nix/release.json
+          if git diff --quiet -- nix/release.json; then echo "::notice::nix/release.json is $TAG already"; exit 0; fi
+          nix build .#lemma
+          [[ "$(./result/bin/lemma --version)" == *"$version"* ]] || { echo "::error::The Nix package is not Lemma $version"; exit 1; }
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add nix/release.json
+          git commit -m "Nix: Lemma $TAG (nix/release.json)"
+          for _ in 1 2 3; do
+            git pull --rebase --quiet && git push && exit 0
+            sleep 5
+          done
+          exit 1
+
+  # Homebrew's tap (phongndo/homebrew-tap) takes up the release's formula and cask (scripts/homebrew.ts) every hour;
+  # told now, it does at once.
+  homebrew:
+    needs: promote
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          TAG: ${{ needs.promote.outputs.tag }}
+        run: |
+          if [[ -z "$GH_TOKEN" ]]; then
+            echo "::notice::No HOMEBREW_TAP_TOKEN; the tap takes up $TAG within the hour."
+            exit 0
+          fi
+          gh api --method POST repos/phongndo/homebrew-tap/dispatches -f event_type=lemma-release -f "client_payload[release_tag]=$TAG"

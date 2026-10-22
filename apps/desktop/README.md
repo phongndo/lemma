@@ -56,6 +56,10 @@ it reads beside its sources, as the icon, is in the archive (`scripts/dist.ts`).
   running (a host it started that exited, a start that failed) to
   `<home>/logs/desktop.log` (`lemma logs --desktop`); the host's own log is
   `lemma logs`.
+- **Reopening it on a new release.** Homebrew's cask replaces the app on
+  disk, which runs the new release once reopened: Settings › About offers
+  **Reopen Lemma** (`lemmaDesktop.relaunch()`), which quits as Quit does,
+  asking first what stopping its hosts cuts off, then opens the app again.
 - **Reload** (the button beside the connection dot) restarts the window's
   profile's host when the app started it, loading changed code (a turn it cuts
   off resumes), then reloads that profile's windows at their addresses. Any other host keeps running and re-reads its
