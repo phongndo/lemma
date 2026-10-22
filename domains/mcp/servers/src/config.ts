@@ -5,7 +5,7 @@ import { dirname, join } from "node:path";
 import { Schema } from "effect";
 import { McpServerConfig, SERVER_NAME } from "@lemma/mcp";
 import type { Exposure, McpServer, McpServerChange } from "@lemma/mcp";
-import { normalize } from "./form.ts";
+import { isObject, normalize } from "./form.ts";
 
 /**
  * A server as the plugin runs it: its entry, merged, and where it came from: the file, or a plugin (with the server as
@@ -28,7 +28,6 @@ export interface ServersFile {
 }
 
 const decodeEntry = Schema.decodeUnknownResult(McpServerConfig);
-const isObject = (value: unknown): value is Record<string, unknown> => typeof value === "object" && value !== null && !Array.isArray(value);
 
 /** pi's names for exposures it has and this plugin runs as code mode: `deferred` loads by search, which code mode's `searchTools` does. */
 /** One entry of `mcpServers`, decoded; anything another client keeps beside it (`alwaysAllow`, say) is ignored. */

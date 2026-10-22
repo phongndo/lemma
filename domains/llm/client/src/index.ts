@@ -3,7 +3,8 @@ import { HostError } from "@lemma/contracts";
 import { LlmChannels, ThinkingLevel } from "@lemma/llm";
 import type { AuthType, CustomProviderSpec, ModelInfo, ProviderInfo, SignIn } from "@lemma/llm";
 import { load, loadJson, loadStrings, recordOf, save } from "@lemma/web/storage";
-import { browserPlace, clampThinking, DEFAULT_THINKING, LLM_CONTRACT, Models, resolveModel, signInReturn } from "@lemma/llm/web";
+import { browserPlace } from "@lemma/credentials/web";
+import { clampThinking, DEFAULT_THINKING, LLM_CONTRACT, Models, resolveModel, signInReturn } from "@lemma/llm/web";
 import { Client, Notify, defineWebPlugin } from "@lemma/web";
 
 const MODEL_KEY = "lemma.model";

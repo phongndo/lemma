@@ -46,7 +46,8 @@ const statusOf = (error: unknown): number | undefined => {
 /** What went wrong, in words a person can act on. */
 export function describe(error: unknown, config: McpServerConfig): string {
   const status = statusOf(error);
-  if (status === 401 || status === 403)
+  const ownToken = Object.keys(config.headers ?? {}).some((header) => header.toLowerCase() === "authorization");
+  if ((status === 401 || status === 403) && ownToken)
     return `The server answered ${status}: it refused the token in the Authorization header. Check it, or remove the header to sign in instead.`;
   const code = (error as NodeJS.ErrnoException | undefined)?.code;
   if (code === "ENOENT" && config.command !== undefined) return `Command not found: ${config.command}`;
@@ -75,15 +76,15 @@ const retryable = (error: unknown): boolean => {
 };
 
 /**
- * Whether a remote server refused for want of a sign-in: Lemma holds none it accepts, the server says so, or it
- * needs a scope the sign-in lacks. A renewal that failed for now (`RenewalFailed`) is none of these.
+ * Whether a remote server refused for want of a sign-in: Lemma holds none it accepts, the server says so (`401`), or it
+ * needs a scope the sign-in lacks (a `403` whose `WWW-Authenticate` says `insufficient_scope`). Any other `403` is
+ * the server's refusal whoever signs in, and a renewal that failed for now (`RenewalFailed`) is none of these.
  */
 const refused = (error: unknown): boolean => {
   if (needsSignIn(error)) return true;
   const sdk = loadedSdk();
   if (sdk === undefined) return false;
-  const status = statusOf(error);
-  return sdk.UnauthorizedError.isInstance(error) || sdk.InsufficientScopeError.isInstance(error) || status === 401 || status === 403;
+  return sdk.UnauthorizedError.isInstance(error) || sdk.InsufficientScopeError.isInstance(error) || statusOf(error) === 401;
 };
 
 /**

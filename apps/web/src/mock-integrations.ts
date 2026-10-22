@@ -1,3 +1,4 @@
+import { svgSource } from "@lemma/look";
 import type { McpServerChange, McpServerConfig, McpServerStatus, McpState } from "@lemma/mcp";
 
 /*
@@ -15,9 +16,9 @@ const server = (status: Omit<McpServerStatus, "source" | "sourceKind" | "enabled
 });
 
 /** An icon of the user's own, an SVG file written into the entry as the add form does. */
-const NOTES_ICON = `data:image/svg+xml;base64,${btoa(
+const NOTES_ICON = svgSource(
   '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><rect x="3" y="2" width="18" height="20" rx="4" fill="#f5b83d"/><path d="M7 8h10M7 12h10M7 16h6" stroke="#7a4a00" stroke-width="2" stroke-linecap="round"/></svg>',
-)}`;
+);
 
 const SERVERS: readonly McpServerStatus[] = [
   server({

@@ -2,8 +2,8 @@ import type { Exposure, McpServerConfig } from "@lemma/mcp";
 import { SERVER_NAME } from "@lemma/mcp";
 
 /*
- * The web half's model of adding and editing a server: a command line as one string, name and value rows, entries
- * pasted from another client's config, and an SVG file as its icon. Pure, so it is tested without a page.
+ * The web half's model of adding and editing a server: a command line as one string, name and value rows, and entries
+ * pasted from another client's config. Pure, so it is tested without a page.
  */
 
 /** Splits a command line as a shell would split simple words: on spaces, with single and double quotes, and `\` escaping. */
@@ -38,6 +38,9 @@ export function splitCommand(line: string): string[] {
 export const joinCommand = (words: readonly string[]): string =>
   words.map((word) => (word === "" || /[\s"'\\]/.test(word) ? `"${word.replace(/(["\\])/g, "\\$1")}"` : word)).join(" ");
 
+/** Whether `value` is a JSON object: not `null`, and not an array. */
+export const isObject = (value: unknown): value is Record<string, unknown> => typeof value === "object" && value !== null && !Array.isArray(value);
+
 /** Name and value rows: blank rows dropped. */
 export type Rows = readonly { readonly name: string; readonly value: string }[];
 
@@ -50,47 +53,6 @@ const recordOf = (rows: Rows): Record<string, string> | undefined => {
 
 /** Whether `text` can be an icon: an `https:` address, or an image as a `data:` URL. */
 export const isImageAddress = (text: string): boolean => /^https:\/\/\S+$/.test(text) || /^data:image\/[a-z0-9.+-]+(;[^,]*)?,.+$/i.test(text);
-
-/** The largest SVG file an icon takes: it is written into `mcp.json`, as base64 a third larger. */
-export const MAX_SVG_BYTES = 32 * 1024;
-
-/** An SVG file's text without what draws nothing: its XML declaration, doctype, comments, and the space between tags. */
-const bareSvg = (svg: string) =>
-  svg
-    .replace(/^\uFEFF/, "")
-    .replace(/<\?xml[\s\S]*?\?>/g, "")
-    .replace(/<!DOCTYPE[^>]*>/gi, "")
-    .replace(/<!--[\s\S]*?-->/g, "")
-    .replace(/>\s+</g, "><")
-    .trim();
-
-/** What is wrong with an SVG file's text as an icon, if anything. */
-export const svgProblem = (svg: string): string | undefined => {
-  if (new TextEncoder().encode(svg).length > MAX_SVG_BYTES) return `An icon's SVG is at most ${MAX_SVG_BYTES / 1024} KB`;
-  const body = bareSvg(svg);
-  return /^<svg[\s>]/i.test(body) && /<\/svg>$/i.test(body) ? undefined : "That is not an SVG file";
-};
-
-/**
- * An SVG file's text as an icon's address: a base64 `data:` URL, which the page draws as an image (`<img>`), so scripts
- * and handlers in it do not run and its ids cannot clash with the page's.
- */
-export const svgIcon = (svg: string): string => {
-  let binary = "";
-  for (const byte of new TextEncoder().encode(bareSvg(svg))) binary += String.fromCharCode(byte);
-  return `data:image/svg+xml;base64,${btoa(binary)}`;
-};
-
-/** An icon that is an SVG written into the entry (`svgIcon`, or percent-encoded), as opposed to an address: how many bytes it holds. */
-export const svgBytes = (icon: string): number | undefined => {
-  const match = /^data:image\/svg\+xml(;[^,]*)?,(.*)$/s.exec(icon);
-  if (match === null) return undefined;
-  try {
-    return (match[1] ?? "").includes(";base64") ? atob(match[2]!).length : new TextEncoder().encode(decodeURIComponent(match[2]!)).length;
-  } catch {
-    return undefined;
-  }
-};
 
 const EXPOSURE_ALIASES: Readonly<Record<string, Exposure>> = { deferred: "codemode", "codemode-deferred": "codemode" };
 const exposureAlias = (value: unknown): unknown => (typeof value === "string" ? (EXPOSURE_ALIASES[value] ?? value) : value);
@@ -175,7 +137,6 @@ export function entryOf(draft: ServerDraft, base: McpServerConfig = {}): { reado
   return { entry: { ...kept, url, ...(headers === undefined ? {} : { headers }), ...description } };
 }
 
-const isObject = (value: unknown): value is Record<string, unknown> => typeof value === "object" && value !== null && !Array.isArray(value);
 const isEntry = (value: unknown): value is Record<string, unknown> =>
   isObject(value) && (typeof value["command"] === "string" || typeof value["url"] === "string");
 

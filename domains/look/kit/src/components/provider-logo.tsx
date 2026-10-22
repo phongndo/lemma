@@ -1,5 +1,6 @@
 import { Match, Show, Switch } from "solid-js";
-import { logoSource, providerBrand } from "@lemma/llm/web";
+import { providerBrand } from "@lemma/llm/web";
+import { svgSource } from "@lemma/look";
 import type { ProviderLogoProps } from "@lemma/llm/web";
 
 /**
@@ -21,7 +22,7 @@ export function ProviderLogo(props: ProviderLogoProps) {
     <span class="provider-mark" aria-hidden="true">
       <Switch fallback={<span class="provider-initial">{props.name.slice(0, 1).toUpperCase()}</span>}>
         {/* A custom provider's own file: an image, so nothing in it runs. */}
-        <Match when={props.custom}>{(svg) => <img class="provider-logo" src={logoSource(svg())} alt="" />}</Match>
+        <Match when={props.custom}>{(svg) => <img class="provider-logo" src={svgSource(svg())} alt="" />}</Match>
         {/* A bundled SVG file, not host data. */}
         <Match when={mono()}>{(svg) => <span class="provider-logo" innerHTML={svg()} />}</Match>
         <Match when={files()}>

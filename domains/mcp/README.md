@@ -10,10 +10,10 @@ Model Context Protocol servers: the tools they offer the model, and how a person
 
 What the contract offers in each of the [five shapes](../../docs/plugins.md#the-five-shapes):
 
-| Shape     | What the contract offers                                                                                                                                                                                                       |
-| --------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Add       | `McpServers`: a server a plugin brings, in the shape of an `mcp.json` entry with its name                                                                                                                                      |
-| Intercept | Nothing: a server's tool calls go through the tools domain's `ToolExecuteHook` and `Guards`, as every tool's do                                                                                                                |
-| Observe   | `McpChanged`: every server's state, whenever one connects, fails, changes, or the file does                                                                                                                                    |
-| Call      | `Mcp`: the servers' state, reconnect one, configure one, write or remove one's whole entry (`put`), sign in to one and out; clients call `McpChannels`, and agents' scripts `mcp.list` (read) and `mcp.sign-in` (asking first) |
-| Serve     | `Mcp`, with `serveMcp` for its channels: a plugin providing it replaces `mcp.servers`                                                                                                                                          |
+| Shape     | What the contract offers                                                                                                                                                                                                           |
+| --------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Add       | `McpServers`: a server a plugin brings, in the shape of an `mcp.json` entry with its name                                                                                                                                          |
+| Intercept | Nothing: a server's tool calls go through the tools domain's `ToolExecuteHook` and `Guards`, as every tool's do                                                                                                                    |
+| Observe   | `McpChanged`: every server's state, whenever one connects, fails, changes, or the file does                                                                                                                                        |
+| Call      | `Mcp`: the servers' state, reconnect one, configure one, write or remove one's whole entry (`put`), sign in to one and out; clients call `McpChannels`, and agents' scripts those [`tools.lemma`](../tools/lemma/README.md) offers |
+| Serve     | `Mcp`, with `serveMcp` for its channels: a plugin providing it replaces `mcp.servers`                                                                                                                                              |

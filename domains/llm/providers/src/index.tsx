@@ -4,7 +4,6 @@ import { Schema } from "effect";
 import { asksAnswer } from "@lemma/llm";
 import type { AuthType, ProviderInfo, SignIn } from "@lemma/llm";
 import {
-  logoProblem,
   customProviderSpec,
   describeProvider,
   fromEnv,
@@ -24,9 +23,9 @@ import { Settings, SettingsGroups, SettingsSections } from "@lemma/settings";
 import { ComposerNotices, ErrorActions } from "@lemma/threads";
 import type { ErrorActionProps } from "@lemma/threads";
 import { Notify, Slots, WebPlugins, defineWebPlugin } from "@lemma/web";
-import { CheckIcon, Dialog, FilterIcon, KeyIcon, PlusIcon, Popover, SearchField, Spinner } from "@lemma/look";
+import { CheckIcon, Dialog, FilterIcon, KeyIcon, pickSvg, PlusIcon, Popover, SearchField, Spinner } from "@lemma/look";
 import { ConnectDialog } from "./connect.tsx";
-import { CustomProviderDialog, pickSvg } from "./custom.tsx";
+import { CustomProviderDialog } from "./custom.tsx";
 import styles from "./providers.css?inline";
 
 const SECTION = "providers";
@@ -438,12 +437,12 @@ export default defineWebPlugin({
     });
     const setLogo = (provider: ProviderInfo, svg: string | undefined) => models.setLogo(provider, svg);
     const custom: CustomActions = {
-      changeLogo: (provider) =>
-        pickSvg((svg) => {
-          const problem = logoProblem(svg);
-          if (problem !== undefined) notify.toast({ level: "error", message: problem });
-          else setLogo(provider, svg).catch((error) => notify.report(error, "Could not save the logo"));
-        }),
+      changeLogo: plugin.action("change a logo", async (provider: ProviderInfo) => {
+        const picked = await pickSvg();
+        if (picked === undefined) return;
+        if ("problem" in picked) notify.toast({ level: "error", message: picked.problem });
+        else await setLogo(provider, picked.svg).catch((error) => notify.report(error, "Could not save the logo"));
+      }),
       removeLogo: (provider) => void setLogo(provider, undefined).catch((error) => notify.report(error, "Could not remove the logo")),
       remove: (provider) => void removeCustom(provider),
     };

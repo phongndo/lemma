@@ -3,7 +3,8 @@ import type { Accessor } from "solid-js";
 import { asksAnswer } from "@lemma/llm";
 import type { ProviderInfo, SignIn, SignInStep } from "@lemma/llm";
 import { copyText } from "@lemma/web/clipboard";
-import { browserPlace, providerBrand, timeLeft, ProviderLogo } from "@lemma/llm/web";
+import { browserPlace, SignInPaste } from "@lemma/credentials/web";
+import { providerBrand, timeLeft, ProviderLogo } from "@lemma/llm/web";
 import { usePlugin } from "@lemma/web";
 import { CopyButton, Dialog, ExternalIcon, Spinner } from "@lemma/look";
 
@@ -49,44 +50,6 @@ function Waiting(props: { text: string }) {
       <Spinner />
       <span>{props.text}</span>
     </p>
-  );
-}
-
-/**
- * A browser that cannot reach the host (on another machine) ends on a page that fails to load; its address finishes
- * the sign-in. Open from the start when this page itself came from another machine than the host.
- */
-function PasteFallback(props: { placeholder?: string | undefined; answer: (value: string) => void }) {
-  const [value, setValue] = createSignal("");
-  const submit = () => value().trim() !== "" && props.answer(value().trim());
-  return (
-    <details class="connect-paste" open={browserPlace(location.hostname) === "elsewhere"}>
-      <summary>Browser on another device?</summary>
-      <p>
-        After you approve, the browser may land on a page that doesn't load. That's expected: copy the page's address from the address bar and paste it here.
-      </p>
-      <form
-        class="connect-form"
-        onSubmit={(event) => {
-          event.preventDefault();
-          submit();
-        }}
-      >
-        <input
-          class="field"
-          type="text"
-          autocomplete="off"
-          spellcheck={false}
-          aria-label="The address the browser ended on"
-          placeholder={props.placeholder ?? "Paste the address"}
-          value={value()}
-          onInput={(event) => setValue(event.currentTarget.value)}
-        />
-        <button type="submit" class="button" disabled={value().trim() === ""}>
-          Continue
-        </button>
-      </form>
-    </details>
   );
 }
 
@@ -343,7 +306,7 @@ export function ConnectDialog(props: {
                   <span class="connect-hint">or copy the link into any browser</span>
                 </div>
                 <Waiting text="Waiting for you to approve in the browser" />
-                <Show when={browser().paste}>{(paste) => <PasteFallback placeholder={paste().placeholder} answer={answer} />}</Show>
+                <Show when={browser().paste}>{(paste) => <SignInPaste class="connect-paste" placeholder={paste().placeholder} submit={answer} />}</Show>
               </>
             )}
           </Match>

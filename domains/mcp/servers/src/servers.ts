@@ -59,6 +59,8 @@ export interface Options {
 }
 
 const RETRY_DELAYS_MS = [2_000, 5_000, 15_000, 30_000, 60_000, 120_000, 300_000];
+/** How long a connection stays up before the tries to connect again start over from the first delay. */
+const HELD_MS = 60_000;
 const SIGN_IN_TIMEOUT_MS = 10 * 60_000;
 
 /** A remote server Lemma signs in to, when it asks: one that does not send an `Authorization` header of its own. */
@@ -130,9 +132,11 @@ interface Entry {
   signInError: string | undefined;
   /** What the server said when it last refused, for the next sign-in. */
   challenge: Challenge | undefined;
-  /** The try to connect again that is waiting, and how many tries have failed since it last connected. */
+  /** The try to connect again that is waiting, and how many tries have failed since a connection last held. */
   retry: { readonly timer: ReturnType<typeof setTimeout>; readonly at: number } | undefined;
   attempts: number;
+  /** When its connection last connected, while it is up. */
+  connectedAt: number | undefined;
 }
 
 const enabled = (definition: Definition) => definition.error === undefined && definition.config.enabled !== false;
@@ -505,6 +509,7 @@ export class Servers {
           challenge: undefined,
           retry: undefined,
           attempts: 0,
+          connectedAt: undefined,
         };
         this.entries.set(definition.name, entry);
       }
@@ -547,8 +552,13 @@ export class Servers {
       {
         changed: () => {
           if (entry.connection !== connection) return;
-          if (connection.state === "connected") entry.attempts = 0;
-          else if (connection.state === "failed") this.retryLater(entry, connection);
+          if (connection.state === "connected") entry.connectedAt = Date.now();
+          else if (connection.state === "failed") {
+            // One that held a while starts over; one that drops as soon as it connects keeps waiting longer.
+            if (entry.connectedAt !== undefined && Date.now() - entry.connectedAt >= HELD_MS) entry.attempts = 0;
+            entry.connectedAt = undefined;
+            this.retryLater(entry, connection);
+          }
           this.publish();
         },
         challenged: (challenge) => this.heard(entry, challenge),
@@ -572,6 +582,7 @@ export class Servers {
   private async disconnect(entry: Entry): Promise<void> {
     const connection = entry.connection;
     entry.connection = undefined;
+    entry.connectedAt = undefined;
     this.cancelRetry(entry);
     entry.listed = [];
     entry.error = undefined;

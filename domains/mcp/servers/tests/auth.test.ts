@@ -14,8 +14,10 @@ import { ToolInvocation, ToolRunner } from "@lemma/tools";
 import { textOf } from "@lemma/tools/testing";
 import registry from "@lemma/tools-registry";
 import mcpServers from "../src/index.ts";
-import { callbackParams } from "../src/auth.ts";
+import { bearer, callbackParams, finishSignIn, newState, SignInStore, startSignIn } from "../src/auth.ts";
+import type { SignInTarget } from "../src/auth.ts";
 import { redact, secretsOf } from "../src/config.ts";
+import { Servers } from "../src/servers.ts";
 import { startOAuthServer } from "./fixtures/oauth.ts";
 import type { OAuthFixture, OAuthOptions } from "./fixtures/oauth.ts";
 
@@ -250,7 +252,7 @@ describe("renewing and replacing a sign-in", () => {
           yield* signIn;
           oauth.expire();
           // Both refused before the renewal answers: the second finds it under way.
-          const release = oauth.holdRefreshes();
+          const { release } = oauth.holdRefreshes();
           const before = oauth.counts.refusals;
           const calls = yield* Effect.forkChild(
             Effect.all([call("mcp__remote__echo", { text: "a" }), call("mcp__remote__echo", { text: "b" })], { concurrency: "unbounded" }),
@@ -285,6 +287,50 @@ describe("renewing and replacing a sign-in", () => {
 
           oauth.failRefreshes = false;
           expect(textOf(yield* call("mcp__remote__echo", { text: "now" }))).toBe("now");
+        }),
+      ),
+    );
+  });
+
+  it("needs signing in again when the authorization server no longer knows its client, registering no other on its own", async () => {
+    const oauth = await fixture();
+    await withCore({ remote: { url: oauth.url } }, (core) =>
+      core.run(
+        Effect.gen(function* () {
+          yield* until(is((server) => server.state === "needs-sign-in"));
+          yield* signIn;
+          oauth.forgetClients();
+          oauth.expire();
+          const refused = yield* call("mcp__remote__echo", { text: "x" });
+          expect(textOf(refused)).toContain('MCP server "remote" needs the person to sign in');
+          expect(oauth.counts.registrations).toBe(1);
+          yield* until(is((server) => server.state === "needs-sign-in"));
+          // A sign-in in the browser registers the client it needs.
+          yield* signIn;
+          expect(oauth.counts.registrations).toBe(2);
+        }),
+      ),
+    );
+  });
+
+  it("fails a call the server forbids without asking for a scope, rather than asking to sign in again", async () => {
+    const oauth = await fixture();
+    await withCore({ remote: { url: oauth.url } }, (core) =>
+      core.run(
+        Effect.gen(function* () {
+          yield* until(is((server) => server.state === "needs-sign-in"));
+          yield* signIn;
+          oauth.forbidden = true;
+          const forbidden = yield* call("mcp__remote__echo", { text: "x" });
+          expect(forbidden.isError).toBe(true);
+          expect(textOf(forbidden)).not.toContain("needs the person to sign in");
+          const mcp = yield* Mcp;
+          expect(remote(yield* mcp.state)).toMatchObject({ state: "connected", auth: { state: "signed-in" } });
+          // Connecting again fails as any client error does: not tried again, and not taken for a refused header.
+          yield* mcp.reconnect("remote");
+          const failed = remote(yield* until(is((server) => server.state === "failed")));
+          expect(failed.retryIn).toBeUndefined();
+          expect(failed.error).not.toContain("Authorization header");
         }),
       ),
     );
@@ -411,6 +457,39 @@ describe("renewing and replacing a sign-in", () => {
   });
 });
 
+describe("a renewal and a sign-in at once", () => {
+  /** Signs in as the browser would, on a store of its own, asking for `scope` besides those granted. */
+  const signInTo = async (store: SignInStore, target: SignInTarget, scope?: string) => {
+    const flow = { redirectUrl: "http://localhost:1/callback", state: newState() };
+    const landed = new URL(await approve(await startSignIn(store, target, flow, scope === undefined ? undefined : { scope })));
+    await finishSignIn(store, target, flow, landed.searchParams.get("code")!, undefined);
+  };
+
+  it("keeps the sign-in that finished while a renewal was under way, and the scope it was granted", async () => {
+    const oauth = await fixture();
+    const store = new SignInStore(join(await mkdtemp(join(tmpdir(), "lemma-mcp-auth-")), "mcp-auth.json"));
+    await store.load();
+    const target: SignInTarget = { name: "remote", url: oauth.url, oauth: undefined };
+    await signInTo(store, target);
+    oauth.expire();
+    const { release, arrived } = oauth.holdRefreshes();
+    const renewal = bearer(store, target, () => {}).onUnauthorized!({
+      response: new Response(null, { status: 401 }),
+      serverUrl: new URL(oauth.url),
+      fetchFn: fetch,
+    });
+    await arrived;
+    // Signed in again, for more, while the renewal waits on the authorization server.
+    await signInTo(store, target, "admin");
+    const signedIn = store.get("remote", oauth.url)?.tokens;
+    release();
+    await renewal;
+    expect(oauth.counts.refreshes).toBe(1);
+    expect(store.get("remote", oauth.url)?.tokens).toEqual(signedIn);
+    expect(signedIn?.scope?.split(" ").sort()).toEqual(["admin", "read"]);
+  });
+});
+
 describe("a remote server that asks no sign-in", () => {
   it("is not said to need one after a sign-in tried on it fails", async () => {
     const open = await fixture({ open: true });
@@ -490,6 +569,52 @@ describe("a remote server that cannot be reached", () => {
       );
     } finally {
       delete process.env["LEMMA_TEST_MCP_SECRET"];
+    }
+  });
+});
+
+describe("a remote server that drops its connection", () => {
+  it("is tried again later each time it drops as soon as it connects, not every first delay", async () => {
+    const open = await fixture({ open: true });
+    const home = await mkdtemp(join(tmpdir(), "lemma-mcp-drop-"));
+    await writeFile(join(home, "mcp.json"), JSON.stringify({ mcpServers: { remote: { url: open.url } } }));
+    let latest: McpState | undefined;
+    const waiting = new Set<() => void>();
+    const servers = new Servers(
+      {
+        addTool: async () => async () => {},
+        addNamespace: async () => async () => {},
+        changed: (state) => {
+          latest = state;
+          for (const wake of waiting) wake();
+        },
+        warn: () => {},
+      },
+      { file: join(home, "mcp.json"), authFile: join(home, "mcp-auth.json"), maxOutputChars: 1000, version: "0", env: {}, retryDelaysMs: [20, 60_000] },
+    );
+    const reached = (check: (server: McpServerStatus) => boolean) =>
+      new Promise<McpServerStatus>((resolve) => {
+        const wake = () => {
+          const found = latest === undefined ? undefined : remote(latest);
+          if (found === undefined || !check(found)) return;
+          waiting.delete(wake);
+          resolve(found);
+        };
+        waiting.add(wake);
+        wake();
+      });
+    /** What the transport does when its connection goes: the client it connected closes under it. */
+    const drop = () => servers["entries"].get("remote")!.connection!["client"]!.close();
+    try {
+      await servers.start([]);
+      await reached((server) => server.state === "connected");
+      await drop();
+      expect((await reached((server) => server.state === "failed")).retryIn).toBeLessThanOrEqual(20);
+      await reached((server) => server.state === "connected");
+      await drop();
+      expect((await reached((server) => server.state === "failed")).retryIn).toBeGreaterThan(20);
+    } finally {
+      await servers.close();
     }
   });
 });

@@ -1,11 +1,10 @@
 import { createHash } from "node:crypto";
 import { Schema } from "effect";
 import type { ImageContent, TextContent } from "@lemma/llm";
+import { isObject } from "./form.ts";
 
 type Json = Record<string, unknown>;
 type Content = TextContent | ImageContent;
-
-const isObject = (value: unknown): value is Json => typeof value === "object" && value !== null && !Array.isArray(value);
 
 /** The parts of a `tools/call` result this plugin reads, as servers of every protocol version send them. */
 export interface CallResult {

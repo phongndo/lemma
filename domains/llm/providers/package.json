@@ -13,6 +13,7 @@
   "dependencies": {
     "@lemma/actions": "workspace:*",
     "@lemma/contracts": "workspace:*",
+    "@lemma/credentials": "workspace:*",
     "@lemma/frame": "workspace:*",
     "@lemma/llm": "workspace:*",
     "@lemma/look": "workspace:*",
