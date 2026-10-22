@@ -47,6 +47,7 @@ function ThinkingPicker(props: {
         label="Reasoning"
         tip={`Reasoning for ${selectedModel()?.name ?? "this model"}`}
         triggerClass={props.quiet ? "select-chip quiet" : "select-chip"}
+        menuClass="thinking-menu"
         placement={props.placement ?? "top-start"}
         {...(props.controller === undefined ? {} : { controller: props.controller })}
         trigger={
@@ -114,6 +115,10 @@ function ModelPicker(props: {
       ),
   );
   const providers = createMemo(() => [...new Set(props.models.models().map((model) => model.provider))]);
+  /** The rail, while it has something to choose between: providers, or favorites besides all. */
+  const railShown = () => providers().length > 1 || favoriteModels().length > 0;
+  /** The list mixes providers' models: each row shows its provider's logo, as one model may come from several. */
+  const mixed = () => providers().length > 1 && (query().trim() !== "" || rail() === "all" || rail() === "favorites");
   const shown = createMemo((): readonly ModelInfo[] => {
     // Searching always covers every model.
     if (query().trim() !== "") return filterModels(props.models.models(), query()).flatMap((group) => group.models);
@@ -128,7 +133,7 @@ function ModelPicker(props: {
     props.afterPick?.();
   };
   const railKeys = (event: KeyboardEvent) => {
-    if (query() !== "" || (event.key !== "ArrowLeft" && event.key !== "ArrowRight")) return;
+    if (!railShown() || query() !== "" || (event.key !== "ArrowLeft" && event.key !== "ArrowRight")) return;
     const keys: Rail[] = [...(favoriteModels().length > 0 ? ["favorites"] : []), "all", ...providers()];
     const index = keys.indexOf(rail());
     event.preventDefault();
@@ -169,81 +174,84 @@ function ModelPicker(props: {
               onInput={(event) => setQuery(event.currentTarget.value)}
               onKeyDown={railKeys}
             />
-          </label>
-          <div class="model-body">
-            <nav class="model-rail" aria-label="Providers">
-              <Show when={favoriteModels().length > 0}>
+            {/* Another provider's models: connecting one is a step away. */}
+            <Show when={props.onProviders}>
+              {(open) => (
                 <button
                   type="button"
-                  class="rail-item"
-                  classList={{ active: query() === "" && rail() === "favorites" }}
+                  class="icon-button model-connect"
                   tabindex="-1"
-                  aria-label="Favorites"
-                  data-tip="Favorites"
-                  onClick={() => {
-                    setQuery("");
-                    setRail("favorites");
+                  aria-label="Connect a provider"
+                  data-tip="Connect a provider"
+                  onClick={(event) => {
+                    event.preventDefault();
+                    close();
+                    open()();
                   }}
                 >
-                  <StarIcon filled />
+                  <PlusIcon />
                 </button>
-              </Show>
-              <button
-                type="button"
-                class="rail-item"
-                classList={{ active: query() !== "" || rail() === "all" }}
-                tabindex="-1"
-                aria-label="All models"
-                data-tip="All models"
-                onClick={() => {
-                  setQuery("");
-                  setRail("all");
-                }}
-              >
-                <span class="rail-all">All</span>
-              </button>
-              <div class="rail-sep" />
-              <For each={providers()}>
-                {(provider) => (
+              )}
+            </Show>
+          </label>
+          <div class="model-body" classList={{ "no-rail": !railShown() }}>
+            <Show when={railShown()}>
+              <nav class="model-rail" aria-label="Providers">
+                <Show when={favoriteModels().length > 0}>
                   <button
                     type="button"
                     class="rail-item"
-                    classList={{ active: query() === "" && rail() === provider }}
+                    classList={{ active: query() === "" && rail() === "favorites" }}
                     tabindex="-1"
-                    aria-label={providerName(provider)}
-                    data-tip={providerName(provider)}
+                    aria-label="Favorites"
+                    data-tip="Favorites"
                     onClick={() => {
                       setQuery("");
-                      setRail(provider);
+                      setRail("favorites");
                     }}
                   >
-                    <ProviderLogo
-                      id={provider}
-                      name={providerName(provider)}
-                      custom={props.models.providers().find((candidate) => candidate.id === provider)?.logo}
-                    />
+                    <StarIcon filled />
                   </button>
-                )}
-              </For>
-              {/* Another provider's models: connecting one is a step away. */}
-              <Show when={props.onProviders}>
-                {(open) => (
-                  <button
-                    type="button"
-                    class="rail-item rail-connect"
-                    tabindex="-1"
-                    aria-label="Connect a provider"
-                    data-tip="Connect a provider"
-                    onClick={() => {
-                      close();
-                      open()();
-                    }}
-                  >
-                    <PlusIcon />
-                  </button>
-                )}
-              </Show>
-            </nav>
+                </Show>
+                <button
+                  type="button"
+                  class="rail-item"
+                  classList={{ active: query() !== "" || rail() === "all" }}
+                  tabindex="-1"
+                  aria-label="All models"
+                  data-tip="All models"
+                  onClick={() => {
+                    setQuery("");
+                    setRail("all");
+                  }}
+                >
+                  <span class="rail-all">All</span>
+                </button>
+                <div class="rail-sep" />
+                <For each={providers()}>
+                  {(provider) => (
+                    <button
+                      type="button"
+                      class="rail-item"
+                      classList={{ active: query() === "" && rail() === provider }}
+                      tabindex="-1"
+                      aria-label={providerName(provider)}
+                      data-tip={providerName(provider)}
+                      onClick={() => {
+                        setQuery("");
+                        setRail(provider);
+                      }}
+                    >
+                      <ProviderLogo
+                        id={provider}
+                        name={providerName(provider)}
+                        custom={props.models.providers().find((candidate) => candidate.id === provider)?.logo}
+                      />
+                    </button>
+                  )}
+                </For>
+              </nav>
+            </Show>
             <div class="model-list" role="listbox">
               <For each={shown()}>
                 {(model) => {
@@ -251,34 +259,40 @@ function ModelPicker(props: {
                   const favorite = () => favoriteModels().includes(model.ref);
                   return (
                     <div class="model-row menu-item" role="option" aria-selected={selected()} onClick={() => pick(model.ref, close)}>
-                      <span class="model-text">
-                        <span class="model-name">{model.name}</span>
-                        <span class="model-meta">
-                          <span>{providerName(model.provider)}</span>
-                          <span class="dot" />
-                          <span>{contextSize(model.contextWindow)}</span>
-                          <Show when={onPlan().has(model.provider)}>
-                            <span class="model-plan" data-tip="Included in your plan">
-                              Plan
-                            </span>
-                          </Show>
-                          <Show when={model.reasoning}>
-                            <span class="meta-icon" data-tip="Reasoning">
-                              <BrainIcon />
-                            </span>
-                          </Show>
-                          <Show when={model.input.includes("image")}>
-                            <span class="meta-icon" data-tip="Images">
-                              <ImageIcon />
-                            </span>
-                          </Show>
-                        </span>
-                      </span>
-                      <Show when={selected()}>
-                        <span class="model-current">
-                          <CheckIcon />
+                      <Show when={mixed()}>
+                        <span class="model-logo" data-tip={providerName(model.provider)}>
+                          <ProviderLogo
+                            id={model.provider}
+                            name={providerName(model.provider)}
+                            custom={props.models.providers().find((candidate) => candidate.id === model.provider)?.logo}
+                          />
                         </span>
                       </Show>
+                      <span class="model-name">{model.name}</span>
+                      <span class="model-meta">
+                        <Show when={onPlan().has(model.provider)}>
+                          <span class="model-plan" data-tip="Included in your plan">
+                            Plan
+                          </span>
+                        </Show>
+                        <span>{contextSize(model.contextWindow)}</span>
+                        <Show when={model.reasoning}>
+                          <span class="meta-icon" data-tip="Reasoning">
+                            <BrainIcon />
+                          </span>
+                        </Show>
+                        <Show when={model.input.includes("image")}>
+                          <span class="meta-icon" data-tip="Images">
+                            <ImageIcon />
+                          </span>
+                        </Show>
+                      </span>
+                      {/* Its place kept on every row, so what models offer lines up. */}
+                      <span class="model-current">
+                        <Show when={selected()}>
+                          <CheckIcon />
+                        </Show>
+                      </span>
                       <button
                         type="button"
                         class="model-star"

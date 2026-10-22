@@ -66,21 +66,27 @@
   font-weight: 500;
 }
 
+/* As wide as its list and the rail beside it, steady as the list changes; as tall as the list, up to a point. */
 .model-menu {
-  width: 580px;
+  width: max-content;
   max-width: calc(100vw - 16px);
-  height: 460px;
+  max-height: 420px;
   padding: 0;
   overflow: hidden;
+}
+
+/* As wide as its levels' names. */
+.menu.thinking-menu {
+  min-width: 0;
 }
 
 .model-search {
   flex: none;
   display: flex;
   align-items: center;
-  gap: 10px;
-  height: 46px;
-  padding: 0 14px;
+  gap: 8px;
+  height: 36px;
+  padding: 0 12px;
   border-bottom: 1px solid var(--border);
   color: var(--text-3);
 }
@@ -103,10 +109,16 @@
 }
 
 .model-body {
-  flex: 1;
+  flex: 1 1 auto;
   min-height: 0;
   display: grid;
-  grid-template-columns: 52px 1fr;
+  grid-template-columns: 44px minmax(0, 304px);
+  grid-template-rows: minmax(0, 1fr);
+}
+
+/* One provider and no favorites: nothing for a rail to choose between. */
+.model-body.no-rail {
+  grid-template-columns: minmax(0, 304px);
 }
 
 /* Providers by logo, named in tooltips, so the models get the width. */
@@ -114,7 +126,7 @@
   min-height: 0;
   overflow-y: auto;
   scrollbar-width: none;
-  padding: 6px;
+  padding: 4px;
   border-right: 1px solid var(--border);
   display: flex;
   flex-direction: column;
@@ -127,7 +139,7 @@
   gap: 7px;
   justify-content: center;
   width: 100%;
-  height: 38px;
+  height: 36px;
   padding: 0;
   flex: none;
   border: 0;
@@ -182,23 +194,29 @@
   flex-direction: column;
 }
 
+/* One line a model: its provider's logo where the list mixes providers, its name, what it offers, and its marks. */
 .model-row.menu-item {
-  min-height: 50px;
-  padding: 6px 8px 6px 12px;
-  gap: 10px;
-  white-space: normal;
+  padding: 0 2px 0 10px;
+  gap: 8px;
 }
 
-.model-text {
-  flex: 1;
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
+.model-logo {
+  display: inline-grid;
+  place-items: center;
+  flex: none;
+}
+
+.model-logo .provider-mark,
+.model-logo .provider-logo,
+.model-logo .provider-logo svg {
+  width: 14px;
+  height: 14px;
 }
 
 .model-name {
-  font-size: calc(13.5px * var(--text-scale));
+  flex: 1;
+  min-width: 0;
+  font-size: calc(13px * var(--text-scale));
   font-weight: 500;
   color: var(--text);
   overflow: hidden;
@@ -209,24 +227,11 @@
 .model-meta {
   display: flex;
   align-items: center;
+  flex: none;
   gap: 6px;
   font-size: calc(11.5px * var(--text-scale));
   color: var(--text-3);
   white-space: nowrap;
-  min-width: 0;
-}
-
-.model-meta > span:first-child {
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.model-meta .dot {
-  width: 2px;
-  height: 2px;
-  border-radius: 50%;
-  background: currentColor;
-  flex: none;
 }
 
 .meta-icon {
@@ -250,6 +255,8 @@
 .model-current {
   display: inline-grid;
   place-items: center;
+  width: 14px;
+  flex: none;
   color: var(--text);
 }
 
@@ -291,9 +298,15 @@
   height: 14px;
 }
 
-/* After the providers: connecting another, quieter than they are. */
-.rail-item.rail-connect .icon {
+/* At the search's end: connecting another provider, quieter than the search. */
+.model-connect {
+  margin-right: -6px;
   color: var(--text-3);
+}
+
+.model-connect .icon {
+  width: 15px;
+  height: 15px;
 }
 
 /* A model the person's plan covers, where a price per token would go. */
