@@ -3,12 +3,13 @@ import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { arch, platform, release, tmpdir } from "node:os";
 import { join } from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { Context, Deferred, Effect, Fiber, Layer, Option, Schema, Stream } from "effect";
 import { createProvider, envApiKeyAuth, fauxAssistantMessage, fauxProvider, fauxText, fauxThinking, fauxToolCall } from "@earendil-works/pi-ai";
 import { openAICompletionsApi } from "@earendil-works/pi-ai/api/openai-completions.lazy";
 import type { ClassifierContext, ClassifierOptions, Provider, SimpleStreamOptions } from "@earendil-works/pi-ai";
 import { anthropicProvider } from "@earendil-works/pi-ai/providers/anthropic";
+import { typesafeProvider } from "@earendil-works/pi-ai/providers/typesafe";
 import { Events, PluginContext, definePlugin, makeCore } from "@lemma/core";
 import { Llm, LlmError, LlmProviderHeadersHook, LlmProviderResponse, LlmRequest, LlmRequestHook, ModelsChanged, Providers, StreamEvent } from "@lemma/llm";
 import type { Credential } from "@lemma/credentials";
@@ -582,6 +583,47 @@ describe("classifiers", () => {
     });
     expect(asked[0]!.context).toEqual(context);
     expect(asked[0]!.options).toMatchObject({ apiKey: "k", headers: { "User-Agent": `lemma (${platform()} ${release()}; ${arch()})` } });
+  });
+
+  it("include TypeSafe's Jev, which judges images in TypeSafe's form, opted into its image input", async () => {
+    const sent: { url: string; headers: Record<string, string>; body: unknown }[] = [];
+    vi.stubGlobal("fetch", async (url: URL | string, init: RequestInit) => {
+      sent.push({ url: String(url), headers: init.headers as Record<string, string>, body: JSON.parse(init.body as string) });
+      return Response.json({ answers: { urgent: { type: "noul", noul: 0.9 } }, usage: { input_tokens: 30, output_tokens: 1 } });
+    });
+    try {
+      const { providers, classifiers, result } = await runWith(
+        setup({ providers: () => [typesafeProvider()], env: { TYPESAFE_API_KEY: "k" } }).plugins,
+        Effect.flatMap(Llm, (llm) =>
+          Effect.all({
+            providers: llm.providers,
+            classifiers: llm.classifiers({ available: true }),
+            result: llm.classify("typesafe/jev-latest", { ...context, images: [{ type: "image", data: "aGk=", mimeType: "image/png" }] }),
+          }),
+        ),
+      );
+      expect(providers).toMatchObject([{ id: "typesafe", name: "TypeSafe", auth: [{ type: "api_key" }], configured: true }]);
+      expect(classifiers).toMatchObject([{ ref: "typesafe/jev-latest", name: "Jev", input: ["text", "image"] }]);
+      expect(result).toMatchObject({ answers: { urgent: { type: "bool", probability: 0.9 } }, stopReason: "stop" });
+      expect(sent).toEqual([
+        {
+          url: "https://api.typesafe.ai/v1/systemone",
+          headers: expect.objectContaining({
+            authorization: "Bearer k",
+            "TypeSafe-Danger-Zone-Images": "true",
+            "User-Agent": `lemma (${platform()} ${release()}; ${arch()})`,
+          }),
+          body: {
+            model: "jev-latest",
+            state: ["<image-1>", context.state],
+            assets: { "<image-1>": { type: "image", format: "png", data_base64: "aGk=" } },
+            questions: { urgent: { ...context.questions.urgent, type: "noul" } },
+          },
+        },
+      ]);
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 
   it("fail an unknown ref, and a chat model's, UnknownModel before asking", async () => {
