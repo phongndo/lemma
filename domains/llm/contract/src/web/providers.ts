@@ -247,8 +247,9 @@ export const browserPlace = (hostname: string): "here" | "elsewhere" => (/^(loca
 
 /**
  * Where a sign-in's page in the browser offers to go back to: the desktop app's Providers page, which opens in its
- * window, at its bridge's scheme (`lemma://`, a checkout's `lemma-dev://`), so it is the app the person came from. A web page offers none: the tab that opens it has no copy of the host's token, which only the page's
- * own tab keeps, so it could not connect; its page says to go back to Lemma instead.
+ * window, at its bridge's scheme (`lemma://`, a checkout's `lemma-dev://`), so it is the app the person came from. A
+ * web page offers none: the tab that opens it has no copy of the host's token, which only the page's own tab keeps, so
+ * it could not connect; its page says to go back to Lemma instead.
  */
 export const signInReturn = (desktop: { readonly deepLinkScheme?: string } | undefined): string | undefined =>
   desktop === undefined ? undefined : `${desktop.deepLinkScheme ?? DEEP_LINK_SCHEME}://settings/providers`;
