@@ -69,15 +69,6 @@
   color: var(--text-3);
 }
 
-.menu-danger {
-  color: var(--err);
-}
-
-.menu-danger[data-active="true"] {
-  color: var(--err);
-  background: var(--err-soft);
-}
-
 .settings-intro {
   margin: 0;
   color: var(--text-2);

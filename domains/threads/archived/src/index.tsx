@@ -2,12 +2,12 @@ import { For, Show, createEffect, createMemo, createSignal, on } from "solid-js"
 import type { JSX } from "solid-js";
 import type { SessionInfo } from "@lemma/sessions";
 import { relativeTime, tildePath } from "@lemma/web/format";
+import { typing } from "@lemma/web/keys";
 import { createNow } from "@lemma/web/now";
-import { loadJson, save } from "@lemma/web/storage";
 import { Actions } from "@lemma/actions";
 import { Dialogs, Layers } from "@lemma/frame";
-import { Settings, SettingsGroups, SettingsSections } from "@lemma/settings";
-import { sessionTitle, Threads, ThreadWaits, waitingOn } from "@lemma/threads";
+import { Settings, SettingsSections } from "@lemma/settings";
+import { DeleteThreadsDialog, sessionTitle, threadCount, Threads, ThreadWaits, waitingOn } from "@lemma/threads";
 import type { ThreadsService } from "@lemma/threads";
 import { Workspace } from "@lemma/workspace/web";
 import type { WorkspaceService } from "@lemma/workspace/web";
@@ -17,10 +17,8 @@ import {
   AgentIcon,
   ArchiveIcon,
   CheckIcon,
-  Dialog,
+  ConfirmDelete,
   FilterIcon,
-  FolderIcon,
-  HistoryIcon,
   Popover,
   QuestionIcon,
   RedoIcon,
@@ -30,16 +28,14 @@ import {
   WorktreeIcon,
   XIcon,
 } from "@lemma/look";
-import { archivedOf, dayLabel, extendSelection, filterArchived, groupBy, selectionOf, threadCount, withSelection } from "./archived.ts";
-import type { Grouping } from "./archived.ts";
+import { archivedOf, dayLabel, extendSelection, filterArchived, groupBy, selectionOf, unarchived, withSelection } from "./archived.ts";
 import styles from "./archived-page.css?inline";
 
 const SECTION = "archived";
 const DELETE_DIALOG = "archived-page.delete";
-const GROUPING_KEY = "lemma.threads.archived.grouping";
 
 interface Deps {
-  /** This plugin's handle: its rows show in a settings search too, drawn by the settings page, so they take it from here. */
+  /** This plugin's handle: the page is drawn by the settings page, so its rows take it from here. */
   readonly plugin: Pick<WebPluginContext<unknown>, "action">;
   readonly threads: ThreadsService;
   readonly workspace: WorkspaceService;
@@ -47,9 +43,8 @@ interface Deps {
   readonly now: () => number;
   /** The project a thread is filed under: its folder's (`projectOf`), or `""` for a thread with no project. */
   readonly projectOf: (cwd: string) => string;
-  /** What to call a project (`projectOf`'s), and where it is. */
+  /** What to call a project (`projectOf`'s). */
   readonly projectName: (project: string) => string;
-  readonly projectPath: (project: string) => string;
   /** Everything the search finds a thread by: its title, project, folder, and branch. */
   readonly text: (session: SessionInfo) => string;
   /** The page's search and project, kept in its address (`?q=…&project=…`), as a browser's history keeps its search. */
@@ -57,8 +52,6 @@ interface Deps {
   readonly setQuery: (query: string) => void;
   readonly project: () => string | undefined;
   readonly setProject: (project: string | undefined) => void;
-  readonly grouping: () => Grouping;
-  readonly setGrouping: (grouping: Grouping) => void;
   /** The archived threads the search and project keep, the most recently used first. */
   readonly shown: () => readonly SessionInfo[];
   readonly selection: Selection;
@@ -78,6 +71,8 @@ interface Selection {
   readonly settle: (next: ReadonlySet<string>, anchor: string | undefined) => void;
   /** With Shift: the run from the anchor to `id`, through `order`, over the selection as the anchor found it. */
   readonly extend: (order: readonly string[], id: string) => void;
+  /** Takes these out, the anchor staying: threads no longer archived. */
+  readonly drop: (ids: readonly string[]) => void;
   readonly clear: () => void;
 }
 
@@ -95,6 +90,10 @@ const createSelection = (): Selection => {
     anchor,
     settle,
     extend: (order, id) => setSelected(extendSelection(base, order, anchor(), id)),
+    drop: (ids) => {
+      base = withSelection(base, ids, false);
+      setSelected(withSelection(selected(), ids, false));
+    },
     clear: () => settle(new Set(), undefined),
   };
 };
@@ -132,19 +131,13 @@ interface RowSelection {
 }
 
 /**
- * An archived thread, quiet until the pointer or focus is on it: a checkbox to select it, shown then or while selecting;
- * its title, which opens it, after an agent's mark (whose thread it works for, in its tooltip); under it, its project
- * and its worktree's branch; at the end, when it was last used, or a mark while a turn still runs in it, and under the
- * pointer, Unarchive and Delete, which asks again in place. Its project shows as a name (a row shown on its own: a
- * settings search's, which has no checkbox either), a link narrowing the page to that project's, or not at all (under
- * its project's heading).
+ * An archived thread, on the settings' row grid: a checkbox to select it, its lead; its title, which opens it, after an
+ * agent's mark (whose thread it works for, in its tooltip); under it, its project and its worktree's branch; at the
+ * end, when it was last used, or a mark while a turn still runs in it, and under the pointer, Unarchive and Delete,
+ * which asks in place (`ConfirmDelete`). Its project is a link that sets the page's project filter,
+ * left out while the filter already names one.
  */
-function ArchivedRow(props: {
-  deps: Deps;
-  session: SessionInfo;
-  selection?: RowSelection;
-  project: { readonly kind: "name" } | { readonly kind: "link"; readonly show: (project: string) => void } | { readonly kind: "none" };
-}) {
+function ArchivedRow(props: { deps: Deps; session: SessionInfo; selection: RowSelection }) {
   const { deps } = props;
   const id = () => props.session.id;
   const title = () => sessionTitle(props.session);
@@ -160,25 +153,25 @@ function ArchivedRow(props: {
   const open = deps.plugin.action("open thread", () => deps.threads.select(id()));
   const unarchive = deps.plugin.action("unarchive thread", () => deps.threads.mark(id(), { archived: false }));
   const remove = deps.plugin.action("delete thread", () => deps.threads.remove(id()));
-  // The first click arms Delete, the second deletes; leaving it disarms it.
+  // While Delete asks, the row's actions stay shown.
   const [armed, setArmed] = createSignal(false);
   return (
     <div
-      class="archived-row"
-      classList={{ selected: props.selection?.selected() === true }}
+      class="setting-row setting-row-pick archived-row"
+      classList={{ selected: props.selection.selected() }}
       data-archived-row={id()}
       // Anywhere on the row but its title and buttons picks it, as its checkbox does.
       onClick={(event) => {
-        if (props.selection === undefined || (event.target as HTMLElement).closest("a, button") !== null) return;
+        if ((event.target as HTMLElement).closest("a, button") !== null) return;
         props.selection.pick(event);
         // The keyboard goes on from the row picked.
         event.currentTarget.querySelector<HTMLElement>("[data-nav=check]")?.focus({ preventScroll: true });
       }}
     >
-      <Show when={props.selection}>
-        {(selection) => <Check state={selection().selected()} label={`Select ${title()}`} nav="check" onToggle={selection().pick} />}
-      </Show>
-      <div class="archived-text">
+      <span class="setting-lead">
+        <Check state={props.selection.selected()} label={`Select ${title()}`} nav="check" onToggle={(event) => props.selection.pick(event)} />
+      </span>
+      <div class="setting-text">
         <div class="archived-line">
           <Show when={parent()}>
             {(started) => (
@@ -196,7 +189,7 @@ function ArchivedRow(props: {
             onClick={(event) => {
               // Shift picks the run to it, as on the rest of the row; a plain click opens it here; with another modifier,
               // the browser opens the link elsewhere.
-              if (event.shiftKey && props.selection !== undefined) {
+              if (event.shiftKey) {
                 event.preventDefault();
                 props.selection.pick(event);
                 return;
@@ -210,15 +203,10 @@ function ArchivedRow(props: {
           </a>
         </div>
         <div class="archived-meta">
-          <Show when={props.project.kind === "name"}>
-            <span data-tip={deps.projectPath(project())}>{deps.projectName(project())}</span>
-          </Show>
-          <Show when={props.project.kind === "link" && props.project}>
-            {(link) => (
-              <button class="archived-project-link" data-tip={`Only ${deps.projectName(project())}`} onClick={() => link().show(project())}>
-                {deps.projectName(project())}
-              </button>
-            )}
+          <Show when={deps.project() === undefined}>
+            <button class="archived-project-link" data-tip={`Only ${deps.projectName(project())}`} onClick={() => deps.setProject(project())}>
+              {deps.projectName(project())}
+            </button>
           </Show>
           <Show when={branch()}>
             {(name) => (
@@ -234,7 +222,7 @@ function ArchivedRow(props: {
           </Show>
         </div>
       </div>
-      <div class="archived-side">
+      <div class="setting-control archived-side">
         <Show
           when={waiting() ?? (running() ? "Working" : undefined)}
           fallback={
@@ -255,29 +243,7 @@ function ArchivedRow(props: {
           <button class="icon-button" aria-label={`Unarchive ${title()}`} data-tip="Unarchive" onClick={unarchive}>
             <RedoIcon />
           </button>
-          <button
-            class="archived-delete"
-            classList={{ armed: armed() }}
-            aria-label={armed() ? `Delete ${title()} for good` : `Delete ${title()}`}
-            aria-disabled={running()}
-            data-tip={running() ? "Stop its turn to delete it" : armed() ? undefined : "Delete"}
-            onBlur={() => setArmed(false)}
-            onPointerLeave={() => setArmed(false)}
-            onClick={(event) => {
-              if (running()) return;
-              if (!armed()) {
-                setArmed(true);
-                event.currentTarget.focus();
-                return;
-              }
-              remove();
-            }}
-          >
-            <TrashIcon />
-            <Show when={armed()}>
-              <span>Delete?</span>
-            </Show>
-          </button>
+          <ConfirmDelete label={`Delete ${title()}`} blocked={running() ? "Stop its turn to delete it" : undefined} onArmed={setArmed} onConfirm={remove} />
         </div>
       </div>
     </div>
@@ -307,13 +273,10 @@ function ProjectFilter(props: { deps: Deps; projects: readonly string[] }) {
     <Popover
       label={deps.project() === undefined ? "Filter by project" : `Only ${deps.projectName(deps.project()!)}`}
       trigger={
-        <Show when={deps.project()} fallback={<FilterIcon />}>
-          {(chosen) => (
-            <>
-              <FilterIcon />
-              <span class="archived-filter-label">{deps.projectName(chosen())}</span>
-            </>
-          )}
+        <Show when={deps.project() !== undefined} fallback={<FilterIcon />}>
+          <FilterIcon />
+          {/* No project is `""`, a project too. */}
+          <span class="archived-filter-label">{deps.projectName(deps.project()!)}</span>
         </Show>
       }
       triggerClass={deps.project() === undefined ? "icon-button archived-filter" : "icon-button archived-filter active"}
@@ -332,18 +295,16 @@ function ProjectFilter(props: { deps: Deps; projects: readonly string[] }) {
 
 /**
  * Every archived thread, as a browser's history lists what was visited: searched, narrowed to a project, grouped by
- * when each was last used or by project, and selected to unarchive or delete together: one by one (a row or its
- * checkbox), a run with Shift (by click, or with the arrows), a group, or all shown (⌘A). The selection outlives the
- * search, so it can gather threads from several. Arrows move between rows and back up to the search, Space picks the
- * row in focus, and Escape clears the selection. With none archived yet, what archiving is and where to do it.
+ * when each was last used, and selected to unarchive or delete together: one by one (a row or its checkbox), a run
+ * with Shift (by click, or with the arrows), a group, or all shown (⌘A). The selection outlives the search, so it can
+ * gather threads from several. Arrows move between rows and back up to the search, Space picks the row in focus, and
+ * Escape clears the selection. With none archived yet, what archiving is and where to do it.
  */
 function ArchivedPage(props: { deps: Deps }) {
   const { deps } = props;
   const all = createMemo(() => archivedOf(deps.threads.list()));
   const shown = deps.shown;
-  const groups = createMemo(() =>
-    groupBy(shown(), deps.grouping() === "project" ? (session) => deps.projectOf(session.cwd) : (session) => dayLabel(session.updatedAt, deps.now())),
-  );
+  const groups = createMemo(() => groupBy(shown(), (session) => dayLabel(session.updatedAt, deps.now())));
   const byId = createMemo(() => new Map(all().map((session) => [session.id, session])));
   // Listed by key and id, so a row holds still (and Delete stays armed) as its thread changes.
   const keys = createMemo(() => groups().map((group) => group.key), undefined, { equals: (a, b) => a.join("\n") === b.join("\n") });
@@ -370,11 +331,8 @@ function ArchivedPage(props: { deps: Deps }) {
   };
   const rowSelection = (id: string): RowSelection => ({ selected: () => selected().has(id), pick: (event) => pick(id, event) });
   const toggleAll = (ids: readonly string[]) => selection.settle(withSelection(selected(), ids, selectionOf(selected(), ids) !== "all"), undefined);
-  const unarchive = deps.plugin.action("unarchive threads", () => {
-    const ids = chosen();
-    clear();
-    return Promise.all(ids.map((id) => deps.threads.mark(id, { archived: false })));
-  });
+  // Each leaves the selection once unarchived (`notArchived`); one that fails, which `mark` reports, stays selected.
+  const unarchive = deps.plugin.action("unarchive threads", () => Promise.all(chosen().map((id) => deps.threads.mark(id, { archived: false }))));
 
   let list!: HTMLDivElement;
   let search: HTMLInputElement | undefined;
@@ -416,7 +374,6 @@ function ArchivedPage(props: { deps: Deps }) {
     }
   };
 
-  const heading = (key: string) => (deps.grouping() === "project" ? deps.projectName(key) : key);
   return (
     <Show
       when={all().length > 0}
@@ -439,7 +396,7 @@ function ArchivedPage(props: { deps: Deps }) {
           if (event.shiftKey && (event.target as HTMLElement).closest("[data-archived-row]") !== null) event.preventDefault();
         }}
       >
-        {/* One row: the search, always; beside it, the selection while there is one, then the project and the grouping. */}
+        {/* One row: the search, always; beside it, the selection while there is one, then the project. */}
         <div class="archived-toolbar">
           <SearchField
             value={deps.query()}
@@ -476,26 +433,6 @@ function ArchivedPage(props: { deps: Deps }) {
               </div>
             </Show>
             <ProjectFilter deps={deps} projects={projects()} />
-            <div class="archived-grouping" role="group" aria-label="Group by">
-              <button
-                class="icon-button"
-                aria-label="Group by date"
-                data-tip="By date"
-                aria-pressed={deps.grouping() === "date"}
-                onClick={() => deps.setGrouping("date")}
-              >
-                <HistoryIcon />
-              </button>
-              <button
-                class="icon-button"
-                aria-label="Group by project"
-                data-tip="By project"
-                aria-pressed={deps.grouping() === "project"}
-                onClick={() => deps.setGrouping("project")}
-              >
-                <FolderIcon />
-              </button>
-            </div>
           </SearchField>
         </div>
         <div class="archived-list" classList={{ selecting: chosen().length > 0 }} ref={list}>
@@ -519,23 +456,14 @@ function ArchivedPage(props: { deps: Deps }) {
             {(key) => (
               <section class="archived-group">
                 <h3 class="archived-group-title">
-                  <Check state={checkState(selectionOf(selected(), idsIn(key)))} label={`Select ${heading(key)}`} onToggle={() => toggleAll(idsIn(key))} />
-                  <span data-tip={deps.grouping() === "project" ? deps.projectPath(key) : undefined}>{heading(key)}</span>
+                  <span class="setting-lead">
+                    <Check state={checkState(selectionOf(selected(), idsIn(key)))} label={`Select ${key}`} onToggle={() => toggleAll(idsIn(key))} />
+                  </span>
+                  <span>{key}</span>
                 </h3>
                 <div class="archived-rows">
                   <For each={idsIn(key)}>
-                    {(id) => (
-                      <Show when={byId().get(id)}>
-                        {(session) => (
-                          <ArchivedRow
-                            deps={deps}
-                            session={session()}
-                            selection={rowSelection(id)}
-                            project={deps.grouping() === "project" ? { kind: "none" } : { kind: "link", show: deps.setProject }}
-                          />
-                        )}
-                      </Show>
-                    )}
+                    {(id) => <Show when={byId().get(id)}>{(session) => <ArchivedRow deps={deps} session={session()} selection={rowSelection(id)} />}</Show>}
                   </For>
                 </div>
               </section>
@@ -547,58 +475,10 @@ function ArchivedPage(props: { deps: Deps }) {
   );
 }
 
-/** Asks before deleting threads for good, saying what goes and what stays; a running one is kept. */
-function DeleteDialog(props: { deps: Deps; ids: readonly string[]; close: () => void }) {
-  const { deps } = props;
-  // Those still there: one deleted or unarchived meanwhile drops out.
-  const sessions = () => props.ids.flatMap((id) => deps.threads.list().find((session) => session.id === id && session.archived === true) ?? []);
-  const running = () => sessions().filter((session) => deps.threads.running().includes(session.id));
-  const deletable = () => sessions().filter((session) => !deps.threads.running().includes(session.id));
-  const one = () => (sessions().length === 1 ? sessions()[0] : undefined);
-  const remove = deps.plugin.action("delete threads", () => {
-    const ids = deletable().map((session) => session.id);
-    props.close();
-    return Promise.all(ids.map((id) => deps.threads.remove(id)));
-  });
-  return (
-    <Dialog
-      title={one() === undefined ? `Delete ${threadCount(sessions().length)}?` : `Delete “${sessionTitle(one())}”?`}
-      onClose={props.close}
-      class="archived-delete-dialog"
-      footer={
-        <>
-          <button class="button" data-autofocus onClick={props.close}>
-            Cancel
-          </button>
-          <button class="button button-danger" disabled={deletable().length === 0} onClick={remove}>
-            Delete {threadCount(deletable().length)}
-          </button>
-        </>
-      }
-    >
-      <p class="dialog-detail">
-        {one() === undefined ? "This permanently deletes them" : "This permanently deletes it"}, with everything said and done in{" "}
-        {one() === undefined ? "them" : "it"}. It cannot be undone.
-      </p>
-      <p class="dialog-detail muted">
-        {one() === undefined
-          ? "Worktrees Lemma made for them may go with them, unless they hold uncommitted work; their branches stay."
-          : "A worktree Lemma made for it may go with it, unless it holds uncommitted work; its branch stays."}
-      </p>
-      <Show when={running().length > 0}>
-        <p class="dialog-detail archived-delete-running">
-          {threadCount(running().length)} still running {running().length === 1 ? "is" : "are"} kept; stop {running().length === 1 ? "it" : "them"} to delete{" "}
-          {running().length === 1 ? "it" : "them"}.
-        </p>
-      </Show>
-    </Dialog>
-  );
-}
-
 /**
  * Settings › Archived: every archived thread, as a browser's history lists what was visited. It is searched (by title,
- * project, folder, or branch), narrowed to a project, grouped by date or project, and its threads are opened, or
- * selected and unarchived or deleted together; deleting asks first. Its threads answer the settings search too.
+ * project, folder, or branch), narrowed to a project, grouped by date, and its threads are opened, or selected and
+ * unarchived or deleted together; deleting asks first. The palette (⌘P), not the settings search, finds a thread.
  */
 export default defineWebPlugin({
   id: "threads.archived",
@@ -607,7 +487,6 @@ export default defineWebPlugin({
   setup: ({ client, threads, workspace, settings, dialogs, slots }, plugin) => {
     const projectOf = (cwd: string) => (workspace.isStandalone(cwd) ? "" : workspace.projectOf(cwd));
     const projectName = (project: string) => (project === "" ? "No project" : workspace.projectName(project));
-    const projectPath = (project: string) => tildePath(project === "" ? (workspace.standaloneDir() ?? "") : project, client.info()?.home);
     const text = (session: SessionInfo) => {
       const branch = workspace.place(session.cwd)?.branch;
       return `${sessionTitle(session)} ${projectName(projectOf(session.cwd))} ${tildePath(session.cwd, client.info()?.home)} ${branch ?? ""}`;
@@ -615,13 +494,6 @@ export default defineWebPlugin({
     // "3m ago", and which day's heading a thread is under, move on while the page shows.
     const now = createNow(30_000, () => settings.section() === SECTION);
     const here = (): Readonly<Record<string, string | undefined>> => (settings.section() === SECTION ? settings.params() : {});
-    const [grouping, setGroupingRaw] = createSignal<Grouping>(
-      loadJson<Grouping>(GROUPING_KEY, "date", (value): value is Grouping => value === "date" || value === "project"),
-    );
-    const setGrouping = (next: Grouping) => {
-      setGroupingRaw(next);
-      save(GROUPING_KEY, JSON.stringify(next));
-    };
     const [deleting, setDeleting] = createSignal<readonly string[]>([]);
     const askDelete = (ids: readonly string[]) => {
       setDeleting(ids);
@@ -636,9 +508,28 @@ export default defineWebPlugin({
         { defer: true },
       ),
     );
+    // It holds archived threads only: one unarchived (here or elsewhere) leaves it, so archiving it again does not bring
+    // it back selected, into a bulk delete; one whose unarchiving failed stays, to try again. One the list does not hold
+    // (deleted, or the list not loaded yet, as while reconnecting) stays, and counts nowhere it is read.
+    createEffect(() => {
+      const gone = unarchived(selection.selected(), threads.list());
+      if (gone.length > 0) selection.drop(gone);
+    });
     const query = () => here().q ?? "";
     const project = () => here().project;
     const shown = createMemo(() => filterArchived(threads.list(), { query: query(), project: project() }, projectOf, text));
+    /** The threads the delete dialog asks about, still archived: one deleted or unarchived meanwhile drops out. */
+    const listed = createMemo(() => new Map(threads.list().map((session) => [session.id, session])));
+    const asked = () =>
+      deleting().flatMap((id) => {
+        const session = listed().get(id);
+        return session?.archived === true ? [session] : [];
+      });
+    // The selection outlives the search, so some may be out of sight: the dialog says so, as the toolbar does, before they go.
+    const hiddenAsked = () => {
+      const seen = new Set(shown().map((session) => session.id));
+      return asked().filter((session) => !seen.has(session.id)).length;
+    };
     const deps: Deps = {
       plugin,
       threads,
@@ -647,22 +538,19 @@ export default defineWebPlugin({
       now,
       projectOf,
       projectName,
-      projectPath,
       text,
       query,
-      setQuery: (next) => settings.setParams({ q: next }),
+      setQuery: (next) => settings.setParams({ q: next === "" ? undefined : next }),
       project,
+      // No project is `""`, which the address keeps (`?project=`); none chosen is no key.
       setProject: (next) => settings.setParams({ project: next }),
-      grouping,
-      setGrouping,
       shown,
       selection,
       askDelete,
     };
     const showing = () => settings.section() === SECTION;
-    const anySelected = () => threads.list().some((session) => session.archived === true && selection.selected().has(session.id));
     // Escape clears the selection before it closes settings, and ⌘A selects every thread shown, wherever focus is on
-    // the page; in a field, ⌘A is the field's.
+    // the page but a field, whose ⌘A selects its text: a key with a modifier reaches actions in a field too.
     slots.add(Actions, {
       id: "archived-page.clear-selection",
       title: "Clear the archived threads' selection",
@@ -671,7 +559,7 @@ export default defineWebPlugin({
       keys: "escape",
       whileTyping: true,
       order: -20,
-      when: () => showing() && anySelected(),
+      when: () => showing() && selection.selected().size > 0,
       run: () => selection.clear(),
     });
     slots.add(Actions, {
@@ -681,7 +569,7 @@ export default defineWebPlugin({
       hidden: true,
       keys: "mod+a",
       order: -20,
-      when: () => showing() && shown().length > 0,
+      when: () => showing() && shown().length > 0 && !typing(document.activeElement),
       run: () =>
         selection.settle(
           withSelection(
@@ -698,25 +586,15 @@ export default defineWebPlugin({
       order: 27,
       title: "Archived",
       icon: ArchiveIcon,
+      description: "Threads put away without deleting them, to open, unarchive, or delete for good.",
       body: () => <ArchivedPage deps={deps} />,
-    });
-    // Browsing shows the body; these answer the settings search, a thread by its title, project, or branch.
-    slots.add(SettingsGroups, {
-      id: SECTION,
-      section: SECTION,
-      title: "Archived threads",
-      entries: () =>
-        archivedOf(threads.list()).map((session) => ({
-          text: `archived ${text(session)}`,
-          view: () => <ArchivedRow deps={deps} session={session} project={{ kind: "name" }} />,
-        })),
     });
     slots.add(Layers, {
       id: DELETE_DIALOG,
       order: 35,
       component: () => (
         <Show when={dialogs.current() === DELETE_DIALOG}>
-          <DeleteDialog deps={deps} ids={deleting()} close={() => dialogs.open(undefined)} />
+          <DeleteThreadsDialog threads={threads} sessions={asked()} hidden={hiddenAsked()} close={() => dialogs.open(undefined)} />
         </Show>
       ),
     });

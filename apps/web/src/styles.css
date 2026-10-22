@@ -2,7 +2,8 @@
  * The foundation every plugin draws on: tokens (every colour, radius, width,
  * and stacking level is a `--` custom property), the base element styles, and
  * the shared class vocabulary (`.button`, `.icon-button`, `.field`, `.badge`,
- * `.callout`, `.muted`, the `.search-box` field, the `.menu-*` rows and their
+ * `.callout`, `.muted`, the `.search-box` field, the settings' `.setting-*`
+ * rows, `ConfirmDelete`'s `.confirm-delete`, the `.menu-*` rows and their
  * `[data-quick-key]` pick labels, the `.palette-*` list, and the inspectors'
  * `.dt-*`). Everything else belongs to the plugin that draws it and loads with it (`styles` in
  * `defineWebPlugin`), in the `plugins` layer; the shared parts' styles sit in
@@ -66,8 +67,11 @@
     --warn-soft: rgba(200, 130, 0, 0.1);
     --err: #c43d3d;
     --err-soft: rgba(196, 61, 61, 0.08);
-    /* Text on a fill of `--err` (a danger button, a count). */
-    --err-fg: #ffffff;
+    /*
+     * Text on a fill of `--err` (a danger button, a count, the stop button): black or white, whichever reads on it, as
+     * `--accent-fg` is, so a dark scheme's lighter red takes the near-black.
+     */
+    --err-fg: oklch(from var(--err) clamp(0.1495, calc((0.65 - l) * 1000), 1) 0 0);
     --add: #1f7a45;
     --add-bg: rgba(40, 170, 90, 0.1);
     --del: #b33a3a;
@@ -127,6 +131,7 @@
     --warn-soft: rgba(224, 166, 64, 0.12);
     --err: #f06d6d;
     --err-soft: rgba(240, 109, 109, 0.1);
+    --err-fg: oklch(from var(--err) clamp(0.1495, calc((0.65 - l) * 1000), 1) 0 0);
     --add: #6fd197;
     --add-bg: rgba(80, 200, 120, 0.12);
     --del: #f08a8a;
@@ -239,11 +244,14 @@
 
   /*
    * Buttons are flush: text on whatever they sit on, highlighted only under
-   * the pointer, while pressed, or while what they open is open. Variants
-   * change the text, not the shape: `button-primary` is the action that
-   * commits (full-strength and heavier, its highlight the accent's tint),
-   * `button-danger` one that destroys (in the error color). `small` fits a
-   * row or a notice.
+   * the pointer, while pressed, or while what they open is open. The two
+   * that a view or dialog is for are filled, so they read as buttons among
+   * the labels around them: `button-primary`, the action that commits (the
+   * accent, its text whichever of black or white reads on it), and
+   * `button-danger`, one that destroys (the error color, its text so too). Under the pointer
+   * and pressed, a fill gives way a little to the background; the danger
+   * fill to the text instead, away from its label, which stays readable.
+   * `small` fits a row or a notice.
    */
   .button {
     display: inline-flex;
@@ -285,24 +293,43 @@
     font-size: calc(12px * var(--text-scale));
   }
 
+  .button-primary,
+  .button-primary:hover:not(:disabled),
+  .button-primary[aria-expanded="true"] {
+    color: var(--accent-fg);
+  }
+
+  .button-danger,
+  .button-danger:hover:not(:disabled),
+  .button-danger[aria-expanded="true"] {
+    color: var(--err-fg);
+  }
+
   .button-primary {
-    color: var(--accent-text);
+    background: var(--accent);
     font-weight: 600;
+  }
+
+  .button-danger {
+    background: var(--err);
   }
 
   .button-primary:hover:not(:disabled),
   .button-primary[aria-expanded="true"] {
-    background: var(--accent-soft);
-    color: var(--accent-text);
+    background: color-mix(in srgb, var(--accent) 88%, var(--bg));
   }
 
-  .button-danger,
-  .button-danger:hover:not(:disabled) {
-    color: var(--err);
+  .button-danger:hover:not(:disabled),
+  .button-danger[aria-expanded="true"] {
+    background: color-mix(in srgb, var(--err) 88%, var(--text));
   }
 
-  .button-danger:hover:not(:disabled) {
-    background: var(--err-soft);
+  .button-primary:active:not(:disabled) {
+    background: color-mix(in srgb, var(--accent) 78%, var(--bg));
+  }
+
+  .button-danger:active:not(:disabled) {
+    background: color-mix(in srgb, var(--err) 78%, var(--text));
   }
 
   .icon-button {
@@ -320,6 +347,25 @@
   .icon-button:hover {
     background: var(--bg-hover);
     color: var(--text);
+  }
+
+  /*
+   * `ConfirmDelete` (`@lemma/look`): a quiet trash button, in the error color under the pointer; armed, the same square
+   * filled with it, held as it is under the pointer that is about to click it again.
+   */
+  .confirm-delete:not([data-armed], [aria-disabled="true"]):hover {
+    background: var(--err-soft);
+    color: var(--err);
+  }
+
+  .confirm-delete[data-armed],
+  .confirm-delete[data-armed]:hover {
+    background: var(--err);
+    color: var(--err-fg);
+  }
+
+  .confirm-delete[aria-disabled="true"] {
+    opacity: 0.4;
   }
 
   .link-button {
@@ -549,6 +595,10 @@
     color: var(--err);
   }
 
+  .menu-item.menu-danger[data-active="true"] {
+    background: var(--err-soft);
+  }
+
   .menu-item > .icon,
   .menu-check .icon {
     color: var(--text-3);
@@ -556,6 +606,17 @@
 
   .menu-item[data-active="true"] > .icon {
     color: var(--text-2);
+  }
+
+  /* An item asking before it destroys (`ActionMenu`'s `confirm`): filled in the error color, as `ConfirmDelete` arms. */
+  .menu-item[data-armed],
+  .menu-item[data-armed][data-active="true"] {
+    background: var(--err);
+    color: var(--err-fg);
+  }
+
+  .menu-item[data-armed] > .icon {
+    color: inherit;
   }
 
   .menu-check {
@@ -828,6 +889,30 @@
     display: flex;
     align-items: center;
     gap: 6px;
+  }
+
+  /*
+   * The settings' row grid: a section's own rows (a profile, an archived thread, an integration) are `.setting-row`s
+   * too, so every section's rows start at the column's edge and are one height. One that leads with a picture, an
+   * icon, or a checkbox holds it in a `.setting-lead`, one width for all, so their text lines up.
+   */
+  .setting-lead {
+    flex: none;
+    display: grid;
+    place-items: center;
+    width: 32px;
+    height: 32px;
+  }
+
+  /* A row that is picked or opened fills under the pointer, the fill reaching past the column's edge so its content keeps it. */
+  .setting-row-pick {
+    margin-inline: -8px;
+    padding-inline: 8px;
+    border-radius: var(--radius-sm);
+  }
+
+  .setting-row-pick:is(:hover, :has(:focus-visible)) {
+    background: var(--bg-hover);
   }
 
   @media (max-width: 820px) {

@@ -9,6 +9,7 @@ import { Client, Notify, Slots, defineWebPlugin, usePlugin } from "@lemma/web";
 import {
   AlertIcon,
   ChevronDownIcon,
+  ConfirmDelete,
   CopyButton,
   ExternalIcon,
   HammerIcon,
@@ -24,7 +25,6 @@ import {
   SvgDrop,
   svgSource,
   Toggle,
-  TrashIcon,
   XIcon,
 } from "@lemma/look";
 import { draftOf, entryOf, parsePasted, isImageAddress } from "./form.ts";
@@ -568,7 +568,6 @@ function ServerDetail(props: IntegrationDetailProps & { actions: Actions }) {
   const server = () => props.actions.state()?.servers.find((candidate) => candidate.name === props.id);
   const [editing, setEditing] = createSignal(false);
   const [toolsOpen, setToolsOpen] = createSignal(false);
-  const [removing, setRemoving] = createSignal(false);
   const reached = () => server()?.tools.filter((tool) => tool.exposure !== "hidden").length ?? 0;
   const remove = plugin.action("remove server", async () => {
     await props.actions.put(props.id, null);
@@ -620,28 +619,7 @@ function ServerDetail(props: IntegrationDetailProps & { actions: Actions }) {
                 </button>
               </Show>
               <Show when={server().sourceKind === "file"}>
-                <Show
-                  when={removing()}
-                  fallback={
-                    <button
-                      type="button"
-                      class="icon-button"
-                      aria-label={`Remove ${server().name}`}
-                      data-tip="Remove from mcp.json"
-                      onClick={() => setRemoving(true)}
-                    >
-                      <TrashIcon />
-                    </button>
-                  }
-                >
-                  <button type="button" class="button small button-danger" onClick={remove}>
-                    <TrashIcon />
-                    Remove
-                  </button>
-                  <button type="button" class="icon-button" aria-label="Keep it" data-tip="Keep" onClick={() => setRemoving(false)}>
-                    <XIcon />
-                  </button>
-                </Show>
+                <ConfirmDelete label={`Delete ${server().name}`} tip="Delete from mcp.json" onConfirm={remove} />
               </Show>
               <Toggle
                 label={`${server().name} on`}

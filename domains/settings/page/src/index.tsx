@@ -2,7 +2,7 @@ import { For, Show, createEffect, createMemo, createSignal, mapArray, on, onClea
 import type { Accessor, JSX } from "solid-js";
 import { formatKeys, withKeys } from "@lemma/web/keys";
 import { shownKeysOf, Actions } from "@lemma/actions";
-import { filterGroups } from "./settings.ts";
+import { attentionOf, badgesOf, errorCount, filterGroups } from "./settings.ts";
 import type { EntryGroup } from "./settings.ts";
 import { Layout, SidebarFooter, SidebarRegion } from "@lemma/frame";
 import { NewThreadRoute } from "@lemma/sessions";
@@ -53,6 +53,27 @@ function Groups(props: { groups: readonly EntryGroup<SettingsEntry>[] }) {
         </section>
       )}
     </Keyed>
+  );
+}
+
+/**
+ * A section's head, every section's alike, under the breadcrumb that names it: what the section is for, and its own
+ * buttons at the end. A section with neither has none.
+ */
+function SectionHead(props: { section: Section }) {
+  return (
+    <Show when={props.section.description !== undefined || props.section.actions !== undefined}>
+      <header class="settings-section-head">
+        <Show when={props.section.description}>{(text) => <p class="settings-section-description">{text()}</p>}</Show>
+        <Show when={props.section.actions} keyed>
+          {(actions) => (
+            <div class="settings-section-actions">
+              <Contained slot={SettingsSections} item={props.section} component={actions} />
+            </div>
+          )}
+        </Show>
+      </header>
+    </Show>
   );
 }
 
@@ -122,7 +143,7 @@ export default defineWebPlugin({
       if (open === undefined) return;
       const next: Record<string, string> = { ...params() };
       for (const [key, value] of Object.entries(patch)) {
-        if (value === undefined || value === "") delete next[key];
+        if (value === undefined) delete next[key];
         else next[key] = value;
       }
       router.navigate(SettingsRoute, { section: open }, { search: next, replace: true });
@@ -218,7 +239,13 @@ export default defineWebPlugin({
                 <Show when={searching() && count(item.id) > 0}>
                   <span class="settings-nav-count">{count(item.id)}</span>
                 </Show>
-                <Show when={!searching() && item.badge?.()}>{(badge) => <span class="settings-nav-count err">{badge()}</span>}</Show>
+                <Show when={!searching() && item.badge?.()}>
+                  {(badge) => (
+                    <span class="settings-nav-count" classList={{ err: item.badgeTone !== "info" }}>
+                      {badge()}
+                    </span>
+                  )}
+                </Show>
               </button>
             )}
           </For>
@@ -248,9 +275,6 @@ export default defineWebPlugin({
             <span class="settings-crumb-sep">/</span>
             <span>{searching() ? "Search" : current()?.title}</span>
             <span class="spacer" />
-            <Show when={!searching() && current()?.actions !== undefined && current()} keyed>
-              {(shown) => <Contained slot={SettingsSections} item={shown} component={shown.actions} />}
-            </Show>
             <button class="icon-button" aria-label="Close settings" data-tip={withKeys("Close", keysOf("settings.close"))} onClick={() => open(undefined)}>
               <XIcon />
             </button>
@@ -262,6 +286,7 @@ export default defineWebPlugin({
                 <Show when={current()}>
                   {(shown) => (
                     <>
+                      <SectionHead section={shown()} />
                       <Show when={shown().intro}>{(intro) => <Contained slot={SettingsSections} item={shown()} component={intro()} />}</Show>
                       <Show
                         when={shown().body}
@@ -313,22 +338,32 @@ export default defineWebPlugin({
       when: () => section() === undefined,
       run: () => open("general"),
     });
-    // The sidebar's foot: the way to settings, marked with how many need attention, and opening at the first that does.
-    // While a plugin adds to its menu (`SettingsMenu`), it opens that menu instead, with Settings last.
-    const attention = () => {
-      const found = slots.list(SettingsSections).find((candidate) => candidate.badge?.() !== undefined);
-      return found === undefined ? undefined : { id: found.id, title: found.title, badge: found.badge!()! };
-    };
+    // The sidebar's foot: the way to settings, counting the error badges (news, an `info` badge, is only a dot), and
+    // opening at the first section with a badge, errors first. While a plugin adds to its menu (`SettingsMenu`), it
+    // opens that menu instead, with a row for each section in error, then Settings.
+    const badges = createMemo(() => badgesOf(slots.list(SettingsSections)));
+    const errors = () => badges().filter((badge) => badge.tone === "error");
     const openKeys = () => shownKeysOf(slots, webPlugins.list(), "settings.open");
     const toggle = () => {
       if (section() !== undefined) open(undefined);
-      else open(attention()?.id ?? SectionIds.general);
+      else open(badges()[0]?.section.id ?? SectionIds.general);
     };
     const menu = () => slots.list(SettingsMenu).filter((item) => item.when?.() ?? true);
     const face = () => menu().find((item) => item.face !== undefined);
     const name = () => (face() === undefined ? "Settings" : `${face()!.face!.label()} · Settings`);
-    const named = (name: string) => (attention() === undefined ? name : `${name} · ${attention()!.title}: ${attention()!.badge}`);
-    const Badge = () => <Show when={attention()}>{(shown) => <span class="count-badge">{Number.parseInt(shown().badge, 10) || "!"}</span>}</Show>;
+    const named = (name: string) => [name, ...badges().map((badge) => `${badge.section.title}: ${badge.text}`)].join(" · ");
+    const Badge = () => (
+      <Show
+        when={errors().length > 0}
+        fallback={
+          <Show when={badges().length > 0}>
+            <span class="badge-dot" />
+          </Show>
+        }
+      >
+        <span class="count-badge">{errorCount(badges())}</span>
+      </Show>
+    );
     slots.add(SidebarFooter, {
       id: "settings",
       component: (props) => (
@@ -379,6 +414,24 @@ export default defineWebPlugin({
                   )}
                 </For>
                 <div class="menu-sep" role="separator" />
+                {/* What the count on the button stands for, each a way to its section. */}
+                <For each={errors()}>
+                  {(badge) => (
+                    <button
+                      class="menu-item"
+                      role="menuitem"
+                      onClick={() => {
+                        close();
+                        open(badge.section.id);
+                        props.onPick();
+                      }}
+                    >
+                      <Contained slot={SettingsSections} item={badge.section} component={badge.section.icon} />
+                      <span class="menu-label">{badge.section.title}</span>
+                      <span class="menu-hint settings-menu-attention">{attentionOf(badge.text)}</span>
+                    </button>
+                  )}
+                </For>
                 <button
                   class="menu-item"
                   role="menuitem"

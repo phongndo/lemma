@@ -63,6 +63,10 @@ import { toggling } from "./check-ui/toggling.ts";
  *    script's and the model's own) show after the turn's work and above its
  *    answer, once each, in a sandbox that keeps them out of the app, sized to
  *    their content, and following the app's look without loading again.
+ * 13. Settings › Profiles lists the default alone, as Core, the current
+ *    one; a profile made in its dialog gets a row, renames in place, and goes
+ *    once its dialog asks; while there are two, the settings button shows the
+ *    profile the page is.
  *
  * Run it in the browser shell: `nix develop .#browser -c pnpm --filter @lemma/web-app ui:check`.
  * `--shard=i/n` runs a share of it, as CI does on two runners: of the lanes the

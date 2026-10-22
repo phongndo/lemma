@@ -17,6 +17,17 @@
   font-weight: 600;
 }
 
+/* News (an `info` badge, an update out) is a quiet dot, not a count: it is not trouble. */
+.badge-dot {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent);
+}
+
 /* The settings button, when it opens a menu (`SettingsMenu`), stays lit while the menu is open. */
 .settings-trigger[aria-expanded="true"] {
   background: var(--bg-hover);
@@ -24,6 +35,11 @@
 
 .settings-menu {
   min-width: 220px;
+}
+
+/* A section in error's row in that menu: what its badge says. */
+.settings-menu-attention {
+  color: var(--err);
 }
 
 .settings-nav {
@@ -143,6 +159,36 @@
   display: flex;
   flex-direction: column;
   gap: 24px;
+}
+
+/* A section's head: what it is for, and its own buttons at the end, level with its rows' controls. */
+.settings-section-head {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  min-height: 28px;
+}
+
+/* Buttons that show only at times (Reset, once something is changed) leave no empty head behind. */
+.settings-section-head:not(:has(.settings-section-description)):has(.settings-section-actions:empty) {
+  display: none;
+}
+
+.settings-section-description {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  color: var(--text-2);
+  font-size: calc(13px * var(--text-scale));
+}
+
+.settings-section-actions {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
 }
 
 /* A section with its own body (the plugins inspector) takes the whole remaining screen and scrolls inside it. */

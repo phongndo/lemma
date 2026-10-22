@@ -3,7 +3,7 @@ import { MAX_TITLE_LENGTH, ProfileChannels, profileNameFor, profilePage, profile
 import type { AvatarChange, ProfileAvatar, ProfileInfo } from "@lemma/profiles";
 import { Dialogs, Layers } from "@lemma/frame";
 import { SettingsGroups, SettingsMenu, SettingsRoute, SettingsSections } from "@lemma/settings";
-import { Dialog, filled, identicon, LaptopIcon, PlusIcon, Popover } from "@lemma/look";
+import { Dialog, filled, identicon, LaptopIcon, MenuItem, PlusIcon, Popover } from "@lemma/look";
 import { copyAndTell } from "@lemma/web/clipboard";
 import { Client, Notify, Router, Slots, defineWebPlugin } from "@lemma/web";
 import styles from "./web.css?inline";
@@ -98,22 +98,6 @@ const shrink = async (file: File): Promise<string> => {
 
 /** What a call's failure says, for a dialog to show. */
 const messageOf = (error: unknown) => (error instanceof Error ? error.message : String(error));
-
-function MenuItem(props: { label: string; close: () => void; run: () => void; danger?: boolean }) {
-  return (
-    <button
-      class="menu-item"
-      classList={{ "menu-danger": props.danger === true }}
-      role="menuitem"
-      onClick={() => {
-        props.close();
-        props.run();
-      }}
-    >
-      <span class="menu-label">{props.label}</span>
-    </button>
-  );
-}
 
 /**
  * Switches between the profiles on the host's machine, each a separate Lemma, and manages them. With one profile there
@@ -381,50 +365,48 @@ export default defineWebPlugin({
               return profile().running ? "Running" : "Stopped";
             };
             return (
-              <div class="profiles-row">
-                <PicturePicker profile={profile()} />
-                <span class="profiles-info">
-                  <Show when={editing()} fallback={<span class="profiles-name">{profileTitle(profile())}</span>}>
+              <div class="setting-row profiles-row">
+                <span class="setting-lead">
+                  <PicturePicker profile={profile()} />
+                </span>
+                <span class="setting-text">
+                  <Show when={editing()} fallback={<span class="setting-title profiles-name">{profileTitle(profile())}</span>}>
                     <NameField profile={profile()} done={() => setEditing(false)} />
                   </Show>
-                  <span class="profiles-desc">{state()}</span>
+                  <span class="setting-desc">{state()}</span>
                 </span>
-                <Show when={!profile().current}>
-                  <button class="button small profiles-action" disabled={opening() === profile().name} onClick={() => open(profile().name)}>
-                    Open
-                  </button>
-                </Show>
-                <Popover
-                  label={`${profileTitle(profile())} options`}
-                  tip="Options"
-                  triggerClass="button small profiles-action"
-                  placement="bottom-end"
-                  trigger="Manage"
-                >
-                  {(close) => (
-                    <>
-                      <MenuItem label="Rename" close={close} run={() => setEditing(true)} />
-                      <Show when={profile().running && !profile().current && stopping() !== profile().name}>
-                        <MenuItem label="Stop" close={close} run={() => stop(profile())} />
-                      </Show>
-                      <div class="menu-sep" role="separator" />
-                      <MenuItem label="Copy command" close={close} run={() => copy(command())} />
-                      <Show when={profile().home}>{(home) => <MenuItem label="Copy folder path" close={close} run={() => copy(home())} />}</Show>
-                      <Show when={!profile().default && !profile().current}>
+                <span class="setting-control">
+                  <Show when={!profile().current}>
+                    <button class="button small" disabled={opening() === profile().name} onClick={() => open(profile().name)}>
+                      Open
+                    </button>
+                  </Show>
+                  <Popover label={`${profileTitle(profile())} options`} tip="Options" triggerClass="button small" placement="bottom-end" trigger="Manage">
+                    {(close) => (
+                      <>
+                        <MenuItem label="Rename" close={close} run={() => setEditing(true)} />
+                        <Show when={profile().running && !profile().current && stopping() !== profile().name}>
+                          <MenuItem label="Stop" close={close} run={() => stop(profile())} />
+                        </Show>
                         <div class="menu-sep" role="separator" />
-                        <MenuItem
-                          label="Delete…"
-                          danger
-                          close={close}
-                          run={() => {
-                            setDeleting(profile().name);
-                            dialogs.open(DELETE_DIALOG);
-                          }}
-                        />
-                      </Show>
-                    </>
-                  )}
-                </Popover>
+                        <MenuItem label="Copy command" close={close} run={() => copy(command())} />
+                        <Show when={profile().home}>{(home) => <MenuItem label="Copy folder path" close={close} run={() => copy(home())} />}</Show>
+                        <Show when={!profile().default && !profile().current}>
+                          <div class="menu-sep" role="separator" />
+                          <MenuItem
+                            label="Delete…"
+                            danger
+                            close={close}
+                            run={() => {
+                              setDeleting(profile().name);
+                              dialogs.open(DELETE_DIALOG);
+                            }}
+                          />
+                        </Show>
+                      </>
+                    )}
+                  </Popover>
+                </span>
               </div>
             );
           }}
@@ -437,6 +419,7 @@ export default defineWebPlugin({
       order: 90,
       title: "Profiles",
       icon: LaptopIcon,
+      description: "Separate Lemmas on this machine, each with its own plugins, look, threads, and logins.",
       actions: () => (
         <button class="button small" onClick={() => dialogs.open(NEW_DIALOG)}>
           <PlusIcon /> New profile

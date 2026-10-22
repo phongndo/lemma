@@ -1,15 +1,12 @@
 import type { SessionInfo } from "@lemma/sessions";
 import { matchesQuery } from "@lemma/web/match";
 
-/** Archived threads under one heading: a project, or a stretch of days. */
+/** Archived threads under one heading: a stretch of days. */
 export interface ArchivedGroup {
-  /** What `keyOf` gave its threads: the project's folder, or the days' label. */
+  /** What `keyOf` gave its threads: the days' label. */
   readonly key: string;
   readonly sessions: readonly SessionInfo[];
 }
-
-/** How the page groups the threads: by when they were last used, as a browser's history does, or by project. */
-export type Grouping = "date" | "project";
 
 /** The archived threads, the most recently used first: archiving a thread is not using it, so this is when it was last worked in. */
 export const archivedOf = (sessions: readonly SessionInfo[]): SessionInfo[] =>
@@ -91,11 +88,14 @@ export const withSelection = (selected: ReadonlySet<string>, ids: readonly strin
 export const extendSelection = (base: ReadonlySet<string>, order: readonly string[], anchor: string | undefined, id: string): ReadonlySet<string> =>
   anchor === undefined || !order.includes(anchor) ? withSelection(base, [id], true) : withSelection(base, rangeOf(order, anchor, id), base.has(anchor));
 
+/** The ids of `selected` that `sessions` holds unarchived: they leave the selection. One it does not hold is not said. */
+export const unarchived = (selected: ReadonlySet<string>, sessions: readonly SessionInfo[]): string[] => {
+  const shown = new Set(sessions.flatMap((session) => (session.archived === true ? [] : [session.id])));
+  return [...selected].filter((id) => shown.has(id));
+};
+
 /** How many of `ids` are selected, as a checkbox over them says it: all, some, or none (an empty list is none). */
 export const selectionOf = (selected: ReadonlySet<string>, ids: readonly string[]): "all" | "some" | "none" => {
   const count = ids.filter((id) => selected.has(id)).length;
   return count === 0 ? "none" : count === ids.length ? "all" : "some";
 };
-
-/** `1 thread`, `3 threads`. */
-export const threadCount = (count: number): string => `${count} ${count === 1 ? "thread" : "threads"}`;

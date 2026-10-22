@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { drawn, log, open, settled, url } from "./shared.ts";
 
-// 11 on: pages that start elsewhere: with no provider, connecting one, with a web half, and from an older app.
+// 11 on: pages that start elsewhere: with no provider, connecting one, with a web half, from an older app, and profiles.
 export const separate = async (): Promise<string> => {
   const { errors, expectNoErrors } = log();
 
@@ -378,5 +378,67 @@ export const separate = async (): Promise<string> => {
   await fork.close();
   expectNoErrors("starting a new thread in a new worktree from the remote, and a new thread after it");
 
-  return "a form question is drawn as settings are and answers its command; with no provider it opens in the chat, whose notice leads to Providers and back; providers connect each way in one dialog; a web half's Tailwind classes compile with the app's, from its tokens; a theme pack's theme, accent, and row come and go with it; an older app's appearance carries over; a new thread starts in a new worktree from the remote's branch when asked, files it under its project, and a new thread after it starts in the project; a project deleted under the thread shown stays gone";
+  // 13. Settings › Profiles, on the mock host's profiles: the default alone, as Core, the current one; one made in the
+  // New profile dialog gets a row, renames in place, and goes only after its dialog asks; while there are two, the
+  // settings button shows the profile this page is.
+  const profiles = await open();
+  profiles.on("pageerror", (error) => errors.push(error.message));
+  await profiles.goto(`${url}/settings/profiles?mock`);
+  const rows = profiles.locator(".settings .profiles-row");
+  await rows
+    .first()
+    .waitFor({ timeout: 10_000 })
+    .catch(() => assert.fail("Settings › Profiles lists no profile"));
+  assert.deepEqual(
+    await rows.evaluateAll((all) => all.map((row) => [row.querySelector(".setting-title")?.textContent, row.querySelector(".setting-desc")?.textContent])),
+    [["Core", "Current"]],
+    "Settings › Profiles does not list the default alone, as Core, the current one",
+  );
+  await profiles.click(".settings-section-head button:has-text('New profile')");
+  await profiles.fill(".profiles-dialog input[aria-label=Name]", "Work");
+  await profiles.click(".profiles-dialog button[type=submit]");
+  await profiles.waitForSelector(".profiles-dialog", { state: "detached", timeout: 5_000 }).catch(() => assert.fail("making a profile left its dialog open"));
+  const work = rows.filter({ hasText: "Work" });
+  await work
+    .locator(".setting-desc", { hasText: "Stopped" })
+    .waitFor({ timeout: 5_000 })
+    .catch(() => assert.fail("a profile made in the New profile dialog has no row"));
+  // Two profiles: the settings button, at the sidebar's foot once settings close, is this page's profile.
+  await profiles.keyboard.press("Escape");
+  await profiles
+    .waitForSelector(".sidebar-foot .settings-trigger .profiles-avatar", { timeout: 5_000 })
+    .catch(() => assert.fail("with two profiles, the settings button does not show the profile's face"));
+  assert.match(
+    (await profiles.locator(".sidebar-foot .settings-trigger").getAttribute("aria-label")) ?? "",
+    /^Profile: Core · Settings/,
+    "the settings button does not name the profile this page is",
+  );
+  // Back in place: a reload would start the mock host afresh, without the profile.
+  await profiles.evaluate(async () => {
+    const { Settings } = (await import("/src/ui/api.ts" as string)).api.contracts;
+    (await (window as any).lemma.service(Settings)).open("profiles");
+  });
+  // Renaming in place: Manage › Rename puts a field where the name was, and Enter keeps what is typed.
+  await work.getByRole("button", { name: "Work options" }).click();
+  await profiles.click(".popover [role=menuitem]:has-text('Rename')");
+  // The row's name is the field's value now, which `hasText` does not read: the field is found among the rows.
+  const field = rows.locator("input[aria-label='Rename Work']");
+  await field.waitFor({ timeout: 5_000 }).catch(() => assert.fail("Rename does not put a field in the profile's row"));
+  await field.fill("Day job");
+  await field.press("Enter");
+  const renamed = rows.filter({ hasText: "Day job" });
+  await renamed.waitFor({ timeout: 5_000 }).catch(() => assert.fail("a profile renamed in place does not show its new name"));
+  // Deleting asks in a dialog that says what goes; confirming takes its row.
+  await renamed.getByRole("button", { name: "Day job options" }).click();
+  await profiles.click(".popover [role=menuitem]:has-text('Delete')");
+  const ask = profiles.locator(".profiles-dialog", { hasText: "Delete Day job?" });
+  await ask.waitFor({ timeout: 5_000 }).catch(() => assert.fail("deleting a profile does not ask in a dialog"));
+  assert.match((await ask.textContent()) ?? "", /threads, config, plugins, and logins go with it/, "the delete dialog does not say what goes with the profile");
+  await ask.locator(".button-danger").click();
+  await renamed.waitFor({ state: "detached", timeout: 5_000 }).catch(() => assert.fail("a profile deleted from its dialog keeps its row"));
+  assert.equal(await rows.count(), 1, "deleting a profile took another's row");
+  await profiles.close();
+  expectNoErrors("making, renaming, and deleting a profile");
+
+  return "a form question is drawn as settings are and answers its command; with no provider it opens in the chat, whose notice leads to Providers and back; providers connect each way in one dialog; a web half's Tailwind classes compile with the app's, from its tokens; a theme pack's theme, accent, and row come and go with it; an older app's appearance carries over; a new thread starts in a new worktree from the remote's branch when asked, files it under its project, and a new thread after it starts in the project; a project deleted under the thread shown stays gone; Settings › Profiles lists the default as Core, makes, renames, and deletes a profile, and the settings button shows its face while there are two";
 };

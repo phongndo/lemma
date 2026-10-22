@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { SessionInfo } from "@lemma/sessions";
-import { archivedOf, dayLabel, extendSelection, filterArchived, groupBy, rangeOf, selectionOf, threadCount, withSelection } from "../src/archived.ts";
+import { archivedOf, dayLabel, extendSelection, filterArchived, groupBy, unarchived, rangeOf, selectionOf, withSelection } from "../src/archived.ts";
+import { threadCount } from "@lemma/threads";
 
 const session = (id: string, cwd: string, updatedAt: number, archived = true, title?: string): SessionInfo => ({
   id,
@@ -105,6 +106,14 @@ describe("selection", () => {
     const order = ["a", "b", "c", "d"];
     expect([...extendSelection(new Set(["a", "c", "d"]), order, "b", "d")].sort()).toEqual(["a"]);
     expect([...extendSelection(new Set(["a"]), order, undefined, "c")].sort()).toEqual(["a", "c"]);
+  });
+
+  it("finds the selected threads unarchived since, to drop, and keeps those the list does not hold", () => {
+    const sessions = [session("a", "/p", 10), session("b", "/p", 20, false), session("c", "/p", 30)];
+    expect(unarchived(new Set(["a", "b", "gone"]), sessions)).toEqual(["b"]);
+    expect(unarchived(new Set(["a", "c"]), sessions)).toEqual([]);
+    // A list not loaded yet (reconnecting) drops nothing.
+    expect(unarchived(new Set(["a", "b"]), [])).toEqual([]);
   });
 
   it("says whether all, some, or none of a list is selected", () => {

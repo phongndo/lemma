@@ -29,7 +29,8 @@ app opens one in a window of its own, and `lemma --profile <name>` with
 Settings › Profiles lists them, whether there is one or more, a row each: its
 avatar, which changes its picture; its name and its state; Open; and Manage,
 which renames it in place, stops its host, copies its command or folder, and
-deletes it, after asking. New profile makes one. A profile deleted in the
+deletes it, after a dialog that says all its data goes with it. New profile, in
+the section's head, makes one. A profile deleted in the
 desktop app also closes its windows and clears what their pages kept
 (`lemmaDesktop.profileRemoved`).
 

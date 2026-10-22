@@ -267,6 +267,7 @@ export default defineWebPlugin({
       order: 25,
       title: "Projects",
       icon: FolderIcon,
+      description: "The folders threads work in, each with its settings and its worktrees.",
       actions: () => (
         <Show when={addAction()}>
           {(action) => (

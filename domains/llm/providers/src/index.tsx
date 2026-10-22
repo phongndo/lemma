@@ -23,7 +23,7 @@ import { Settings, SettingsGroups, SettingsSections } from "@lemma/settings";
 import { ComposerNotices, ErrorActions } from "@lemma/threads";
 import type { ErrorActionProps } from "@lemma/threads";
 import { Notify, Slots, WebPlugins, defineWebPlugin } from "@lemma/web";
-import { CheckIcon, Dialog, FilterIcon, KeyIcon, pickSvg, PlusIcon, Popover, SearchField, Spinner } from "@lemma/look";
+import { CheckIcon, Dialog, FilterIcon, KeyIcon, MenuItem, pickSvg, PlusIcon, Popover, SearchField, Spinner } from "@lemma/look";
 import { ConnectDialog } from "./connect.tsx";
 import { CustomProviderDialog } from "./custom.tsx";
 import styles from "./providers.css?inline";
@@ -52,23 +52,6 @@ interface CustomActions {
   readonly changeLogo: (provider: ProviderInfo) => void;
   readonly removeLogo: (provider: ProviderInfo) => void;
   readonly remove: (provider: ProviderInfo) => void;
-}
-
-/** An item of a provider's menu: picking it closes the menu, then runs. */
-function MenuItem(props: { label: string; close: () => void; run: () => void; danger?: boolean }) {
-  return (
-    <button
-      class="menu-item"
-      classList={{ "menu-danger": props.danger === true }}
-      role="menuitem"
-      onClick={() => {
-        props.close();
-        props.run();
-      }}
-    >
-      <span class="menu-label">{props.label}</span>
-    </button>
-  );
 }
 
 function CustomItems(props: { provider: ProviderInfo; custom: CustomActions; close: () => void }): JSX.Element {
