@@ -10,6 +10,7 @@ import {
   dropped,
   flagsOf,
   nestedAgents,
+  nextNeeding,
   noMarks,
   runTime,
   sectionIn,
@@ -236,6 +237,19 @@ describe("moving through the list", () => {
     expect(stepFrom(order, "a", -1)).toBe("a");
     expect(stepFrom(order, undefined, 1)).toBe("a");
     expect(stepFrom(order, undefined, -1)).toBe("c");
+  });
+
+  test("the next thread that needs the person goes round the list, and never to the one shown", () => {
+    const needs = (wanted: string[]) => (session: SessionInfo) => wanted.includes(session.id);
+    expect(nextNeeding(order, "a", 1, needs(["c"]))).toBe("c");
+    expect(nextNeeding(order, "c", 1, needs(["a", "b"]))).toBe("a");
+    expect(nextNeeding(order, "a", -1, needs(["b"]))).toBe("b");
+    expect(nextNeeding(order, "b", -1, needs(["a", "c"]))).toBe("a");
+    // From no thread in the list (a new one shown), the first or the last that needs the person.
+    expect(nextNeeding(order, undefined, 1, needs(["b", "c"]))).toBe("b");
+    expect(nextNeeding(order, "z", -1, needs(["a", "b"]))).toBe("b");
+    expect(nextNeeding(order, "a", 1, needs(["a"]))).toBeUndefined();
+    expect(nextNeeding([], undefined, 1, () => true)).toBeUndefined();
   });
 
   test("archiving the thread shown goes to the next, else the one before", () => {

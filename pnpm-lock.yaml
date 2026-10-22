@@ -1498,6 +1498,9 @@ importers:
 
   domains/frame/pages:
     dependencies:
+      '@lemma/actions':
+        specifier: workspace:*
+        version: link:../../actions/contract
       '@lemma/frame':
         specifier: workspace:*
         version: link:../contract

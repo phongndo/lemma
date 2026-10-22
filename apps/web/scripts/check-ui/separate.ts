@@ -19,6 +19,15 @@ export const separate = async (): Promise<string> => {
   await fresh.waitForSelector(".settings", { state: "detached", timeout: 5_000 }).catch(() => assert.fail("connecting the first provider left settings open"));
   await fresh.waitForSelector("textarea");
   assert.equal(await fresh.locator(".composer-callout").count(), 0, "the no-provider notice stayed after connecting one");
+  // With a model, ⌘⇧M and ⌘⇧E open the composer's model and reasoning pickers.
+  await fresh.keyboard.press("ControlOrMeta+Shift+KeyM");
+  await fresh.waitForSelector(".popover.model-menu", { timeout: 5_000 }).catch(() => assert.fail("⌘⇧M opened no model picker"));
+  await fresh.keyboard.press("Escape");
+  await fresh.waitForSelector(".popover", { state: "detached", timeout: 5_000 });
+  await fresh.keyboard.press("ControlOrMeta+Shift+KeyE");
+  await fresh.waitForSelector(".popover:not(.model-menu) [role=menuitemradio]", { timeout: 5_000 }).catch(() => assert.fail("⌘⇧E opened no reasoning picker"));
+  await fresh.keyboard.press("Escape");
+  await fresh.waitForSelector(".popover", { state: "detached", timeout: 5_000 });
   const connection = fresh.locator(".main-head .connection");
   assert.ok((await connection.boundingBox())!.width < 30, "the header's connection should be a dot, not text");
   assert.equal((await connection.textContent())?.trim(), "Connected", "the dot's live region must carry its status as text, which is announced");

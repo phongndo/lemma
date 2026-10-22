@@ -785,6 +785,38 @@ export const parts = async (): Promise<string> => {
   await page.evaluate(() => (window as any).lemmaMock.releaseSteers());
   assert.equal(await where(), thread, "⌘Enter left the thread shown");
   assert.equal(await page.inputValue("textarea"), "", "⌘Enter left the prompt in the composer");
+  // Done while another showed, the background thread needs the person: Alt+Shift+↓ goes to it from the prompt, and
+  // ⌘[ and ⌘] go back and forward. ⌘⌥A archives it, and on it archived, unarchives it.
+  await page
+    .waitForSelector(`${workingRow} .thread-state[data-state=done]`, { timeout: 5_000 })
+    .catch(() => assert.fail("a thread done in the background does not say so on its card"));
+  const atBackground = (key: string) =>
+    page
+      .waitForFunction((id) => location.pathname === `/threads/${id}`, background, { timeout: 5_000 })
+      .catch(async () => assert.fail(`${key} went to ${await where()}, not the thread done in the background`));
+  const atThread = (key: string) =>
+    page
+      .waitForFunction((path) => `${location.pathname}${location.search}` === path, thread, { timeout: 5_000 })
+      .catch(async () => assert.fail(`${key} went to ${await where()}, not ${thread}`));
+  await page.focus("textarea");
+  await page.keyboard.press("Alt+Shift+ArrowDown");
+  await atBackground("Alt+Shift+↓");
+  await page.keyboard.press("ControlOrMeta+BracketLeft");
+  await atThread("⌘[");
+  await page.keyboard.press("ControlOrMeta+BracketRight");
+  await atBackground("⌘]");
+  await page.keyboard.press("ControlOrMeta+Alt+KeyA");
+  await page
+    .waitForFunction((id) => (window as any).blankThreads.list().find((session: any) => session.id === id)?.archived === true, background, { timeout: 5_000 })
+    .catch(() => assert.fail("⌘⌥A did not archive the thread shown"));
+  await page.keyboard.press("ControlOrMeta+BracketLeft");
+  await atBackground("⌘[ after archiving");
+  await page.keyboard.press("ControlOrMeta+Alt+KeyA");
+  await page
+    .waitForFunction((id) => (window as any).blankThreads.list().find((session: any) => session.id === id)?.archived !== true, background, { timeout: 5_000 })
+    .catch(() => assert.fail("⌘⌥A did not unarchive the archived thread shown"));
+  await page.click(`.thread-list a[href="${thread}"]`);
+  await atThread("a click");
   // mod+1 goes to the first thread listed.
   const first = await page.getAttribute(".thread-section.sorted [data-session-row] >> nth=0", "href");
   await page.keyboard.press("ControlOrMeta+Digit1");

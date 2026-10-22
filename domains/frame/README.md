@@ -5,7 +5,7 @@ The page's frame: its regions, layers, docks, dialogs, and what shows in them be
 | Plugin                            | Halves | What it does                                                                                                          |
 | --------------------------------- | ------ | --------------------------------------------------------------------------------------------------------------------- |
 | [`frame.shell`](shell/)           | web    | The top bar, sidebar, and main regions, layers over them, and docks under them. Pinned: replace it, never turn it off |
-| [`frame.pages`](pages/)           | web    | The page the address names, in the main region. Pinned                                                                |
+| [`frame.pages`](pages/)           | web    | The page the address names, in the main region; `mod+[` and `mod+]` go back and forward. Pinned                       |
 | [`frame.sidebar`](sidebar/)       | web    | Every thread down the side, each a card: drafts on top, pinned and active in an order dragged into, archived below    |
 | [`frame.dialogs`](dialogs/)       | web    | Which dialog is open: provides `Dialogs`                                                                              |
 | [`frame.questions`](questions/)   | web    | The host's questions, the oldest first                                                                                |

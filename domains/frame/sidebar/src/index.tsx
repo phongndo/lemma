@@ -48,6 +48,7 @@ import {
   dropped,
   flagsOf,
   nestedAgents,
+  nextNeeding,
   runTime,
   sectionIn,
   sections,
@@ -955,6 +956,7 @@ export default defineWebPlugin({
       setMarks(transitioned(untrack(marks), was, now, Date.now()));
     });
     const lists = createMemo(() => sections(threads.list(), marks()));
+    const agents = createMemo(() => nestedAgents(threads.list()));
     /** The threads ⌘1 … ⌘9 and stepping go through: as listed, pinned first, the archived not among them. */
     const order = () => [...lists().pinned, ...lists().active];
     // While ⌘ is held alone (`onHold`), the first nine show the keys that go to them.
@@ -1036,7 +1038,7 @@ export default defineWebPlugin({
       workspace,
       now,
       lists,
-      agents: createMemo(() => nestedAgents(threads.list())),
+      agents,
       unread,
       runningSince: (id) => since()[id],
       place,
@@ -1150,19 +1152,62 @@ export default defineWebPlugin({
         },
       });
     add("sidebar.archive-thread", 22, {
-      title: "Archive thread",
-      detail: "It goes below, among the archived, and the next thread shows",
+      title: "Archive or unarchive thread",
+      detail: "Archived, it goes below and the next thread shows; unarchived, it goes back on top",
       icon: ArchiveIcon,
       keys: "mod+alt+a",
       whileTyping: true,
       when: () => {
         const session = threads.active();
-        return session !== undefined && session.lastSeq > 0 && session.archived !== true;
+        return session !== undefined && session.lastSeq > 0;
       },
       run: () => {
         const session = threads.active();
-        if (session !== undefined) void archive(session);
+        if (session === undefined) return;
+        if (session.archived === true) unarchive(session);
+        else void archive(session);
       },
+    });
+    /**
+     * The thread that needs the person `by` places on, going round: one listed that waits on them (`ThreadWaits`) or
+     * finished unseen, or an agent under one that waits on them (a finished agent does not: its thread goes on with what it did).
+     */
+    const needing = (by: 1 | -1) => {
+      const nested = new Set<string>();
+      const listed = order().flatMap((session) => {
+        const under = (agents().get(session.id) ?? []).map((row) => row.session);
+        for (const agent of under) nested.add(agent.id);
+        return [session, ...under];
+      });
+      const waits = slots.list(ThreadWaits);
+      return nextNeeding(
+        listed,
+        threads.activeId(),
+        by,
+        (session) =>
+          waitingOn(waits, session.id) !== undefined || (!nested.has(session.id) && unread().has(session.id) && !threads.running().includes(session.id)),
+      );
+    };
+    const goNeeding = (by: 1 | -1) => () => {
+      const next = needing(by);
+      if (next !== undefined) void threads.select(next);
+    };
+    // Alt+Shift+↓ and ↑, as Slack and Discord step through what is unread; with none, the keys stay the field's.
+    add("sidebar.next-needing", 23, {
+      title: "Next thread that needs you",
+      keywords: ["waiting", "unread", "done", "input", "approval", "attention"],
+      keys: "alt+shift+arrowdown",
+      whileTyping: true,
+      when: () => needing(1) !== undefined,
+      run: goNeeding(1),
+    });
+    add("sidebar.previous-needing", 24, {
+      title: "Previous thread that needs you",
+      keywords: ["waiting", "unread", "done", "input", "approval", "attention"],
+      keys: "alt+shift+arrowup",
+      whileTyping: true,
+      when: () => needing(-1) !== undefined,
+      run: goNeeding(-1),
     });
   },
 });

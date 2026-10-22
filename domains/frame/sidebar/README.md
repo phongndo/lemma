@@ -53,8 +53,8 @@ asked from a turn): `Needs approval`, or `Needs input` for a value. Requires
   else how long ago it was used. An archived thread is one slim line.
 - **Under the pointer** a card's state gives way to buttons to pin it (or
   unpin it) and to archive it, and an archived row's age to Unarchive;
-  `mod+alt+a` archives the thread shown. Archiving the thread shown goes on to
-  the next in the list. A running thread archives too: its turn goes on, and
+  `mod+alt+a` archives the thread shown, or unarchives it. Archiving the thread
+  shown goes on to the next in the list. A running thread archives too: its turn goes on, and
   its archived row says what it is doing (`Working`, `Needs input`, `Done`)
   where its age goes.
 - **Dragging.** A thread dragged up and down the list goes where it is
@@ -77,8 +77,13 @@ asked from a turn): `Needs approval`, or `Needs input` for a value. Requires
   first; while `mod` is held alone a moment (`Action.onHold`, from the
   keymap), each of those threads shows its keys (`⌘1`) where its state goes,
   as T3 Code does. `mod+shift+]` and `mod+shift+[` go to the next and
-  previous, stopping at the ends. A right-click opens a thread's menu and a
-  double-click renames it. Settings › Keyboard rebinds them all.
+  previous, stopping at the ends. `alt+shift+arrowdown` and
+  `alt+shift+arrowup` go to the next and previous thread that needs you, round
+  the list, as Slack and Discord step through what is unread: one that waits
+  on you (`ThreadWaits`) or is `Done`, or an agent under one that waits on you
+  (a finished agent's thread goes on with what it did). With none, they stay
+  the text field's. A right-click opens a thread's menu and a double-click
+  renames it. Settings › Keyboard rebinds them all.
 - **Kept in this browser** (`lemma.frame.sidebar.marks`): the pinned and
   active orders, and when threads were archived and unarchived, which order the
   list beyond when each was made; and whether the archived fold is open, and
