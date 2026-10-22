@@ -6,6 +6,7 @@ import type { Plugin } from "@lemma/core";
 import agentCli from "@lemma/agent-cli";
 import agentLoop from "@lemma/agent-loop";
 import agentModes from "@lemma/agent-modes";
+import agentTitles from "@lemma/agent-titles";
 import browserChromium from "@lemma/browser-chromium";
 import browserTools from "@lemma/browser-tools";
 import cliRegistry from "@lemma/cli-registry";
@@ -21,6 +22,7 @@ import devtoolsTrace from "@lemma/devtools-trace";
 import llmCli from "@lemma/llm-cli";
 import llmCommands from "@lemma/llm-commands";
 import llmPiAi from "@lemma/llm-pi-ai";
+import llmSmallModel from "@lemma/llm-small-model";
 import mcpServers from "@lemma/mcp-servers";
 import profilesSwitcher from "@lemma/profiles-switcher";
 import releaseUpdates from "@lemma/release-updates";
@@ -75,6 +77,7 @@ export const bundled: readonly Plugin[] = [
   credentialsFile,
   llmPiAi,
   llmCommands,
+  llmSmallModel,
   toolsRegistry,
   toolsRead,
   toolsWrite,
@@ -93,6 +96,7 @@ export const bundled: readonly Plugin[] = [
   sessionsFiles,
   agentLoop,
   agentModes,
+  agentTitles,
   contextCompaction,
   contextProject,
   skillsFiles,
@@ -136,6 +140,7 @@ export const bundledWeb: readonly string[] = [
   "actions.palette",
   "agent.loop",
   "agent.modes",
+  "agent.titles",
   "commands.client",
   "context.compaction",
   "devtools.dock",
@@ -153,6 +158,7 @@ export const bundledWeb: readonly string[] = [
   "llm.client",
   "llm.model-picker",
   "llm.providers",
+  "llm.small-model",
   "look.appearance",
   "look.appearance-page",
   "look.diagrams",

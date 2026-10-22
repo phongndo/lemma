@@ -202,7 +202,7 @@ interface TurnInput {
   readonly sessionId: string;
   readonly turnId: string;
   readonly cwd: string;
-  /** Session title before the turn; a missing title is set from the first prompt. */
+  /** Session title before the turn; a missing title is set from the first prompt, provisionally (`EventData`'s `title`). */
   readonly title?: string;
   /** The model it asks. Only a resumed turn that closes as cancelled may have none: it asks nothing. */
   readonly model?: ModelInfo;
@@ -1277,7 +1277,7 @@ export function runTurn(services: TurnServices, settings: TurnSettings, input: T
             for (const prompt of input.prompts) yield* userMessage(prompt);
             const first = input.prompts[0];
             const title = input.title === undefined && first !== undefined ? titleFrom(first.content) : undefined;
-            if (title !== undefined) yield* append({ type: "title", title });
+            if (title !== undefined) yield* append({ type: "title", title, provisional: true });
             return yield* steps(1);
           });
     return yield* body.pipe(

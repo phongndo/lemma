@@ -1,0 +1,33 @@
+{
+  "name": "@lemma/llm-small-model",
+  "version": "0.1.0",
+  "private": true,
+  "description": "The model small tasks run on, such as a thread's title",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./web": "./src/web.tsx"
+  },
+  "scripts": {
+    "check": "tsrs --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@lemma/core": "workspace:*",
+    "@lemma/llm": "workspace:*",
+    "@lemma/look": "workspace:*",
+    "@lemma/settings": "workspace:*",
+    "@lemma/web": "workspace:*",
+    "effect": "4.0.5",
+    "solid-js": "1.9.17"
+  },
+  "devDependencies": {
+    "@types/node": "24.19.2",
+    "tsrs": "0.18.0-ts7.1.0-dev.20260929",
+    "vitest": "5.0.5"
+  },
+  "lemma": {
+    "host": "./src/index.ts",
+    "web": "./src/web.tsx"
+  }
+}

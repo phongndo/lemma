@@ -1,9 +1,10 @@
 import { For, Show, createMemo, createSignal, onCleanup } from "solid-js";
 import type { Accessor, Setter } from "solid-js";
 import { usesPlan } from "@lemma/llm";
-import type { ModelInfo, ThinkingLevel } from "@lemma/llm";
+import type { ModelInfo, ModelRef, ThinkingLevel } from "@lemma/llm";
 import { contextSize } from "./context-size.ts";
-import { DEFAULT_THINKING, filterModels, thinkingLevels, Models, LlmActionIds, ProviderLogo } from "@lemma/llm/web";
+import { DEFAULT_THINKING, filterModels, thinkingLevels, Models, LlmActionIds, ModelPickerPart, ProviderLogo, ThinkingPickerPart } from "@lemma/llm/web";
+import type { ModelPickerProps, ThinkingPickerProps } from "@lemma/llm/web";
 import { Actions } from "@lemma/actions";
 import { SectionIds, SettingsGroups } from "@lemma/settings";
 import { ComposerControls, PromptCommands, ThreadsActionIds } from "@lemma/threads";
@@ -24,21 +25,48 @@ const LEVEL_LABEL: Record<ThinkingLevel, string> = {
 };
 
 /**
- * The selected model's own reasoning levels; the choice is remembered per model. `quiet`: in the composer's row, after
- * the model with a dot, its level alone, with no chevron.
+ * What a reasoning picker shows and sets: the level of the composer's model, or a setting's own (`ThinkingPickerPart`),
+ * whose chip sits beside its model's in the same row. A picker is one or the other for as long as it is drawn.
+ */
+interface LevelChoice {
+  readonly model: () => ModelInfo | undefined;
+  readonly level: () => ThinkingLevel | undefined;
+  readonly choose: (level: ThinkingLevel) => void;
+  readonly besideModel: boolean;
+}
+
+const composerLevel = (models: ModelsService): LevelChoice => ({
+  model: models.selected,
+  level: models.thinking,
+  choose: models.chooseThinking,
+  besideModel: false,
+});
+
+const settingLevel = (models: ModelsService, own: ThinkingPickerProps): LevelChoice => ({
+  model: () => models.models().find((model) => model.ref === own.model),
+  level: () => own.value,
+  choose: (level) => own.choose(level),
+  besideModel: true,
+});
+
+/**
+ * The model's own reasoning levels; the composer's choice is remembered per model. `quiet`: in the composer's row,
+ * after the model with a dot, its level alone, with no chevron. `own`: a setting's model and level instead.
  */
 function ThinkingPicker(props: {
   models: ModelsService;
+  own?: ThinkingPickerProps;
   placement?: Placement;
   afterPick?: () => void;
   controller?: (handle: { readonly open: () => void }) => void;
   quiet?: boolean;
 }) {
-  const { selected: selectedModel, thinking: effectiveThinking, chooseThinking } = props.models;
+  const choice = props.own === undefined ? composerLevel(props.models) : settingLevel(props.models, props.own);
+  const { model: selectedModel, level: effectiveThinking, choose: chooseThinking } = choice;
   const levels = createMemo(() => thinkingLevels(selectedModel()));
   return (
     <Show when={levels().length > 0}>
-      <Show when={props.quiet} fallback={<span class="control-separator" aria-hidden="true" />}>
+      <Show when={props.quiet} fallback={choice.besideModel ? undefined : <span class="control-separator" aria-hidden="true" />}>
         <span class="control-dot" aria-hidden="true">
           ·
         </span>
@@ -90,9 +118,30 @@ function ThinkingPicker(props: {
 
 type Rail = "favorites" | "all" | string;
 
-/** Picks the preferred model, shared by the composer and settings. */
+/**
+ * What a model picker shows and sets: the composer's preferred model, or a setting's own (`ModelPickerPart`). A picker
+ * is one or the other for as long as it is drawn.
+ */
+interface ModelChoice {
+  /** The model it names, of those available. */
+  readonly selected: () => ModelInfo | undefined;
+  /** The model chosen, which may be unavailable. */
+  readonly wanted: () => ModelRef | undefined;
+  readonly choose: (ref: ModelRef) => void;
+}
+
+const composerModel = (models: ModelsService): ModelChoice => ({ selected: models.selected, wanted: models.preferred, choose: models.choose });
+
+const settingModel = (models: ModelsService, own: ModelPickerProps): ModelChoice => ({
+  selected: () => models.models().find((model) => model.ref === own.value),
+  wanted: () => own.value,
+  choose: (ref) => own.choose(ref),
+});
+
+/** Picks the composer's preferred model, in the composer and in settings, or a setting's own (`own`). */
 function ModelPicker(props: {
   models: ModelsService;
+  own?: ModelPickerProps;
   placement?: Placement;
   afterPick?: () => void;
   onProviders?: (() => void) | undefined;
@@ -100,7 +149,9 @@ function ModelPicker(props: {
   /** In the composer's row: with no chevron. */
   quiet?: boolean;
 }) {
-  const { selected: selectedModel, favorites: favoriteModels, choose: chooseModel, toggleFavorite } = props.models;
+  const { favorites: favoriteModels, toggleFavorite } = props.models;
+  const choice = props.own === undefined ? composerModel(props.models) : settingModel(props.models, props.own);
+  const { selected: selectedModel, choose: chooseModel } = choice;
   const [query, setQuery] = createSignal("");
   const [rail, setRail] = createSignal<Rail>("all");
   const providerName = (id: string) => props.models.providers().find((provider) => provider.id === id)?.name ?? id;
@@ -126,8 +177,8 @@ function ModelPicker(props: {
     if (rail() === "all") return props.models.models();
     return props.models.models().filter((model) => model.provider === rail());
   });
-  const label = () => selectedModel()?.name ?? (props.models.preferred() !== undefined && props.models.modelsLoaded() ? "Model unavailable" : "Choose a model");
-  const pick = (ref: string, close: () => void) => {
+  const label = () => selectedModel()?.name ?? (choice.wanted() !== undefined && props.models.modelsLoaded() ? "Model unavailable" : "Choose a model");
+  const pick = (ref: ModelRef, close: () => void) => {
     chooseModel(ref);
     close();
     props.afterPick?.();
@@ -371,7 +422,8 @@ function ModelPicker(props: {
 
 /**
  * The model and reasoning pickers: in the composer's toolbar, in General
- * settings, and behind "Switch model…".
+ * settings, and behind "Switch model…"; and for another plugin's setting
+ * (`ModelPickerPart`, `ThinkingPickerPart`).
  */
 export default defineWebPlugin({
   id: "llm.model-picker",
@@ -412,6 +464,20 @@ export default defineWebPlugin({
         component: () => (
           <ThinkingPicker quiet models={models} afterPick={() => runAction(ThreadsActionIds.focusComposer)} controller={keep(openThinking, setOpenThinking)} />
         ),
+      }),
+    );
+    add(
+      slots.add(ModelPickerPart, {
+        id: "model-picker",
+        phase: "default",
+        component: (props: ModelPickerProps) => <ModelPicker models={models} own={props} placement="bottom-end" onProviders={providers()} />,
+      }),
+    );
+    add(
+      slots.add(ThinkingPickerPart, {
+        id: "thinking-picker",
+        phase: "default",
+        component: (props: ThinkingPickerProps) => <ThinkingPicker models={models} own={props} placement="bottom-end" />,
       }),
     );
     /** The models `query` names: the one with that ref first, then those a search finds, in the picker's order. */

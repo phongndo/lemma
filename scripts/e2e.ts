@@ -105,7 +105,10 @@ export interface Mock {
 }
 
 export interface LemmaOptions {
-  /** Plugin rows for the config, besides the transport's (port 0) and the llm's (the provider as `mock/scripted`). */
+  /**
+   * Plugin rows for the config, besides the transport's (port 0), the llm's (the provider as `mock/scripted`), and
+   * `agent.titles`' (off).
+   */
   readonly plugins?: Readonly<Record<string, unknown>>;
   /** Runs before the host starts: to put a plugin file in the home, say. */
   readonly prepare?: (home: string) => Promise<void>;
@@ -164,6 +167,9 @@ export const startLemma = async (prefix: string, options: LemmaOptions = {}): Pr
         plugins: {
           "transport.server": { config: { port: 0 } },
           "llm.pi-ai": { config: { providers: [{ id: "mock", api: "openai-completions", baseUrl: url, models: [{ id: "scripted" }] }] } },
+          // A thread's title would be asked of the scripted model too, with its prompt: a ramble, a gate, and a call id a
+          // test counts on, taken by a request in the background. A test of titles turns it on.
+          "agent.titles": { enabled: false },
           ...options.plugins,
         },
       }),

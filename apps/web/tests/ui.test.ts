@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it, vi } from "vitest";
 import { Context, Effect, Exit, Layer, Schema, Scope } from "effect";
-import { createComponent, createEffect, createRoot, createSignal } from "solid-js";
+import { Show, children, createComponent, createEffect, createRenderEffect, createRoot, createSignal } from "solid-js";
 import type { Component, JSX } from "solid-js";
 import { checkComposition, definePlugin, makeLoader } from "@lemma/core";
 import type { ApplicationServices, Loader, Plugin } from "@lemma/core";
@@ -575,6 +575,95 @@ describe("defineWebPlugin", () => {
         dispose();
       });
       expect(seen).toEqual(["the box as boxer", "box content as caller", "popup content as caller", "popup content, by a getter, given function as caller"]);
+    });
+  });
+
+  it("keeps what a plugin hands a part up to date where the part draws it, and its own however it is handed", async () => {
+    const Views = defineSlot<{ readonly component: Component }>("test.views");
+    const Box = definePart<{ readonly name: string; readonly children: JSX.Element }>("test.box");
+    const BoxView = partView(Box);
+    // `<Show>` as JSX draws it, unkeyed.
+    const Unkeyed: Component<{ readonly when: boolean; readonly fallback: JSX.Element; readonly children: JSX.Element }> = Show;
+    const [on, setOn] = createSignal(false);
+    const drawn: string[] = [];
+    const seen: string[] = [];
+    const Probe: Component<{ readonly name: string }> = (props) => {
+      seen.push(`${props.name} as ${usePlugin().id}`);
+      return null;
+    };
+    const boxer = defineWebPlugin({
+      id: "boxer",
+      requires: { slots: Slots },
+      // Reads its children as `insert` does: a function, called with nothing in a computation of its own.
+      setup: ({ slots }) =>
+        void slots.add(Box, {
+          id: "box",
+          component: (props) => {
+            const shown = children(() => props.children);
+            createRenderEffect(() =>
+              drawn.push(
+                `${props.name}: ${shown
+                  .toArray()
+                  .filter((each) => typeof each === "string")
+                  .join("")}`,
+              ),
+            );
+            return null;
+          },
+        }),
+    });
+    const caller = defineWebPlugin({
+      id: "caller",
+      requires: { slots: Slots },
+      setup: ({ slots }) =>
+        void slots.add(Views, {
+          id: "view",
+          component: () =>
+            [
+              createComponent(BoxView, {
+                name: "a <Show>",
+                get children() {
+                  return createComponent(Unkeyed, {
+                    get when() {
+                      return on();
+                    },
+                    fallback: "off",
+                    children: "on",
+                  });
+                },
+              }),
+              createComponent(BoxView, {
+                name: "a condition",
+                get children() {
+                  return on() ? "on" : "off";
+                },
+              }),
+              createComponent(BoxView, {
+                name: "a function",
+                children: (() => [createComponent(Probe, { name: "a function's" }), on() ? "on" : "off"]) as unknown as JSX.Element,
+              }),
+            ] as unknown as JSX.Element,
+        }),
+    });
+    await run([boxer, caller], async (loader) => {
+      const slots = await Effect.runPromise(loader.core.run(Slots));
+      const item = slots.first(Views)!;
+      const dispose = createRoot((dispose) => {
+        createComponent(SlotsContext.Provider, {
+          value: () => slots,
+          get children() {
+            return createComponent(Contained, { slot: Views, item, component: item.component });
+          },
+        });
+        return dispose;
+      });
+      setOn(true);
+      dispose();
+      const names = ["a <Show>", "a condition", "a function"];
+      expect(names.map((name) => drawn.find((entry) => entry.startsWith(`${name}:`)))).toEqual(names.map((name) => `${name}: off`));
+      expect(names.map((name) => drawn.filter((entry) => entry.startsWith(`${name}:`)).at(-1))).toEqual(names.map((name) => `${name}: on`));
+      // Drawn again as it changed, and the caller's each time.
+      expect(new Set(seen)).toEqual(new Set(["a function's as caller"]));
     });
   });
 

@@ -300,7 +300,17 @@ const MOCK_COMMANDS = [
   { id: "host.restart-plugin", title: "Restart plugin…", category: "Host", description: "Restart a failed or halted plugin", source: "commands.host" },
   { id: "host.toggle-plugin", title: "Turn plugin on or off…", category: "Host", description: "Turn a plugin on or off", source: "commands.host" },
   { id: "llm.logout", title: "Log out of a provider…", category: "Providers", description: "Forget a provider's credentials", source: "llm.commands" },
+  {
+    id: "agent.regenerate-title",
+    title: "Regenerate title",
+    category: "Thread",
+    description: "Names the open thread anew, by its first prompt and its latest messages, with the small model",
+    source: "agent.titles",
+  },
 ];
+
+/** What the mock's small model names a thread when asked to anew. */
+const MOCK_TITLES = ["Fix flaky upload test", "Retry uploads on timeout"];
 
 const noChannel = (id: string) => new HostError({ code: "NotFound", subject: id, message: `No channel "${id}"` });
 
@@ -559,6 +569,11 @@ export const createMockHost = (): Host => {
     },
     "mcp.servers": { provides: ["lemma/Mcp"], requires: ["lemma/Paths"] },
     "context.compaction": { requires: ["lemma/Sessions", "lemma/Llm"] },
+    "llm.small-model": { provides: ["lemma/SmallModel"], requires: ["lemma/Llm"] },
+    "agent.titles": {
+      requires: ["lemma/Sessions", "lemma/Llm", "lemma/SmallModel"],
+      contributes: [{ name: "lemma/commands", items: 1, keys: ["agent.regenerate-title"] }],
+    },
     "agent.modes": { requires: ["lemma/Paths"], contributes: [{ name: "lemma/agent.sections", items: 1, keys: ["mode"] }] },
     "profiles.switcher": { requires: ["lemma/Paths"] },
     "context.project": { requires: ["lemma/Paths"], contributes: [{ name: "lemma/agent.sections", items: 1, keys: ["project-context"] }] },
@@ -2303,9 +2318,18 @@ export const createMockHost = (): Host => {
     serveCall(
       "commands.registry",
       CommandChannels.run,
-      async ({ id: commandId }) => {
+      async ({ id: commandId, sessionId }) => {
         const cancelled = () => new HostError({ code: "Cancelled", message: "Cancelled", subject: commandId });
         switch (commandId) {
+          case "agent.regenerate-title": {
+            if (sessionId === undefined) throw new HostError({ code: "Failed", message: "Open a thread to name it", subject: commandId });
+            // As the small model would, after a moment: a few words, other than the title now.
+            await sleep(600);
+            const now = sessionOf(sessionId).info.title;
+            const title = MOCK_TITLES.find((candidate) => candidate !== now) ?? MOCK_TITLES[0]!;
+            append(sessionId, { type: "title", title });
+            return { message: `Titled “${title}”` };
+          }
           case "host.reload":
             await sleep(400);
             return { message: "Config reloaded: restarted lemma/agent" };
