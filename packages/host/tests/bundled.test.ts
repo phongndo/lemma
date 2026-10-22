@@ -6,7 +6,7 @@ import { planComposition } from "@lemma/composition";
 import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { appDefaults, bundled as shipped, bundledCode, bundledWeb, cliCommand, webDist } from "../src/bundled.ts";
+import { appDefaults, bundled as shipped, bundledCode, bundledWeb, bundledWebFormerly, cliCommand, webDist } from "../src/bundled.ts";
 import { KINDS } from "../src/paths.ts";
 import { runtimeCapabilities } from "../src/runtime.ts";
 import { domainPlugins } from "../../../scripts/plugins.ts";
@@ -45,6 +45,25 @@ describe("bundled", () => {
   test("knows the id of every web half in domains/, which the web app runs, so a row naming one is no typo", () => {
     const halves = [...domainPlugins()].filter(([, plugin]) => plugin.web !== undefined).map(([id]) => id);
     expect([...bundledWeb].sort()).toEqual(halves.sort());
+  });
+
+  test("knows a renamed web half's former ids as the half declares them, none an id in use, so its old row carries over", () => {
+    const inUse = new Set([...bundledWeb, ...shipped.map((plugin) => plugin.id)]);
+    for (const [id, former] of Object.entries(bundledWebFormerly)) {
+      expect(bundledWeb, id).toContain(id);
+      for (const old of former) expect(inUse.has(old), old).toBe(false);
+      // The host cannot run a web half to read its `formerly`, so it is read from its source.
+      const web = domainPlugins().get(id)?.web;
+      expect(web, id).toBeDefined();
+      const declared = /formerly:\s*\[([^\]]*)\]/.exec(readFileSync(web!, "utf8"))?.[1];
+      expect(
+        declared
+          ?.split(",")
+          .map((item) => item.trim().replace(/^"|"$/g, ""))
+          .filter((item) => item !== ""),
+        id,
+      ).toEqual([...former]);
+    }
   });
 });
 

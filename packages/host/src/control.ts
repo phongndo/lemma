@@ -61,6 +61,8 @@ export interface ChangesOptions {
     scope: ConfigScope,
     formerly: Readonly<Record<string, readonly string[]>>,
   ) => Effect.Effect<ConfigUpdate, Diagnostic>;
+  /** The bundled web halves' former ids, by plugin: their `formerly`, which the host cannot read without running them. */
+  readonly webFormerly: Readonly<Record<string, readonly string[]>>;
   /** The web files as they are now (`listWebFiles`). */
   readonly webFiles: (trusted: boolean) => Effect.Effect<WebComposition["files"]>;
   /** Plugins no change may turn off, with the reason clients show; they serve the requests that ask for changes. */
@@ -346,8 +348,11 @@ export const makeHostChanges = (options: ChangesOptions): Effect.Effect<HostChan
     const write = (loader: Loader, rows: Readonly<Record<string, PluginChange>>, scope: ConfigScope) =>
       Effect.gen(function* () {
         const path = scope === "user" ? paths.userConfig : paths.projectConfig;
-        // A renamed plugin's row under its former id (`formerly`) moves to its id as it is written.
-        const formerly = Object.fromEntries(applied.known.flatMap(({ plugin }) => (plugin.formerly === undefined ? [] : [[plugin.id, plugin.formerly]])));
+        // A renamed plugin's row under its former id (`formerly`) moves to its id as it is written, a web half's too.
+        const formerly = {
+          ...options.webFormerly,
+          ...Object.fromEntries(applied.known.flatMap(({ plugin }) => (plugin.formerly === undefined ? [] : [[plugin.id, plugin.formerly]]))),
+        };
         const update = yield* options.updateConfig(path, rows, scope, formerly).pipe(Effect.mapError(rejected));
         seenConfig.set(path, update.text);
         const undo = putBack(path, update);
@@ -465,7 +470,9 @@ export const makeHostChanges = (options: ChangesOptions): Effect.Effect<HostChan
               for (const [id, row] of Object.entries(requested)) {
                 // An id the host does not know is a web half's, written for the web app; one neither app has is a mistake.
                 if (!known.includes(id)) {
-                  const renamed = applied.known.find(({ plugin }) => plugin.formerly?.includes(id) === true)?.plugin.id;
+                  const renamed =
+                    applied.known.find(({ plugin }) => plugin.formerly?.includes(id) === true)?.plugin.id ??
+                    Object.entries(options.webFormerly).find(([, former]) => former.includes(id))?.[0];
                   const meant = renamed ?? closestId(id, known);
                   return yield* rejected(
                     new Diagnostic({

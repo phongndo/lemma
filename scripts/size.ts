@@ -21,8 +21,10 @@ const BUDGET: Readonly<Record<string, number>> = {
   // Its launch is JavaScript (start.mjs, launch.mjs: the compile cache, Effect's bundle, its Node.js flags), which
   // loads before the compile cache is on, and is counted with the rest. Raised from 3,000 to keep an installed Lemma and
   // a checkout apart (paths.ts: each one's home and port, the other's home refused, what its tools are told of its own),
-  // which the host, the CLI, and the desktop app decide before any plugin runs.
-  "packages/host": 3_050,
+  // which the host, the CLI, and the desktop app decide before any plugin runs. Raised from 3,050 for a renamed web
+  // half's former ids (`bundledWebFormerly`), which the host cannot read without running the half: its old row is the web
+  // app's to apply, not a typo, and moves to its id as it is written.
+  "packages/host": 3_075,
   "packages/composition": 850,
   "packages/web": 2_000,
   "packages/client": 800,

@@ -191,6 +191,9 @@ export const bundledWeb: readonly string[] = [
   "workspace.tidy",
 ];
 
+/** The bundled web halves' ids before a rename (their `formerly`): a row under one is the web app's, which applies it. */
+export const bundledWebFormerly: Readonly<Record<string, readonly string[]>> = {};
+
 /**
  * Config the app supplies for bundled plugins (the planner's `defaults`): it
  * stays beneath a file's `config` object key by key, so setting the

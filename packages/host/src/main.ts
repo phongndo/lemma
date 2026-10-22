@@ -11,7 +11,7 @@ import { compositionHistory, faultHistory, planComposition } from "@lemma/compos
 import type { PluginRow, WebComposition } from "@lemma/contracts";
 import { readDiscovery } from "@lemma/contracts/discovery";
 import { profileNameProblem, profileOf, readProfileFile } from "@lemma/contracts/profiles";
-import { appDefaults, bundled, bundledCode, bundledWeb, optIn } from "./bundled.ts";
+import { appDefaults, bundled, bundledCode, bundledWeb, bundledWebFormerly, optIn } from "./bundled.ts";
 import { loadComposition, projectPluginsDir, readConfigText, updateConfig } from "./config.ts";
 import { makeHostChanges } from "./control.ts";
 import type { HostChanges, Read } from "./control.ts";
@@ -205,11 +205,13 @@ const read: Effect.Effect<Read, ReloadError> = Effect.gen(function* () {
   // A row naming a web half is the web app's, which plans its halves from the same rows; one naming no plugin either
   // app has is a mistake (renamed, removed, mistyped), said so here with the id meant, and refused when required.
   const webIds = [...new Set([...bundledWeb, ...files.flatMap((file) => (file.kind === "script" && file.plugin !== undefined ? [file.plugin] : []))])];
+  // A row under a bundled web half's former id is the web app's too: it applies it to the plugin (`formerly`).
+  const formerWeb = Object.values(bundledWebFormerly).flat();
   const planned = planComposition({
     ...input,
     local: localPlugins,
     rows: withOverrides(loaded.rows),
-    elsewhere: (id) => webIds.includes(id),
+    elsewhere: (id) => webIds.includes(id) || formerWeb.includes(id),
     elsewhereIds: webIds,
   });
   return {
@@ -263,6 +265,7 @@ const program = Effect.gen(function* () {
   const host = yield* makeHostChanges({
     paths,
     read,
+    webFormerly: bundledWebFormerly,
     readConfig: (path) => readConfigText(path).pipe(Effect.orElseSucceed(() => undefined)),
     updateConfig,
     webFiles: (trusted) => listWebFiles(paths, trusted),

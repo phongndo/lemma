@@ -72,6 +72,8 @@ const start = (
     readonly reading?: Effect.Effect<void>;
     readonly trace?: { readonly spans: ReturnType<typeof makeSpanCollector>; readonly changes: ReturnType<typeof compositionHistory> };
     readonly deferral?: ChangesOptions["deferral"];
+    /** The web halves' ids and former ids, as main.ts knows the bundled ones. */
+    readonly web?: { readonly ids: readonly string[]; readonly formerly: Readonly<Record<string, readonly string[]>> };
   } = {},
 ) =>
   Effect.gen(function* () {
@@ -82,26 +84,35 @@ const start = (
     const faults = faultHistory();
     const host = yield* makeHostChanges({
       paths,
+      webFormerly: options.web?.formerly ?? {},
       read: Effect.gen(function* () {
         yield* options.reading ?? Effect.void;
         const text = disk.get(paths.userConfig);
         const fileRows: Record<string, PluginRow> = text === undefined ? {} : (parseJsonc(text)?.plugins ?? {});
-        const planned = planComposition({ bundled: plugins, local: [], rows: fileRows, provided: runtimeCapabilities });
+        const webIds = options.web?.ids ?? [];
+        const formerWeb = Object.values(options.web?.formerly ?? {}).flat();
+        const planned = planComposition({
+          bundled: plugins,
+          local: [],
+          rows: fileRows,
+          provided: runtimeCapabilities,
+          elsewhere: (id) => webIds.includes(id) || formerWeb.includes(id),
+        });
         return {
           ...planned,
           enabledIn: {},
           configIn: {},
           trusted: true,
           web: { plugins: fileRows, enabledIn: {}, configIn: {}, files: [] },
-          webIds: [],
+          webIds,
           code: [],
         };
       }),
       readConfig: (path) => Effect.sync(() => disk.get(path)),
-      updateConfig: (path, change, scope) =>
+      updateConfig: (path, change, scope, formerly) =>
         Effect.sync(() => {
           const previous = disk.get(path);
-          const text = patchConfig(previous ?? "", change, scope);
+          const text = patchConfig(previous ?? "", change, scope, formerly);
           disk.set(path, text);
           return {
             text,
@@ -342,6 +353,24 @@ describe("host changes", () => {
           yield* host.configChanged;
           expect(changes.get()[0]).toMatchObject({ cause: "reload", restarted: ["counted"] });
           expect(counted.started).toEqual([0, 1, 3]);
+        }),
+      ),
+    );
+  });
+
+  test("a web half's former id is its: asked for by it, the host names the new one; its row moves as the new one's is written", async () => {
+    await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const counted = numbered("counted");
+          const web = { ids: ["frame.threads"], formerly: { "frame.threads": ["frame.sidebar"] } };
+          const { control, disk, said } = yield* start([counted.plugin], { "frame.sidebar": { config: { tabs: "horizontal" } } }, { web });
+          // Its old row is the web app's to apply, so the host does not take it for a typo.
+          expect(said.map((diagnostic) => diagnostic.pluginId)).not.toContain("frame.sidebar");
+          const refused = yield* Effect.flip(control.configure({ "frame.sidebar": { enabled: false } }));
+          expect(refused.diagnostics.map((diagnostic) => diagnostic.message)).toContainEqual(`No plugin "frame.sidebar": it is "frame.threads" since a rename`);
+          yield* control.configure({ "frame.threads": { enabled: false } });
+          expect(rowsIn(disk)).toEqual({ "frame.threads": { enabled: false, config: { tabs: "horizontal" } } });
         }),
       ),
     );
