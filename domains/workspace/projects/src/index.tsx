@@ -16,7 +16,7 @@ import type { ThreadsService } from "@lemma/threads";
 import type { WorkspaceService } from "@lemma/workspace/web";
 import { CopyButton, Dialog, FolderIcon, FolderPlusIcon, GearIcon, MoreIcon, PenSquareIcon, Popover, Segmented, SettingRow, TrashIcon } from "@lemma/look";
 import { initialOf, projectStats, threadCount, threadsIn, worktreeRows } from "./model.ts";
-import type { ProjectStats } from "./model.ts";
+import type { ProjectStats, WorktreeRow } from "./model.ts";
 import styles from "./projects-page.css?inline";
 
 const SECTION = "projects";
@@ -295,7 +295,10 @@ export default defineWebPlugin({
 
     group("projects-page.project", 0, "Project", (cwd) => [
       {
-        text: `project name rename title ${workspace.projectName(cwd)}`,
+        // Read when searched, not while the rows are made, so a rename leaves the row drawn.
+        get text() {
+          return `project name rename title ${workspace.projectName(cwd)}`;
+        },
         view: () => {
           let input!: HTMLInputElement;
           return (
@@ -388,8 +391,23 @@ export default defineWebPlugin({
         );
       }),
     );
-    group("projects-page.worktrees", 20, "Worktrees", (cwd) =>
-      worktreeRows(listed()?.project === cwd ? listed()!.worktrees : [], threads.list(), workspace.place, cwd).map((row) => ({
+    // A worktree's row is made again only when what it shows changes, so threads changing elsewhere leave it drawn,
+    // with its menu open if it was.
+    const worktreeEntries = new Map<string, { readonly shows: string; readonly entry: SettingsEntry }>();
+    group("projects-page.worktrees", 20, "Worktrees", (cwd) => {
+      const rows = worktreeRows(listed()?.project === cwd ? listed()!.worktrees : [], threads.list(), workspace.place, cwd);
+      for (const path of worktreeEntries.keys()) if (!rows.some((row) => row.path === path)) worktreeEntries.delete(path);
+      return rows.map((row) => {
+        const shows = JSON.stringify(row);
+        const known = worktreeEntries.get(row.path);
+        if (known?.shows === shows) return known.entry;
+        const entry = worktreeEntry(row);
+        worktreeEntries.set(row.path, { shows, entry });
+        return entry;
+      });
+    });
+    function worktreeEntry(row: WorktreeRow): SettingsEntry {
+      return {
         text: `worktree worktrees branch checkout remove restore clean up ${row.branch ?? ""} ${row.path}`,
         view: () => {
           const actions = () => slots.list(WorktreeActions).filter((action) => action.when?.(row.path) ?? true);
@@ -404,8 +422,8 @@ export default defineWebPlugin({
             </SettingRow>
           );
         },
-      })),
-    );
+      };
+    }
 
     group("projects-page.danger", 90, "Danger zone", (cwd) => [
       {

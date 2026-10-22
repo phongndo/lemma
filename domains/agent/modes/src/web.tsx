@@ -4,6 +4,7 @@ import { Models } from "@lemma/llm/web";
 import { ThreadCard, Threads, ThreadStart, TurnOptionSources } from "@lemma/threads";
 import { CheckIcon, ChevronDownIcon, Popover, SettingRow, SlidersIcon } from "@lemma/look";
 import { SectionIds, SettingsGroups } from "@lemma/settings";
+import type { SettingsEntry } from "@lemma/settings";
 import { Client, Slots, defineWebPlugin } from "@lemma/web";
 import { load, save } from "@lemma/web/storage";
 import { ModeChannels, MODES_PLUGIN, offeredFor } from "@lemma/agent";
@@ -163,34 +164,32 @@ export default defineWebPlugin({
         ),
       }),
     );
-    // The mode a new thread starts with, first among General's settings for new threads.
+    // The mode a new thread starts with, first among General's settings for new threads. The row made once, so the
+    // modes changing (which `entries` reads) leaves it drawn, with its menu open if it was.
+    const row: SettingsEntry = {
+      get text() {
+        return `Mode agent role system prompt ${modes()
+          .map((mode) => mode.name)
+          .join(" ")}`;
+      },
+      view: () => (
+        <SettingRow
+          title="Mode"
+          description={
+            describe(forNew()) ?? "What a new thread's agent is set up to do: its guidance, and the tools it keeps. Picking one picks its model too."
+          }
+        >
+          <ModeMenu current={forNew()} placement="bottom-end" onPick={pick} triggerClass="select-chip" />
+        </SettingRow>
+      ),
+    };
     plugin.onCleanup(
       slots.add(SettingsGroups, {
         id: "modes",
         order: -10,
         section: SectionIds.general,
         title: "New threads",
-        entries: () =>
-          modes().length === 0
-            ? []
-            : [
-                {
-                  text: `Mode agent role system prompt ${modes()
-                    .map((mode) => mode.name)
-                    .join(" ")}`,
-                  view: () => (
-                    <SettingRow
-                      title="Mode"
-                      description={
-                        describe(forNew()) ??
-                        "What a new thread's agent is set up to do: its guidance, and the tools it keeps. Picking one picks its model too."
-                      }
-                    >
-                      <ModeMenu current={forNew()} placement="bottom-end" onPick={pick} triggerClass="select-chip" />
-                    </SettingRow>
-                  ),
-                },
-              ],
+        entries: () => (modes().length === 0 ? [] : [row]),
       }),
     );
   },

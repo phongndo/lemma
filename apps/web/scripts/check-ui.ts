@@ -1,4 +1,6 @@
-import { browser, saveArtifacts, server, shard, shards } from "./check-ui/shared.ts";
+import { recordFlake, summarizeFlakes } from "../../../scripts/flaky.ts";
+import type { Flake } from "../../../scripts/flaky.ts";
+import { browser, inLane, retries, saveArtifacts, server, shard, shards } from "./check-ui/shared.ts";
 import { devtools } from "./check-ui/devtools.ts";
 import { pages } from "./check-ui/pages.ts";
 import { parts } from "./check-ui/parts.ts";
@@ -70,7 +72,10 @@ import { toggling } from "./check-ui/toggling.ts";
  *
  * Run it in the browser shell: `nix develop .#browser -c pnpm --filter @lemma/web-app ui:check`.
  * `--shard=i/n` runs a share of it, as CI does on two runners: of the lanes the
- * checks run in (below), every n-th from the i-th.
+ * checks run in (below), every n-th from the i-th. `--retry=n` runs a lane that
+ * fails up to n more times, as CI does once: its failed try leaves its traces,
+ * and a lane that passes on a retry is a warning, recorded as flaky
+ * (scripts/flaky.ts).
  * `LEMMA_BROWSER=firefox` or `webkit` runs it in Playwright's builds of those
  * (`pnpm exec playwright install firefox webkit`; `PLAYWRIGHT_BROWSERS_PATH`
  * puts them elsewhere): history timing differs between engines. A failed run
@@ -87,12 +92,36 @@ import { toggling } from "./check-ui/toggling.ts";
  */
 
 /*
- * A share takes about a minute and a half in CI. A step that never returns (Playwright waits on some calls for ever)
- * fails the check at the deadline, naming the lanes still running and leaving their traces, rather than holding the job
- * until its timeout cancels it with nothing to show.
+ * A share takes about a minute and a half in CI, and a lane run again up to as long more. A step that never returns
+ * (Playwright waits on some calls for ever) fails the check at the deadline, naming the lanes still running and leaving
+ * their traces, rather than holding the job until its timeout cancels it with nothing to show.
  */
-const DEADLINE_MINUTES = 4;
+const DEADLINE_MINUTES = 6;
 let deadline: NodeJS.Timeout | undefined;
+
+/** The lanes that passed only on a retry, for the job's summary. */
+const flakes: Flake[] = [];
+
+/** Runs `lane`, and again after a failed try, up to `--retry` more times; one that passes on a retry is flaky. */
+const attempt = async (lane: () => Promise<string>): Promise<string> => {
+  let first: unknown;
+  let tries = 1;
+  let done: string;
+  for (; ; tries++) {
+    try {
+      done = await inLane(lane.name, lane);
+      break;
+    } catch (error) {
+      if (tries > retries) throw error;
+      first ??= error;
+      console.error(`UI check: ${lane.name} failed on try ${tries}, so runs again:`, error);
+      await saveArtifacts({ lane: lane.name, try: tries });
+    }
+  }
+  if (tries > 1) flakes.push(recordFlake({ name: `ui:check ${lane.name}`, tries, error: first instanceof Error ? first.message : String(first) }));
+  return done;
+};
+
 try {
   // In this order, every other lane makes two shares that take about as long.
   const lanes = [toggling, parts, rail, devtools, separate, pages].filter((_, at) => at % shards === shard - 1);
@@ -103,12 +132,13 @@ try {
       DEADLINE_MINUTES * 60_000,
     );
   });
-  const done = await Promise.race([Promise.all(lanes.map((lane) => lane().finally(() => running.delete(lane.name)))), overdue]);
+  const done = await Promise.race([Promise.all(lanes.map((lane) => attempt(lane).finally(() => running.delete(lane.name)))), overdue]);
   console.log(`UI check${shards > 1 ? ` (${shard}/${shards})` : ""}: ${done.join("; ")}.`);
 } catch (error) {
   await saveArtifacts();
   throw error;
 } finally {
+  summarizeFlakes("Flaky UI check lanes", flakes);
   clearTimeout(deadline);
   await browser.close();
   await server.close();

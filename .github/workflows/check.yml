@@ -5,8 +5,8 @@ on:
   push:
     branches: [main]
   workflow_dispatch:
-  # Daily, every job: main reruns unchanged, so a failure there is a flake to fix (docs/development.md), and the
-  # nightly job runs its long seeded tests.
+  # Daily, every job: main reruns unchanged, so a flake shows (docs/development.md). The long seeded checks are the
+  # Soak workflow's.
   schedule:
     - cron: "23 7 * * *"
 
@@ -22,6 +22,8 @@ concurrency:
 # What each job runs is a script in package.json (`pnpm run ci` is the check and test jobs), so it runs the same
 # locally. The jobs run in parallel, each on its own runner; on Linux in the Nix development shell as developers use
 # it (.github/actions/dev-shell).
+# A failed test or UI check lane is tried again, and one that passes on a retry is recorded as flaky
+# (`LEMMA_FLAKY_OUTPUT`, scripts/flaky.ts): docs/development.md says why and what becomes of it.
 jobs:
   # Build, import boundaries, test hygiene, lint, format check, type-check; then the packed packages, in Node.js and in
   # Chromium, which the browser shell fetched meanwhile. One job, as they take a minute between them: a runner of
@@ -63,19 +65,29 @@ jobs:
       matrix:
         shard: [1, 2]
     runs-on: ubuntu-latest
-    timeout-minutes: 8
+    timeout-minutes: 10
     env:
       LEMMA_TEST_ARTIFACTS: /tmp/lemma-test-evidence
+      LEMMA_FLAKY_OUTPUT: /tmp/lemma-flaky.jsonl
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: ./.github/actions/dev-shell
-      - run: nix develop -c pnpm test --shard=${{ matrix.shard }}/2
+      # A second after a failure, while what slowed the runner passes, twice at most.
+      - run: nix develop -c pnpm test --shard=${{ matrix.shard }}/2 --retry.count=2 --retry.delay=1000
+      # Evidence a failed try saved, kept also when a retry passed: what fixing the flake needs.
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        if: failure()
+        if: always()
         with:
           name: test-evidence-linux-${{ matrix.shard }}
           path: /tmp/lemma-test-evidence
           if-no-files-found: ignore
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: flaky-linux-${{ matrix.shard }}
+          path: /tmp/lemma-flaky.jsonl
+          if-no-files-found: ignore
+          retention-days: 7
 
   # The tests again on macOS, with plain Node.js and pnpm; what the check job checks is the same on every platform.
   # The host does not support Windows yet. No pnpm store cache: on macOS, restoring it took longer than installing.
@@ -94,6 +106,7 @@ jobs:
     timeout-minutes: 12
     env:
       LEMMA_TEST_ARTIFACTS: /tmp/lemma-test-evidence
+      LEMMA_FLAKY_OUTPUT: /tmp/lemma-flaky.jsonl
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
@@ -101,13 +114,20 @@ jobs:
         with:
           node-version: 24
       - run: pnpm install --frozen-lockfile
-      - run: pnpm test --shard=${{ matrix.shard }}/3
+      - run: pnpm test --shard=${{ matrix.shard }}/3 --retry.count=2 --retry.delay=1000
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        if: failure()
+        if: always()
         with:
           name: test-evidence-macos-${{ matrix.shard }}
           path: /tmp/lemma-test-evidence
           if-no-files-found: ignore
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: flaky-macos-${{ matrix.shard }}
+          path: /tmp/lemma-flaky.jsonl
+          if-no-files-found: ignore
+          retention-days: 7
 
   # The release archive for Linux on x64, installed and run outside the checkout (scripts/dist-check.ts), and the desktop
   # app made from it, installed and opened as a user would (scripts/dist-desktop-check.ts), as the Nightly workflow's
@@ -137,7 +157,7 @@ jobs:
           retention-days: 7
 
   # The web app's replaceability, checked on its real composition in Chromium (apps/web/AGENTS.md); in two shares, as
-  # its lanes keep a runner's cores busy.
+  # its lanes keep a runner's cores busy. A lane that fails runs once more; the traces of each failed try are kept.
   ui:
     name: ui (${{ matrix.shard }}/2)
     strategy:
@@ -145,21 +165,30 @@ jobs:
       matrix:
         shard: [1, 2]
     runs-on: ubuntu-latest
-    timeout-minutes: 8
+    timeout-minutes: 10
+    env:
+      LEMMA_FLAKY_OUTPUT: /tmp/lemma-flaky.jsonl
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: ./.github/actions/dev-shell
         with:
           shell: browser
-      - run: nix develop .#browser -c pnpm --filter @lemma/web-app ui:check --shard=${{ matrix.shard }}/2
+      - run: nix develop .#browser -c pnpm --filter @lemma/web-app ui:check --shard=${{ matrix.shard }}/2 --retry=1
         env:
           LEMMA_UI_ARTIFACTS: ${{ runner.temp }}/ui-check
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        if: failure()
+        if: always()
         with:
           name: ui-check-${{ matrix.shard }}
           path: ${{ runner.temp }}/ui-check
           if-no-files-found: ignore
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: flaky-ui-${{ matrix.shard }}
+          path: /tmp/lemma-flaky.jsonl
+          if-no-files-found: ignore
+          retention-days: 7
 
   # The one check a branch rule needs to require: it passes only when every job above passed, so jobs can be added,
   # split, or renamed without changing the rule. A skipped required job would count as passing; this one never skips.
@@ -179,59 +208,32 @@ jobs:
             | "\(.key) \(.value.result)"' <<< "$NEEDS" | paste -sd, -)
           if [ -n "$failed" ]; then echo "::error::Not every job passed: $failed" && exit 1; fi
 
-  # Nightly (or by hand): the tests with a fresh seed and many more property-test cases, and the performance checks.
-  nightly:
-    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+  # On main: files each check that passed only on a retry (above) as an issue (scripts/file-issue.ts). Filing says
+  # nothing about the change, so it is not one of `passed`'s, and failing to file leaves the run passed: the Nightly
+  # workflow releases only a commit whose Check run passed.
+  flakes:
+    if: always() && github.ref == 'refs/heads/main'
+    needs: [test, macos, ui]
     runs-on: ubuntu-latest
-    timeout-minutes: 30
-    env:
-      # Each run new seeds; a re-run keeps them. The kernel's property test allows 60 s, which bounds its cases.
-      LEMMA_SEQUENCE_SEED: ${{ github.run_number }}
-      LEMMA_SEQUENCE_RUNS: "3000"
-      # The session log's simulation (crashes, torn writes, failing disks) and the agent's conversations.
-      LEMMA_SIM_SEED: ${{ github.run_number }}
-      LEMMA_SIM_RUNS: "20000"
-      LEMMA_CONVERSATION_SEED: ${{ github.run_number }}
-      LEMMA_CONVERSATION_RUNS: "500"
-      # The harness simulation (packages/sim): a window of seeds no earlier night ran, at the runner's full length.
-      LEMMA_HARNESS_SEED: ${{ github.run_number }}00000
-      LEMMA_HARNESS_RUNS: "2000"
-      LEMMA_HARNESS_TICKS: "200"
-      # The harness from the outside (scripts/torture.ts): a real host killed and stopped under a seeded workload.
-      LEMMA_TORTURE_SEED: ${{ github.run_number }}
-      LEMMA_TORTURE_SECONDS: "180"
-      LEMMA_BENCH_OUTPUT_DIR: /tmp/lemma-performance
-      LEMMA_TEST_ARTIFACTS: /tmp/lemma-test-evidence
-      # Shared runner timings are advisory; correctness/resource assertions fail.
-      LEMMA_PERF_ENFORCE: "0"
+    timeout-minutes: 5
+    continue-on-error: true
+    permissions:
+      contents: read
+      issues: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: ./.github/actions/dev-shell
-      # The randomized tests (the core's, the session log's simulation, the agent's conversations, the harness
-      # simulation), many more of them;
-      # every test runs in the jobs above.
-      - run: nix develop -c pnpm test:random
-      - run: nix develop -c pnpm torture
-      - run: nix develop -c pnpm test:mutations
-      - run: nix develop -c pnpm perf:check
-      - if: failure()
-        run: >-
-          echo "::error title=Reproduce::git checkout $GITHUB_SHA &&
-          LEMMA_SEQUENCE_SEED=$LEMMA_SEQUENCE_SEED LEMMA_SEQUENCE_RUNS=$LEMMA_SEQUENCE_RUNS
-          LEMMA_SIM_SEED=$LEMMA_SIM_SEED LEMMA_SIM_RUNS=$LEMMA_SIM_RUNS
-          LEMMA_CONVERSATION_SEED=$LEMMA_CONVERSATION_SEED LEMMA_CONVERSATION_RUNS=$LEMMA_CONVERSATION_RUNS
-          LEMMA_HARNESS_SEED=$LEMMA_HARNESS_SEED LEMMA_HARNESS_RUNS=$LEMMA_HARNESS_RUNS LEMMA_HARNESS_TICKS=$LEMMA_HARNESS_TICKS
-          nix develop -c pnpm test:random (a failing property also prints its replay path; a failing simulation seed, its pnpm sim command);
-          the torture test's workload: LEMMA_TORTURE_SEED=$LEMMA_TORTURE_SEED LEMMA_TORTURE_SECONDS=$LEMMA_TORTURE_SECONDS nix develop -c pnpm torture"
-      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        if: always()
         with:
-          name: performance
-          path: /tmp/lemma-performance
-          if-no-files-found: warn
-      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        if: failure()
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          name: nightly-test-evidence
-          path: /tmp/lemma-test-evidence
-          if-no-files-found: ignore
+          node-version: 24
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: flaky-*
+          path: ${{ runner.temp }}/flaky
+      - run: |
+          find "$RUNNER_TEMP/flaky" -name '*.jsonl' -exec cat {} + > "$RUNNER_TEMP/flaky.jsonl" 2> /dev/null || true
+          node scripts/file-issue.ts --flakes "$RUNNER_TEMP/flaky.jsonl"
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}

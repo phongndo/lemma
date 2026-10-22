@@ -15,13 +15,27 @@ runs:
   using: composite
   steps:
     - uses: cachix/install-nix-action@448cde739abec1eaf0646249e3d25bb8d9bc7702 # v31.11.2
+      with:
+        # A download that stalls is given up after 30 s, not the default 300 (most of a job's timeout), and tried again.
+        extra_nix_config: |
+          stalled-download-timeout = 30
+    # The shell comes from cache.nixos.org, which now and then drops a download; tried three times, it fails the job
+    # only when the cache stays down. The other shell is fetched meanwhile; its first use fetches it again if that
+    # failed.
     - id: pnpm-store
       shell: bash
       env:
         DEV_SHELL: ${{ inputs.shell }}
       run: |
         if [ "$DEV_SHELL" != default ]; then nix develop ".#$DEV_SHELL" -c true > /dev/null 2>&1 & fi
-        echo "path=$(nix develop -c pnpm store path)" >> "$GITHUB_OUTPUT"
+        for attempt in 1 2 3; do
+          nix develop -c true && break
+          if [ "$attempt" = 3 ]; then exit 1; fi
+          echo "::warning title=Dev shell::Fetching the development shell failed (try $attempt of 3); trying again"
+          sleep $((attempt * 15))
+        done
+        path=$(nix develop -c pnpm store path)
+        echo "path=$path" >> "$GITHUB_OUTPUT"
     - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:
         path: ${{ steps.pnpm-store.outputs.path }}

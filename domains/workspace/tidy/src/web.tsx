@@ -1,4 +1,5 @@
 import { SectionIds, SettingsGroups, configSetting } from "@lemma/settings";
+import type { SettingsEntry } from "@lemma/settings";
 import { SettingRow, Toggle } from "@lemma/look";
 import { HostPlugins, Notify, Slots, defineWebPlugin } from "@lemma/web";
 
@@ -13,27 +14,24 @@ export default defineWebPlugin({
   requires: { host: HostPlugins, notify: Notify, slots: Slots },
   setup: ({ host, notify, slots }) => {
     const removeOnArchive = configSetting<boolean>(host, notify, ID, "removeOnArchive");
+    // The row made once, so turning it (which `entries` reads) leaves it drawn, with focus where it was.
+    const row: SettingsEntry = {
+      text: "Remove worktrees when archived clean up tidy delete worktree archive branch",
+      view: () => (
+        <SettingRow
+          title="Remove worktrees when archived"
+          description="A worktree Lemma made goes once its last thread is archived, if nothing in it is uncommitted. Its branch stays, and unarchiving the thread makes it again."
+        >
+          <Toggle label="Remove worktrees when archived" checked={removeOnArchive.value() ?? true} onChange={removeOnArchive.set} />
+        </SettingRow>
+      ),
+    };
     slots.add(SettingsGroups, {
       id: ID,
       section: SectionIds.general,
       title: "New threads",
       order: 11,
-      entries: () =>
-        removeOnArchive.value() === undefined
-          ? []
-          : [
-              {
-                text: "Remove worktrees when archived clean up tidy delete worktree archive branch",
-                view: () => (
-                  <SettingRow
-                    title="Remove worktrees when archived"
-                    description="A worktree Lemma made goes once its last thread is archived, if nothing in it is uncommitted. Its branch stays, and unarchiving the thread makes it again."
-                  >
-                    <Toggle label="Remove worktrees when archived" checked={removeOnArchive.value() ?? true} onChange={removeOnArchive.set} />
-                  </SettingRow>
-                ),
-              },
-            ],
+      entries: () => (removeOnArchive.value() === undefined ? [] : [row]),
     });
   },
 });

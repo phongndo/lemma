@@ -53,40 +53,37 @@ export default defineWebPlugin({
     const keepCancelled = configSetting<boolean>(host, notify, ID, "keepCancelled");
     /** An entry while its plugin's row has the field. */
     const shown = <T,>(setting: ConfigSetting<T>, entry: SettingsEntry) => (setting.value() === undefined ? [] : [entry]);
+    // Each row made once, so a change made in it (which `shown` reads) leaves it drawn, with focus where it was.
+    const steps: SettingsEntry = {
+      text: "Agent steps per turn max steps model calls limit",
+      view: () => (
+        <SettingRow title="Steps per turn" description="Model calls one turn may make before it stops to ask you to go on.">
+          <Count label="Steps per turn" value={maxSteps.value() ?? 0} min={1} unit="steps" onChange={maxSteps.set} />
+        </SettingRow>
+      ),
+    };
+    const running: SettingsEntry = {
+      text: "Agent turns at once concurrent parallel threads running max running",
+      view: () => (
+        <SettingRow title="Turns at once" description="Threads whose turns run together; another waits for one to end.">
+          <Count label="Turns at once" value={maxRunning.value() ?? 0} min={1} unit="turns" onChange={maxRunning.set} />
+        </SettingRow>
+      ),
+    };
+    const keep: SettingsEntry = {
+      text: "Agent keep stopped replies cancelled interrupted text context",
+      view: () => (
+        <SettingRow title="Keep stopped replies" description="When you stop a reply, what it had written stays in what the model reads next, as you read it.">
+          <Toggle label="Keep stopped replies" checked={keepCancelled.value() ?? true} onChange={keepCancelled.set} />
+        </SettingRow>
+      ),
+    };
     slots.add(SettingsGroups, {
       id: "agent.loop",
       order: 40,
       section: SectionIds.general,
       title: "Agent",
-      entries: () => [
-        ...shown(maxSteps, {
-          text: "Agent steps per turn max steps model calls limit",
-          view: () => (
-            <SettingRow title="Steps per turn" description="Model calls one turn may make before it stops to ask you to go on.">
-              <Count label="Steps per turn" value={maxSteps.value() ?? 0} min={1} unit="steps" onChange={maxSteps.set} />
-            </SettingRow>
-          ),
-        }),
-        ...shown(maxRunning, {
-          text: "Agent turns at once concurrent parallel threads running max running",
-          view: () => (
-            <SettingRow title="Turns at once" description="Threads whose turns run together; another waits for one to end.">
-              <Count label="Turns at once" value={maxRunning.value() ?? 0} min={1} unit="turns" onChange={maxRunning.set} />
-            </SettingRow>
-          ),
-        }),
-        ...shown(keepCancelled, {
-          text: "Agent keep stopped replies cancelled interrupted text context",
-          view: () => (
-            <SettingRow
-              title="Keep stopped replies"
-              description="When you stop a reply, what it had written stays in what the model reads next, as you read it."
-            >
-              <Toggle label="Keep stopped replies" checked={keepCancelled.value() ?? true} onChange={keepCancelled.set} />
-            </SettingRow>
-          ),
-        }),
-      ],
+      entries: () => [...shown(maxSteps, steps), ...shown(maxRunning, running), ...shown(keepCancelled, keep)],
     });
   },
 });

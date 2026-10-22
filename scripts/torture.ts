@@ -11,7 +11,7 @@
 // - and the host exits only when the torture kills it.
 //
 // The workload replays from its seed; the processes' timing does not, so unlike the simulator (packages/sim) a failing
-// run is not replayed bit for bit. It runs nightly.
+// run is not replayed bit for bit. It runs nightly, in the Soak workflow.
 //
 //   node --conditions=lemma-source scripts/torture.ts [--seed <n>] [--seconds <n>]
 //

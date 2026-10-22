@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { AsyncLocalStorage } from "node:async_hooks";
 import { mkdirSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -13,9 +14,12 @@ import { createServer } from "vite";
  * browser, and the helpers that open, boot, and drive its pages.
  */
 
-const { values: options } = parseArgs({ options: { shard: { type: "string", default: "1/1" } } });
+const { values: options } = parseArgs({ options: { shard: { type: "string", default: "1/1" }, retry: { type: "string", default: "0" } } });
 export const [shard, shards] = options.shard.split("/").map(Number) as [number, number];
 assert(Number.isInteger(shard) && Number.isInteger(shards) && shard >= 1 && shard <= shards, `--shard is i/n, not "${options.shard}"`);
+/** How many more times a lane that fails runs, as CI asks (`--retry=n`); none by default, so a flake shows at once. */
+export const retries = Number(options.retry);
+assert(Number.isInteger(retries) && retries >= 0, `--retry is a count, not "${options.retry}"`);
 
 export const root = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 export const server = await createServer({ root, configFile: resolve(root, "vite.config.ts"), logLevel: "error", server: { port: 0, host: "127.0.0.1" } });
@@ -72,26 +76,45 @@ export const atBlankThread = async (page: Page) => {
   });
 };
 
-/** Every page opened, traced, so that a failure can leave its trace and a screenshot behind. */
-const pages: Page[] = [];
+/** The lane running (check-ui.ts runs each in `inLane`), so that the pages of a lane's failed try can be set apart. */
+const lane = new AsyncLocalStorage<string>();
+export const inLane = <A>(name: string, run: () => Promise<A>): Promise<A> => lane.run(name, run);
+
+/** Every page opened, traced, with its lane, so that a failure can leave its trace and a screenshot behind. */
+const pages: { readonly page: Page; readonly lane: string | undefined }[] = [];
 export const open = async () => {
   const page = await browser.newPage({ viewport: { width: 1200, height: 900 } });
   await page.context().tracing.start({ screenshots: true, snapshots: true });
-  pages.push(page);
+  pages.push({ page, lane: lane.getStore() });
   return page;
 };
-export const saveArtifacts = async () => {
+/**
+ * Leaves a trace and a screenshot of each page still open in `LEMMA_UI_ARTIFACTS` (by default a new directory under
+ * the OS temp directory), and says where. For a lane's failed try, those of its pages alone, named for it, which then
+ * close: the lane's next try opens its own.
+ */
+export const saveArtifacts = async (failed?: { readonly lane: string; readonly try: number }) => {
   const directory = process.env.LEMMA_UI_ARTIFACTS ?? mkdtempSync(join(tmpdir(), "lemma-ui-check-"));
   mkdirSync(directory, { recursive: true });
-  for (const [index, page] of pages.entries()) {
-    if (page.isClosed()) continue;
-    await page.screenshot({ path: join(directory, `page-${index + 1}.png`), fullPage: true }).catch(() => {});
-    await page
+  const prefix = failed === undefined ? "" : `${failed.lane}-try-${failed.try}-`;
+  for (const [index, opened] of pages.entries()) {
+    if (opened.page.isClosed() || (failed !== undefined && opened.lane !== failed.lane)) continue;
+    await opened.page.screenshot({ path: join(directory, `${prefix}page-${index + 1}.png`), fullPage: true }).catch(() => {});
+    await opened.page
       .context()
-      .tracing.stop({ path: join(directory, `trace-${index + 1}.zip`) })
+      .tracing.stop({ path: join(directory, `${prefix}trace-${index + 1}.zip`) })
       .catch(() => {});
+    if (failed !== undefined)
+      await opened.page
+        .context()
+        .close()
+        .catch(() => {});
   }
-  console.error(`UI check failed: traces and screenshots are in ${directory}`);
+  console.error(
+    failed === undefined
+      ? `UI check failed: traces and screenshots are in ${directory}`
+      : `UI check: ${failed.lane} failed on try ${failed.try}: its traces and screenshots are in ${directory}`,
+  );
 };
 /** A page of its own, on a mock host of its own (a new page is a new browser context), booted without errors. */
 export const boot = async () => {
