@@ -1,10 +1,11 @@
-import { For, Show, createSignal } from "solid-js";
+import { For, Show, createMemo, createSignal } from "solid-js";
 import { CliChannels } from "@lemma/cli";
 import { Layers } from "@lemma/frame";
 import { Dialog, QuestionIcon, SettingRow, Spinner, Toggle } from "@lemma/look";
 import { ReleaseChannels } from "@lemma/release";
 import type { Channel, ReleaseStatus } from "@lemma/release";
 import { SettingsGroups, SettingsSections, configSetting } from "@lemma/settings";
+import type { SettingsEntry } from "@lemma/settings";
 import { Client, HostPlugins, Notify, Slots, defineWebPlugin } from "@lemma/web";
 
 const SECTION = "about";
@@ -183,83 +184,106 @@ export default defineWebPlugin({
       badgeTone: "info",
     });
 
-    const row = (text: string, title: string, value: () => string | undefined, description?: () => string | undefined) => ({
+    const row = (text: string, title: () => string, value: () => string | undefined, description?: () => string | undefined): SettingsEntry => ({
       text,
       view: () => (
-        <SettingRow title={title} description={description?.()}>
+        <SettingRow title={title()} description={description?.()}>
           <span class="muted">{value()}</span>
         </SettingRow>
       ),
     });
 
+    // The rows made once, reading the status as it changes, so a check for updates (which changes it) leaves them drawn,
+    // with focus where it was (`SettingsGroup.entries`). They show while there is a status; one leaving reads the last.
+    const known = createMemo<ReleaseStatus | undefined>((last) => status() ?? last);
+    const now = () => known()!;
+    const build = () => now().build;
+    const about: SettingsEntry[] = [
+      {
+        text: "Lemma version release update newest channel",
+        view: () => (
+          <SettingRow
+            title={`Lemma ${build().version}`}
+            description={
+              build().kind === "checkout"
+                ? "A checkout, as developers run Lemma: it updates with git."
+                : !now().updatable
+                  ? "Not installed by the installer, so it cannot replace it."
+                  : now().channel === undefined
+                    ? "Installed by version: it follows no channel."
+                    : now().newer
+                      ? `Lemma ${now().newest} is out on the ${now().channel} channel.`
+                      : now().newest === undefined
+                        ? `On the ${now().channel} channel.`
+                        : `No newer release is out on the ${now().channel} channel.`
+            }
+          >
+            <Show when={now().updatable && now().channel !== undefined}>
+              <Show
+                when={now().newer}
+                fallback={
+                  <button type="button" class="button small" disabled={checking()} onClick={plugin.action("check for updates", checkNow)}>
+                    {checking() ? "Checking for updates…" : "Check for updates"}
+                  </button>
+                }
+              >
+                <button type="button" class="button small button-primary" onClick={plugin.action("ask what updating cuts off", ask)}>
+                  Update to Lemma {now().newest}
+                </button>
+              </Show>
+            </Show>
+          </SettingRow>
+        ),
+      },
+      {
+        text: "commit built",
+        view: () => (
+          <SettingRow title="Built" description={when(build().built) ?? (build().kind === "checkout" ? "From this checkout" : undefined)}>
+            <Show when={build().commit} fallback={<span class="muted">Unknown</span>}>
+              {(commit) => (
+                <a class="button small" href={commitUrl(commit())} target="_blank" rel="noreferrer">
+                  {commit().slice(0, 12)}
+                </a>
+              )}
+            </Show>
+          </SettingRow>
+        ),
+      },
+      row(
+        "installed where path root link",
+        () => (build().kind === "checkout" ? "Checkout" : "Installed"),
+        () => build().root,
+        () => build().link && `Linked from ${build().link}`,
+      ),
+      row(
+        "node.js runtime",
+        () => "Node.js",
+        () => build().node,
+      ),
+    ];
+    const checkRow: SettingsEntry = {
+      text: "Check for updates automatically newer release notice",
+      view: () => (
+        <SettingRow
+          title="Check automatically"
+          description={`Ask every few hours whether a newer release is out on the ${now().channel} channel.${now().error === undefined ? "" : ` The last check failed: ${now().error}`}`}
+        >
+          <Toggle label="Check for updates automatically" checked={checks.value() ?? true} onChange={(on) => checks.set(on)} />
+        </SettingRow>
+      ),
+    };
+    const channelRow = row(
+      "channel stable nightly pinned switch",
+      () => "Channel",
+      () => now().channel ?? "None",
+      () => `${CHANNEL_MEANS[now().channel ?? "none"]} Updating from a terminal can switch it.`,
+    );
+
     slots.add(SettingsGroups, {
       id: "release.about",
       section: SECTION,
       title: "Lemma",
-      entries: () => {
-        const now = status();
-        if (now === undefined) return [];
-        const { build } = now;
-        return [
-          {
-            text: "Lemma version release update newest channel",
-            view: () => (
-              <SettingRow
-                title={`Lemma ${build.version}`}
-                description={
-                  build.kind === "checkout"
-                    ? "A checkout, as developers run Lemma: it updates with git."
-                    : !now.updatable
-                      ? "Not installed by the installer, so it cannot replace it."
-                      : now.channel === undefined
-                        ? "Installed by version: it follows no channel."
-                        : now.newer
-                          ? `Lemma ${now.newest} is out on the ${now.channel} channel.`
-                          : now.newest === undefined
-                            ? `On the ${now.channel} channel.`
-                            : `No newer release is out on the ${now.channel} channel.`
-                }
-              >
-                <Show when={now.updatable && now.channel !== undefined}>
-                  <Show
-                    when={now.newer}
-                    fallback={
-                      <button type="button" class="button small" disabled={checking()} onClick={plugin.action("check for updates", checkNow)}>
-                        {checking() ? "Checking for updates…" : "Check for updates"}
-                      </button>
-                    }
-                  >
-                    <button type="button" class="button small button-primary" onClick={plugin.action("ask what updating cuts off", ask)}>
-                      Update to Lemma {now.newest}
-                    </button>
-                  </Show>
-                </Show>
-              </SettingRow>
-            ),
-          },
-          {
-            text: "commit built",
-            view: () => (
-              <SettingRow title="Built" description={when(build.built) ?? (build.kind === "checkout" ? "From this checkout" : undefined)}>
-                <Show when={build.commit} fallback={<span class="muted">Unknown</span>}>
-                  {(commit) => (
-                    <a class="button small" href={commitUrl(commit())} target="_blank" rel="noreferrer">
-                      {commit().slice(0, 12)}
-                    </a>
-                  )}
-                </Show>
-              </SettingRow>
-            ),
-          },
-          row(
-            "installed where path root link",
-            build.kind === "checkout" ? "Checkout" : "Installed",
-            () => build.root,
-            () => build.link && `Linked from ${build.link}`,
-          ),
-          row("node.js runtime", "Node.js", () => build.node),
-        ];
-      },
+      entries: () => (status() === undefined ? [] : about),
     });
 
     slots.add(SettingsGroups, {
@@ -267,30 +291,10 @@ export default defineWebPlugin({
       section: SECTION,
       title: "Updates",
       entries: () => {
-        const now = status();
-        if (now === undefined || !now.updatable) return [];
-        const channelRow = row(
-          "channel stable nightly pinned switch",
-          "Channel",
-          () => now.channel ?? "None",
-          () => `${CHANNEL_MEANS[now.channel ?? "none"]} Updating from a terminal can switch it.`,
-        );
+        const current = status();
+        if (current === undefined || !current.updatable) return [];
         // Pinned, it follows no channel: there is nothing to check for.
-        if (now.channel === undefined) return [channelRow];
-        return [
-          {
-            text: "Check for updates automatically newer release notice",
-            view: () => (
-              <SettingRow
-                title="Check automatically"
-                description={`Ask every few hours whether a newer release is out on the ${now.channel} channel.${now.error === undefined ? "" : ` The last check failed: ${now.error}`}`}
-              >
-                <Toggle label="Check for updates automatically" checked={checks.value() ?? true} onChange={(on) => checks.set(on)} />
-              </SettingRow>
-            ),
-          },
-          channelRow,
-        ];
+        return current.channel === undefined ? [channelRow] : [checkRow, channelRow];
       },
     });
   },
