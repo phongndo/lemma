@@ -1,4 +1,4 @@
-import { bindingOf, bindsTyping, holdsKeys, matchesKeys } from "@lemma/web/keys";
+import { bindingOf, bindsTyping, holdsKeys, matchesKeys, typedWithAltGr } from "@lemma/web/keys";
 import { ActionIds, keysFor } from "@lemma/actions";
 import type { Action, KeyOverrides } from "@lemma/actions";
 import type { SlotItem } from "@lemma/web";
@@ -55,11 +55,14 @@ export const createKeymap = ({ actions, overrides, placeOf, after, failed }: Key
   const onKey = (event: KeyboardEvent): boolean => {
     if (event.defaultPrevented || event.isComposing) return false;
     const place = placeOf(event);
-    for (const action of actions()) {
+    // A character typed with AltGr in a text field is the field's (AltGr+A types ą), whatever binding it looks like.
+    if (place.inField && typedWithAltGr(event)) return false;
+    const all = actions();
+    for (const action of all) {
       if (runsOn(action, place, (candidate) => matchesKeys(candidate, event)) === undefined) continue;
       event.preventDefault();
       // One that needs a value asks for it in the palette, as picking it there would.
-      const palette = action.input === undefined ? undefined : actions().find((item) => item.id === ActionIds.palette);
+      const palette = action.input === undefined ? undefined : all.find((item) => item.id === ActionIds.palette);
       const runs = palette ?? action;
       try {
         const result: unknown = palette !== undefined ? palette.run(action.id) : action.run();

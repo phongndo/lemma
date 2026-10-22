@@ -1,13 +1,13 @@
-import { createMemo } from "solid-js";
+import { createMemo, untrack } from "solid-js";
 import { RouteOutlet } from "@lemma/router-solid";
 import type { RouteFailure } from "@lemma/router-solid";
 import { Actions } from "@lemma/actions";
-import { MainRegion } from "@lemma/frame";
+import { inDesktop, MainRegion } from "@lemma/frame";
 import { NewThreadRoute } from "@lemma/sessions";
 import { SectionIds, SettingsRoute } from "@lemma/settings";
 import { Notify, Pages, Router, Slots, WebPlugins, defineWebPlugin } from "@lemma/web";
 import type { Page, SlotItem } from "@lemma/web";
-import { inDesktop, isMac } from "@lemma/web/keys";
+import { isMac } from "@lemma/web/keys";
 import { ahead, see } from "./history.ts";
 import type { Seen } from "./history.ts";
 import styles from "./pages.css?inline";
@@ -94,7 +94,17 @@ export default defineWebPlugin({
     // Keys for the desktop app, which has no back button: its browser view's (`apps/desktop/src/browser.ts`). In a
     // browser they stay the browser's own. Back stops at the first address the app showed, where the browser's would
     // leave the app.
-    const history = createMemo((seen: Seen | undefined) => see(seen, router.location()), undefined);
+    // Whether the router's last move was a push, from its journal, which it writes before the location it lands on.
+    const pushed = () => {
+      const journal = untrack(router.journal);
+      for (let at = journal.length - 1; at >= 0; at--) {
+        const event = journal[at]!;
+        if (event.kind === "navigate") return event.action === "push";
+        if (event.kind === "moved") return false;
+      }
+      return false;
+    };
+    const history = createMemo((seen: Seen | undefined) => see(seen, router.location().index, pushed()), undefined);
     slots.add(Actions, {
       id: "pages.back",
       order: 30,

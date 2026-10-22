@@ -61,5 +61,13 @@ export interface MenuAction<Subject, Control = undefined> {
   readonly run: (subject: Subject, control: Control) => void;
 }
 
+/**
+ * In the desktop app's window (`window.lemmaDesktop`), which, unlike a browser, hands the page the keys a browser keeps
+ * for its tabs, windows, and history: ⌘T, ⌘W, ⌘N, ⌘L, ⌘[ and ⌘] (Alt+← and Alt+→ off macOS), ⌘⇧[ and ⌘⇧]. An action
+ * binds those only here: in a browser the page never hears some of them, and taking the rest would stop the browser's
+ * own (⌘[ going back).
+ */
+export const inDesktop = typeof window !== "undefined" && "lemmaDesktop" in window;
+
 export { ActionMenu } from "./menu.tsx";
 export { FRAME_CONTRACT } from "./version.ts";

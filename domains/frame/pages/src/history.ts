@@ -1,28 +1,17 @@
-/** Where the page is in its history: an entry's place and its key (`HistoryLocation`). */
-export interface Entry {
-  readonly index: number;
-  readonly key: string;
-}
-
-/** What the page has seen of its history: each entry's key by its place, where it is, and the last place known ahead. */
+/** Where the page is in its history, and the last place known ahead of it. */
 export interface Seen {
-  readonly keys: ReadonlyMap<number, string>;
   readonly index: number;
   readonly top: number;
 }
 
 /**
- * `seen` once the page is at `entry`. A step on to an entry not seen at that place is a new one, which drops those
- * ahead; any other move keeps them. Before the page has moved, nothing ahead is known (after a reload the browser
- * keeps entries ahead the page cannot see), as the router's history has it.
+ * `seen` once the page is at `index`, by a push (`pushed`, as the router said: `navigate` with `push`) or another move
+ * (back, forward, a replace). A push on to a new entry drops those ahead; any other move keeps them, a forward onto an
+ * entry the page never saw included. Before the page has moved, nothing ahead is known (after a reload the browser keeps
+ * entries ahead the page cannot see), as the router's history has it.
  */
-export const see = (seen: Seen | undefined, entry: Entry): Seen => {
-  if (seen === undefined) return { keys: new Map([[entry.index, entry.key]]), index: entry.index, top: entry.index };
-  const pushed = entry.index === seen.index + 1 && seen.keys.get(entry.index) !== entry.key;
-  const keys = new Map([...seen.keys].filter(([index]) => !pushed || index < entry.index));
-  keys.set(entry.index, entry.key);
-  return { keys, index: entry.index, top: pushed ? entry.index : Math.max(seen.top, seen.index, entry.index) };
-};
+export const see = (seen: Seen | undefined, index: number, pushed: boolean): Seen =>
+  seen === undefined ? { index, top: index } : pushed && index > seen.index ? { index, top: index } : { index, top: Math.max(seen.top, index) };
 
 /** Whether going forward lands on something. */
 export const ahead = (seen: Seen): boolean => seen.top > seen.index;

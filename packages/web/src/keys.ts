@@ -1,14 +1,6 @@
 /** macOS writes app shortcuts with ⌘; Windows and Linux with Ctrl. */
 export const isMac = typeof navigator !== "undefined" && /Mac|iPhone|iPad|iPod/.test(navigator.platform || navigator.userAgent);
 
-/**
- * In the desktop app's window (`window.lemmaDesktop`), which, unlike a browser, hands the page the keys a browser keeps
- * for its tabs, windows, and history: ⌘T, ⌘W, ⌘N, ⌘L, ⌘[ and ⌘] (Alt+← and Alt+→ off macOS), ⌘⇧[ and ⌘⇧]. An action
- * binds those only here: in a browser the page never hears some of them, and taking the rest would stop the browser's
- * own (⌘[ going back).
- */
-export const inDesktop = typeof window !== "undefined" && "lemmaDesktop" in window;
-
 /** What bindings read of a key press: a DOM `KeyboardEvent`, or another's in its terms (the desktop app's pages'). */
 export type KeyEvent = Pick<KeyboardEvent, "key" | "code" | "metaKey" | "ctrlKey" | "altKey" | "shiftKey"> & Partial<Pick<KeyboardEvent, "getModifierState">>;
 
@@ -65,10 +57,11 @@ const keyOf = (event: Pick<KeyboardEvent, "key" | "code">): string => {
 const MODIFIERS = new Set(["meta", "control", "alt", "altgraph", "shift", "os", "capslock", "fn"]);
 
 /**
- * AltGr is held: off macOS it reports as Ctrl+Alt, and what it presses types a character (AltGr+A is ą on a Polish
- * layout), so it presses no binding, `mod+alt+a` included. On macOS ⌥ is Alt, never AltGr.
+ * Whether AltGr is held: off macOS it reports as Ctrl+Alt, and what it presses types a character (AltGr+A is ą on a
+ * Polish layout). Windows reports a real Ctrl+Alt as AltGr too on such layouts, so a binding is not refused for it: the
+ * keymap lets it type while focus is in a text field, and a shortcut is never recorded from it. On macOS ⌥ is Alt.
  */
-const altGraph = (event: KeyEvent, mac: boolean): boolean => !mac && event.getModifierState?.("AltGraph") === true;
+export const typedWithAltGr = (event: KeyEvent, mac = isMac): boolean => !mac && event.getModifierState?.("AltGraph") === true;
 
 /**
  * The binding `event` presses, for recording a shortcut: `mod+shift+k`, `alt+arrowdown`, `/`.
@@ -76,6 +69,7 @@ const altGraph = (event: KeyEvent, mac: boolean): boolean => !mac && event.getMo
  * for a symbol it is part of typing it (`?`).
  */
 export const bindingOf = (event: KeyEvent): string | undefined => {
+  if (typedWithAltGr(event)) return undefined;
   const key = keyOf(event);
   if (MODIFIERS.has(key) || key === "dead" || key === "unidentified") return undefined;
   const named = key.length > 1 || /^[a-z0-9]$/.test(key);
@@ -111,13 +105,12 @@ const SYMBOLS: Readonly<Record<string, string>> = {
  * Whether `event` presses `binding`. Shift must match for letters and when the
  * binding names it; for other keys it is whatever the layout needs to type
  * them (`/`, `?`). A symbol the key does not type with Shift held (`mod+shift+]`
- * types `}`) is known by the key's place, Shift counting. A key typed with AltGr
- * presses none. `mac`: whether `mod` is ⌘, as on this platform when not said;
+ * types `}`) is known by the key's place, Shift counting. `mac`: whether `mod` is ⌘, as on this platform when not said;
  * the desktop app's main process, matching its pages' keys, says.
  */
 export const matchesKeys = (binding: string, event: KeyEvent, mac = isMac): boolean => {
   const { key, mod, shift, alt } = parse(binding);
-  if (altGraph(event, mac) || modHeld(event, mac) !== mod || event.altKey !== alt) return false;
+  if (modHeld(event, mac) !== mod || event.altKey !== alt) return false;
   if (!mod && (event.ctrlKey || event.metaKey)) return false;
   if (keyOf(event) === key) return shift || /^[a-z0-9]$/.test(key) || key.length > 1 ? event.shiftKey === shift : true;
   return shift && event.shiftKey && SYMBOLS[event.code] === key;
@@ -130,7 +123,7 @@ export const matchesKeys = (binding: string, event: KeyEvent, mac = isMac): bool
  */
 export const holdsKeys = (binding: string, event: KeyEvent, mac = isMac): boolean => {
   const { mod, shift, alt } = parse(binding);
-  if ((!mod && !shift && !alt) || altGraph(event, mac)) return false;
+  if ((!mod && !shift && !alt) || typedWithAltGr(event, mac)) return false;
   if (modHeld(event, mac) !== mod || event.shiftKey !== shift || event.altKey !== alt) return false;
   return mod || !(event.ctrlKey || event.metaKey);
 };

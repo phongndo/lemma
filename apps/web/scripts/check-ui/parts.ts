@@ -797,8 +797,16 @@ export const parts = async (): Promise<string> => {
       .waitForFunction((path) => `${location.pathname}${location.search}` === path, thread, { timeout: 5_000 })
       .catch(async () => assert.fail(`${key} went to ${await where()}, not ${thread}`));
   await page.focus("textarea");
+  // In the prompt it is the text field's: no binding takes it (one would at once, before any move lands).
+  await page.evaluate(() => {
+    (window as any).taken = undefined;
+    // The arrow's own keydown, after the modifiers' (Alt, then Shift, each a keydown of its own).
+    window.addEventListener("keydown", (event) => {
+      if (event.key === "ArrowDown") (window as any).taken = event.defaultPrevented;
+    });
+  });
   await page.keyboard.press("Alt+Shift+ArrowDown");
-  assert.equal(await where(), thread, "Alt+Shift+↓ in the prompt left it");
+  assert.equal(await page.evaluate(() => (window as any).taken), false, "Alt+Shift+↓ in the prompt was taken from it");
   await page.locator("textarea").blur();
   await page.keyboard.press("Alt+Shift+ArrowDown");
   await atBackground("Alt+Shift+↓");
@@ -806,6 +814,23 @@ export const parts = async (): Promise<string> => {
   await atThread("back");
   await page.goForward();
   await atBackground("forward");
+  // The palette's Go back and Go forward, which the desktop app binds to keys: forward is offered only with somewhere ahead.
+  const palette = async (title: string) => {
+    await page.keyboard.press("ControlOrMeta+k");
+    await page.fill(".palette-input input", title);
+  };
+  await palette("Go forward");
+  assert.equal(await page.locator(".palette-row >> text=Go forward").count(), 0, "Go forward is offered with nothing ahead");
+  await page.keyboard.press("Escape");
+  await page.keyboard.press("Escape");
+  await palette("Go back");
+  await page.waitForSelector(".palette-row >> text=Go back", { timeout: 5_000 });
+  await page.keyboard.press("Enter");
+  await atThread("Go back");
+  await palette("Go forward");
+  await page.waitForSelector(".palette-row >> text=Go forward", { timeout: 5_000 }).catch(() => assert.fail("Go forward is not offered after going back"));
+  await page.keyboard.press("Enter");
+  await atBackground("Go forward");
   await page.keyboard.press("ControlOrMeta+Alt+KeyA");
   await page
     .waitForFunction((id) => (window as any).blankThreads.list().find((session: any) => session.id === id)?.archived === true, background, { timeout: 5_000 })

@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { bindingOf, formatKeys, holdsKeys, listKey, matchesKeys, quickKey } from "../src/keys.ts";
+import { bindingOf, formatKeys, holdsKeys, listKey, matchesKeys, quickKey, typedWithAltGr } from "../src/keys.ts";
 
 // Not a Mac here, so `mod` is Ctrl. Node has a `navigator` that reports the host, so pin it.
 vi.hoisted(() => {
@@ -25,6 +25,8 @@ describe("bindingOf", () => {
     expect(bindingOf(press("Shift", "ShiftLeft", { shift: true }))).toBeUndefined();
     expect(bindingOf(press("Control", "ControlLeft", { ctrl: true }))).toBeUndefined();
     expect(bindingOf(withAltGr(press("AltGraph", "AltRight", { ctrl: true, alt: true })))).toBeUndefined();
+    // Nor a key with it: it would record a binding that types, or one the plain key presses.
+    expect(bindingOf(withAltGr(press("ą", "KeyA", { ctrl: true, alt: true })))).toBeUndefined();
   });
 });
 
@@ -48,13 +50,14 @@ describe("matchesKeys", () => {
     expect(matchesKeys("mod+]", press("]", "BracketRight", { ctrl: true }))).toBe(true);
   });
 
-  it("takes a key typed with AltGr for typing, not for mod+alt", () => {
-    // AltGr+A types ą on a Polish layout; Windows reports it as Ctrl+Alt+A.
-    expect(matchesKeys("mod+alt+a", withAltGr(press("ą", "KeyA", { ctrl: true, alt: true })))).toBe(false);
-    expect(matchesKeys("a", withAltGr(press("ą", "KeyA")))).toBe(false);
-    expect(matchesKeys("mod+alt+a", press("a", "KeyA", { ctrl: true, alt: true }))).toBe(true);
+  it("tells a key typed with AltGr, which still presses mod+alt: Windows reports a real Ctrl+Alt as AltGr too", () => {
+    // AltGr+A types ą on a Polish layout; Windows reports it as Ctrl+Alt+A. Whether it types is the keymap's to say.
+    const altGr = withAltGr(press("ą", "KeyA", { ctrl: true, alt: true }));
+    expect(typedWithAltGr(altGr, false)).toBe(true);
+    expect(matchesKeys("mod+alt+a", altGr, false)).toBe(true);
+    expect(typedWithAltGr(press("a", "KeyA", { ctrl: true, alt: true }), false)).toBe(false);
     // On macOS ⌥ is Alt, whatever the event says of AltGr.
-    expect(matchesKeys("mod+alt+a", withAltGr(press("å", "KeyA", { meta: true, alt: true })), true)).toBe(true);
+    expect(typedWithAltGr(withAltGr(press("å", "KeyA", { meta: true, alt: true })), true)).toBe(false);
   });
 
   it("needs the exact modifiers", () => {

@@ -2,7 +2,6 @@ import { For, Show, createEffect, createMemo, createSignal, onCleanup } from "so
 import type { JSX } from "solid-js";
 import { isRoute } from "@lemma/router";
 import { tildePath } from "@lemma/web/format";
-import { inDesktop } from "@lemma/web/keys";
 import { load, save } from "@lemma/web/storage";
 import { dragEdge } from "@lemma/web/drag";
 import {
@@ -19,7 +18,7 @@ import {
   Views,
 } from "@lemma/threads";
 import { Actions, shownKeysOf } from "@lemma/actions";
-import { Layout } from "@lemma/frame";
+import { inDesktop, Layout } from "@lemma/frame";
 import { NewThreadRoute, ThreadRoute } from "@lemma/sessions";
 import { Client, Notify, Pages, Router, Slots, WebPlugins, defineWebPlugin, Contained, Each, First } from "@lemma/web";
 import { Workspace } from "@lemma/workspace/web";

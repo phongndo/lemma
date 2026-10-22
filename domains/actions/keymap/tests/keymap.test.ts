@@ -238,3 +238,28 @@ describe("pressing keys", () => {
     expect(rename.run).not.toHaveBeenCalled();
   });
 });
+
+describe("a key typed with AltGr", () => {
+  /** AltGr+A on a Polish layout: ą, which Windows reports as Ctrl+Alt+A. */
+  const altGrA = () => {
+    const event = press("ą", "KeyA", { ctrl: true, alt: true });
+    Object.defineProperty(event, "getModifierState", { value: (key: string) => key === "AltGraph" });
+    return event;
+  };
+
+  it("types in a text field, running no binding", () => {
+    const archive: Item = { id: "archive", title: "Archive", keys: "mod+alt+a", whileTyping: true, run: vi.fn() };
+    const { keymap } = setup([archive], { place: { inField: true } });
+    const event = altGrA();
+    keymap.keydown(event);
+    expect(archive.run).not.toHaveBeenCalled();
+    expect(event.defaultPrevented).toBe(false);
+  });
+
+  it("runs mod+alt outside one, as a real Ctrl+Alt Windows reports as AltGr does", () => {
+    const archive: Item = { id: "archive", title: "Archive", keys: "mod+alt+a", run: vi.fn() };
+    const { keymap } = setup([archive]);
+    keymap.keydown(altGrA());
+    expect(archive.run).toHaveBeenCalledOnce();
+  });
+});
