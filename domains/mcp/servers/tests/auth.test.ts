@@ -14,7 +14,7 @@ import { ToolInvocation, ToolRunner } from "@lemma/tools";
 import { textOf } from "@lemma/tools/testing";
 import registry from "@lemma/tools-registry";
 import mcpServers from "../src/index.ts";
-import { bearer, callbackParams, finishSignIn, newState, SignInStore, startSignIn } from "../src/auth.ts";
+import { bearer, callbackParams, finishSignIn, needsSignIn, newState, SignInStore, startSignIn } from "../src/auth.ts";
 import type { SignInTarget } from "../src/auth.ts";
 import { redact, secretsOf } from "../src/config.ts";
 import { Servers } from "../src/servers.ts";
@@ -464,6 +464,25 @@ describe("a renewal and a sign-in at once", () => {
     const landed = new URL(await approve(await startSignIn(store, target, flow, scope === undefined ? undefined : { scope })));
     await finishSignIn(store, target, flow, landed.searchParams.get("code")!, undefined);
   };
+
+  it("needs signing in again when its client is another authorization server's, registering none on its own", async () => {
+    const oauth = await fixture();
+    const store = new SignInStore(join(await mkdtemp(join(tmpdir(), "lemma-mcp-auth-")), "mcp-auth.json"));
+    await store.load();
+    const target: SignInTarget = { name: "remote", url: oauth.url, oauth: undefined };
+    await signInTo(store, target);
+    // Its authorization server's issuer moved since the client was registered.
+    const stored = store.get("remote", oauth.url)!;
+    await store.set("remote", { ...stored, client: { ...stored.client!, issuer: "https://moved.example/" } });
+    oauth.expire();
+    const renewal = bearer(store, target, () => {}).onUnauthorized!({
+      response: new Response(null, { status: 401 }),
+      serverUrl: new URL(oauth.url),
+      fetchFn: fetch,
+    });
+    await expect(renewal).rejects.toSatisfy(needsSignIn);
+    expect(oauth.counts.registrations).toBe(1);
+  });
 
   it("keeps the sign-in that finished while a renewal was under way, and the scope it was granted", async () => {
     const oauth = await fixture();

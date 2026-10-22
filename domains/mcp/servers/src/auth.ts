@@ -10,7 +10,7 @@ import type {
   StoredOAuthTokens,
 } from "@modelcontextprotocol/client";
 import type { McpOAuthConfig } from "@lemma/mcp";
-import { isObject } from "./form.ts";
+import { isObject } from "./values.ts";
 import { loadedSdk, loadSdk } from "./sdk.ts";
 import type { Sdk } from "./sdk.ts";
 
@@ -180,6 +180,10 @@ const without = (stored: StoredSignIn, keys: readonly (keyof StoredSignIn)[]): S
  * needs the person (`NeedsSignIn`), and one that failed otherwise, its refresh token kept, is for another try
  * (`RenewalFailed`).
  */
+/** Whether a client stamped with `stamped` (none: from before stamps) is the authorization server `issuer`'s, as the SDK tells them: one trailing slash apart is the same. */
+const sameIssuer = (stamped: string | undefined, issuer: string | undefined) =>
+  stamped === undefined || issuer === undefined || stamped.replace(/\/$/, "") === issuer.replace(/\/$/, "");
+
 function provider(store: SignInStore, target: SignInTarget, flow: Flow | undefined): OAuthClientProvider {
   const current = () => store.get(target.name, target.url);
   const patch = (fields: Partial<StoredSignIn>) => store.set(target.name, { ...(current() ?? { url: target.url }), ...fields, url: target.url });
@@ -213,10 +217,11 @@ function provider(store: SignInStore, target: SignInTarget, flow: Flow | undefin
       };
     },
     state: () => flow?.state ?? newState(),
-    clientInformation: () => {
+    clientInformation: (context) => {
       const client = configured ?? flow?.client ?? (flow?.newClient === true ? undefined : storedClient());
-      // A renewal without a client would register one, which only a sign-in in the browser can use: it stops first.
-      if (client === undefined && flow === undefined) throw new NeedsSignIn();
+      // A renewal without a client, or with one another authorization server issued (its issuer moved), would register
+      // one, which only a sign-in in the browser can use: it stops first.
+      if (flow === undefined && (client === undefined || (configured === undefined && !sameIssuer(client.issuer, context?.issuer)))) throw new NeedsSignIn();
       return client;
     },
     // A configured client, its secret included, is the entry's and is never stored.

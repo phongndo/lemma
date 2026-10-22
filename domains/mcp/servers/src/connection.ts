@@ -43,11 +43,13 @@ const statusOf = (error: unknown): number | undefined => {
   return sdk !== undefined && error instanceof sdk.SdkHttpError ? error.status : undefined;
 };
 
+/** Whether an entry sends a token of its own (an `Authorization` header): it is never signed in to. */
+export const sendsOwnToken = (config: McpServerConfig): boolean => Object.keys(config.headers ?? {}).some((header) => header.toLowerCase() === "authorization");
+
 /** What went wrong, in words a person can act on. */
 export function describe(error: unknown, config: McpServerConfig): string {
   const status = statusOf(error);
-  const ownToken = Object.keys(config.headers ?? {}).some((header) => header.toLowerCase() === "authorization");
-  if ((status === 401 || status === 403) && ownToken)
+  if ((status === 401 || status === 403) && sendsOwnToken(config))
     return `The server answered ${status}: it refused the token in the Authorization header. Check it, or remove the header to sign in instead.`;
   const code = (error as NodeJS.ErrnoException | undefined)?.code;
   if (code === "ENOENT" && config.command !== undefined) return `Command not found: ${config.command}`;

@@ -296,9 +296,9 @@ function IconField(props: { value: string; onChange: (icon: string) => void }) {
         >
           <Picture src={isImageAddress(icon()) ? icon() : undefined} fallback={<ImageIcon />} />
         </SvgDrop>
-        {/* An SVG written into the entry is shown by the tile, not as its address. */}
+        {/* An image written into the entry, whole, is shown by the tile, not as its address. */}
         <Show
-          when={icon().startsWith("data:")}
+          when={icon().startsWith("data:") && isImageAddress(icon())}
           fallback={
             <input
               class="field"

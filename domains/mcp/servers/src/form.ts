@@ -1,5 +1,6 @@
 import type { Exposure, McpServerConfig } from "@lemma/mcp";
 import { SERVER_NAME } from "@lemma/mcp";
+import { isObject } from "./values.ts";
 
 /*
  * The web half's model of adding and editing a server: a command line as one string, name and value rows, and entries
@@ -37,9 +38,6 @@ export function splitCommand(line: string): string[] {
 /** The words as one command line `splitCommand` reads back: a word with spaces or quotes in it is quoted. */
 export const joinCommand = (words: readonly string[]): string =>
   words.map((word) => (word === "" || /[\s"'\\]/.test(word) ? `"${word.replace(/(["\\])/g, "\\$1")}"` : word)).join(" ");
-
-/** Whether `value` is a JSON object: not `null`, and not an array. */
-export const isObject = (value: unknown): value is Record<string, unknown> => typeof value === "object" && value !== null && !Array.isArray(value);
 
 /** Name and value rows: blank rows dropped. */
 export type Rows = readonly { readonly name: string; readonly value: string }[];

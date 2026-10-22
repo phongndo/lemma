@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { Schema } from "effect";
 import type { ImageContent, TextContent } from "@lemma/llm";
-import { isObject } from "./form.ts";
+import { isObject } from "./values.ts";
 
 type Json = Record<string, unknown>;
 type Content = TextContent | ImageContent;

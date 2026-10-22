@@ -5,7 +5,8 @@ import { dirname, join } from "node:path";
 import { Schema } from "effect";
 import { McpServerConfig, SERVER_NAME } from "@lemma/mcp";
 import type { Exposure, McpServer, McpServerChange } from "@lemma/mcp";
-import { isObject, normalize } from "./form.ts";
+import { normalize } from "./form.ts";
+import { isObject } from "./values.ts";
 
 /**
  * A server as the plugin runs it: its entry, merged, and where it came from: the file, or a plugin (with the server as

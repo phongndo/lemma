@@ -23,7 +23,7 @@ import {
   writeEntry,
 } from "./config.ts";
 import type { Definition, ServersFile } from "./config.ts";
-import { Connection } from "./connection.ts";
+import { Connection, sendsOwnToken } from "./connection.ts";
 import type { McpTool } from "./connection.ts";
 import { isImageAddress } from "./form.ts";
 import { inputOf, namespaceOf, outputOf, structuredOf, toContent, toolNames } from "./tools.ts";
@@ -64,8 +64,7 @@ const HELD_MS = 60_000;
 const SIGN_IN_TIMEOUT_MS = 10 * 60_000;
 
 /** A remote server Lemma signs in to, when it asks: one that does not send an `Authorization` header of its own. */
-const signsIn = (config: McpServerConfig): boolean =>
-  config.url !== undefined && !Object.keys(config.headers ?? {}).some((header) => header.toLowerCase() === "authorization");
+const signsIn = (config: McpServerConfig): boolean => config.url !== undefined && !sendsOwnToken(config);
 
 /** What a tool call to a server that needs signing in fails with, for the model to pass on. */
 const signInNeeded = (server: string) =>

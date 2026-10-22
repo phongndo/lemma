@@ -1,20 +1,22 @@
 /*
  * An SVG file of a person's own as an image (an MCP server's icon, a custom provider's logo): checked, and drawn from
  * a `data:` URL in an `<img>`, never inline, so scripts and handlers in it do not run and its ids cannot clash with the
- * page's. `SvgDrop` (picture.tsx) takes one picked or dropped.
+ * page's. `SvgDrop` (a part, `parts.tsx`) takes one picked or dropped.
  */
 
 /** The largest SVG file taken: it is written into a config file. */
 export const MAX_SVG_BYTES = 32 * 1024;
 
-/** An SVG file's text without what draws nothing: its XML declaration, doctype, comments, and the space between tags. */
+/**
+ * An SVG file's text without what draws nothing: its byte order mark, XML declaration, doctype (an internal subset, as
+ * Illustrator writes, included), and comments. The space between tags stays, as text drawn from it can show it.
+ */
 const bareSvg = (svg: string) =>
   svg
-    .replace(/^﻿/, "")
+    .replace(/^\uFEFF/, "")
     .replace(/<\?xml[\s\S]*?\?>/g, "")
-    .replace(/<!DOCTYPE[^>]*>/gi, "")
+    .replace(/<!DOCTYPE[^[>]*(?:\[[\s\S]*?\])?\s*>/gi, "")
     .replace(/<!--[\s\S]*?-->/g, "")
-    .replace(/>\s+</g, "><")
     .trim();
 
 /** What is wrong with an SVG file's text as an image of a person's own, if anything. */
@@ -24,10 +26,10 @@ export const svgProblem = (svg: string): string | undefined => {
   return /^<svg[\s>]/i.test(body) && /<\/svg>$/i.test(body) ? undefined : "That is not an SVG file";
 };
 
-/** An SVG file's text as an image's address: a base64 `data:` URL of what draws in it. */
+/** An SVG file's text as an image's address: a base64 `data:` URL of it (`readSvg` has dropped what draws nothing). */
 export const svgSource = (svg: string): string => {
   let binary = "";
-  for (const byte of new TextEncoder().encode(bareSvg(svg))) binary += String.fromCharCode(byte);
+  for (const byte of new TextEncoder().encode(svg.trim())) binary += String.fromCharCode(byte);
   return `data:image/svg+xml;base64,${btoa(binary)}`;
 };
 
