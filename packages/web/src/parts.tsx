@@ -1,4 +1,4 @@
-import { For, createMemo, mergeProps, useContext } from "solid-js";
+import { For, createMemo, getOwner, mergeProps, useContext } from "solid-js";
 import type { Component, JSX } from "solid-js";
 import { First } from "./draw.tsx";
 import { highlight } from "./match.ts";
@@ -31,14 +31,25 @@ export const partView =
   (props) => {
     if (!("children" in props)) return <First slot={part} props={props as never} />;
     const caller = useContext(PluginOwner);
-    /** `read`, run inside the caller's context: what it draws is the caller's, wherever the provider draws it. */
+    /**
+     * `read`, run as the caller's where the provider reads it: what it draws finds the caller's plugin, as Solid's own
+     * `Provider` sets one, on the owner reading for as long as it reads; and what it reads is that owner's to follow, so
+     * a `<Show>` handed on, or a `when ? a : b`, updates where it is drawn.
+     */
     const asCaller = <T,>(read: () => T): T => {
-      let value!: T;
-      <PluginOwner.Provider value={caller}>{(() => void (value = read()))()}</PluginOwner.Provider>;
-      return value;
+      const owner = getOwner();
+      if (owner === null) return read();
+      const context: unknown = owner.context;
+      owner.context = { ...(context as object | null), [PluginOwner.id]: caller };
+      try {
+        return read();
+      } finally {
+        owner.context = context;
+      }
     };
     // Read lazily, as the provider reads them, however they were handed (a value, or a getter from a spread): children
-    // the part calls (a popover's, given its close) stay a function, and draw what they return as the caller's.
+    // given as a function (a popover's, which it calls with its close, or a `<Show>`'s, which it reads with nothing)
+    // stay one, and draw what they return as the caller's.
     const children = {
       get children() {
         const given = asCaller(() => props.children as unknown);

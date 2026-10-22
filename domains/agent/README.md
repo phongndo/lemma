@@ -2,11 +2,12 @@
 
 The agent: the turn loop that asks a model, runs the tools it calls, and logs each step to the session. Its contract is [`@lemma/agent`](contract/src/agent.ts).
 
-| Plugin                           | Halves     | What it does                                                                                                        |
-| -------------------------------- | ---------- | ------------------------------------------------------------------------------------------------------------------- |
-| [`agent.loop`](loop/README.md)   | host + web | Runs turns: provides `Agent`, and serves it to clients as the `agent.*` channels                                    |
-| [`agent.modes`](modes/README.md) | host + web | Modes: a thread's prompt, tools, sections, and model, chosen with its first prompt (`TurnOptions.plugins`) and kept |
-| [`agent.cli`](cli/README.md)     | host       | The `lemma` command's `run` and `agent …`: adds them to `CliCommands`                                               |
+| Plugin                             | Halves     | What it does                                                                                                        |
+| ---------------------------------- | ---------- | ------------------------------------------------------------------------------------------------------------------- |
+| [`agent.loop`](loop/README.md)     | host + web | Runs turns: provides `Agent`, and serves it to clients as the `agent.*` channels                                    |
+| [`agent.modes`](modes/README.md)   | host + web | Modes: a thread's prompt, tools, sections, and model, chosen with its first prompt (`TurnOptions.plugins`) and kept |
+| [`agent.titles`](titles/README.md) | host + web | Names threads with the small model: once the first turn titles one from its prompt, and anew when asked             |
+| [`agent.cli`](cli/README.md)       | host       | The `lemma` command's `run` and `agent …`: adds them to `CliCommands`                                               |
 
 A loop of another kind need not start from nothing: `@lemma/agent/kit` is `agent.loop`'s implementation as pieces, from the whole agent shaped by a `TurnPolicy` (`makeAgent`) to one turn over the log (`runTurn`), a restart's resume plan (`planResume`), the journal, the queue's rules, and the live view.
 

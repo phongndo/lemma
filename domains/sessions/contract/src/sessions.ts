@@ -259,7 +259,12 @@ export const EventData = Schema.Union([
     source: Schema.String,
     turnId: Schema.optional(Schema.String),
   }),
-  Schema.Struct({ type: Schema.Literal("title"), title: Schema.String }),
+  /**
+   * The session's title, the latest in the file. `provisional`, present only when true: one a turn made from its first
+   * prompt, as the session had none, which a better one may replace (`agent.titles` does) while it is still the title;
+   * a title someone chose never is.
+   */
+  Schema.Struct({ type: Schema.Literal("title"), title: Schema.String, provisional: Schema.optional(Schema.Literal(true)) }),
   /** Plugin-owned data; `kind` is namespaced by the plugin id. Not model-visible. */
   Schema.Struct({ type: Schema.Literal("custom"), kind: Schema.String, data: Schema.Unknown }),
 ]);

@@ -71,7 +71,8 @@ moves results, either way, so each is worth measuring against the
    step. The turn follows the leaf it read, even if a checkout moves it
    meanwhile. Then appends `turn-start` (with the model and thinking level), a
    user `message` per prompt it starts with (each with its `requestId`), and a
-   `title` from the first if the session has none.
+   provisional `title` from the first if the session has none, which
+   [agent.titles](../titles/README.md) replaces with one the small model writes.
 3. Each step: `step-start`; a `RequestDraft` with the sections `PromptSections`
    holds, in order, each written for the request and attributed to the plugin
    that added it (its own: the base prompt, and the environment: the harness,

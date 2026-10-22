@@ -4,7 +4,7 @@ import type { NotifyService, PluginsService } from "@lemma/web";
 export interface ConfigSetting<T> {
   /** The value its plugin runs with (the field's default while unset), or the one just set until the plugin has it; undefined while no plugin has the id. */
   readonly value: () => T | undefined;
-  /** Writes it to the file that sets the plugin's config; the field's default is written as unset. Failures are reported. */
+  /** Writes it to the file that sets the plugin's config; undefined, or the field's default, unsets it. Failures are reported. */
   readonly set: (value: T) => void;
 }
 
@@ -13,8 +13,9 @@ const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b)
 /**
  * A field of a plugin's config as one setting, for a row in a settings section to edit, as the Plugins page's form
  * would: `plugins` is `WebPlugins` for a web half's config, or `HostPlugins` for a host half's. Writing restarts the
- * plugin. Writing the field's default unsets it, so the config file keeps only what was changed. Call it in a plugin's
- * setup, which owns what it shows while a write is under way.
+ * plugin. Writing the field's default unsets it, so the config file keeps only what was changed, as does writing
+ * undefined, sent as null, which the wire keeps where it drops undefined. Call it in a plugin's setup, which owns what
+ * it shows while a write is under way.
  */
 export const configSetting = <T>(plugins: PluginsService, notify: NotifyService, id: string, key: string): ConfigSetting<T> => {
   const row = () => plugins.list().find((plugin) => plugin.id === id);
@@ -41,7 +42,8 @@ export const configSetting = <T>(plugins: PluginsService, notify: NotifyService,
       setPending(mine);
       // A later write keeps showing its own value.
       const settle = () => setPending((now) => (now === mine ? undefined : now));
-      plugins.setConfig(found, { [key]: fallback !== undefined && same(value, fallback) ? null : value }).then(settle, (error: unknown) => {
+      const unset = value === undefined || (fallback !== undefined && same(value, fallback));
+      plugins.setConfig(found, { [key]: unset ? null : value }).then(settle, (error: unknown) => {
         settle();
         notify.report(error, `Could not change ${field()?.title ?? key}`);
       });

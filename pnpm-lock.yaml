@@ -292,6 +292,9 @@ importers:
       '@lemma/agent-modes':
         specifier: workspace:*
         version: link:../../domains/agent/modes
+      '@lemma/agent-titles':
+        specifier: workspace:*
+        version: link:../../domains/agent/titles
       '@lemma/client':
         specifier: workspace:*
         version: link:../../packages/client
@@ -373,6 +376,9 @@ importers:
       '@lemma/llm-providers':
         specifier: workspace:*
         version: link:../../domains/llm/providers
+      '@lemma/llm-small-model':
+        specifier: workspace:*
+        version: link:../../domains/llm/small-model
       '@lemma/look':
         specifier: workspace:*
         version: link:../../domains/look/contract
@@ -853,6 +859,67 @@ importers:
       '@lemma/agent-loop':
         specifier: workspace:*
         version: link:../loop
+      '@lemma/sessions-files':
+        specifier: workspace:*
+        version: link:../../sessions/files
+      '@lemma/tools-registry':
+        specifier: workspace:*
+        version: link:../../tools/registry
+      '@types/node':
+        specifier: 24.19.2
+        version: 24.19.2
+      tsrs:
+        specifier: 0.18.0-ts7.1.0-dev.20260929
+        version: 0.18.0-ts7.1.0-dev.20260929
+      vitest:
+        specifier: 5.0.5
+        version: 5.0.5(@types/node@24.19.2)(vite@8.3.4(@types/node@24.19.2)(esbuild@0.28.2)(jiti@2.7.0))
+
+  domains/agent/titles:
+    dependencies:
+      '@lemma/agent':
+        specifier: workspace:*
+        version: link:../contract
+      '@lemma/commands':
+        specifier: workspace:*
+        version: link:../../commands/contract
+      '@lemma/core':
+        specifier: workspace:*
+        version: link:../../../packages/core
+      '@lemma/llm':
+        specifier: workspace:*
+        version: link:../../llm/contract
+      '@lemma/look':
+        specifier: workspace:*
+        version: link:../../look/contract
+      '@lemma/sessions':
+        specifier: workspace:*
+        version: link:../../sessions/contract
+      '@lemma/threads':
+        specifier: workspace:*
+        version: link:../../threads/contract
+      '@lemma/web':
+        specifier: workspace:*
+        version: link:../../../packages/web
+      effect:
+        specifier: 4.0.5
+        version: 4.0.5
+      solid-js:
+        specifier: 1.9.17
+        version: 1.9.17
+    devDependencies:
+      '@lemma/agent-loop':
+        specifier: workspace:*
+        version: link:../loop
+      '@lemma/commands-registry':
+        specifier: workspace:*
+        version: link:../../commands/registry
+      '@lemma/contracts':
+        specifier: workspace:*
+        version: link:../../../packages/contracts
+      '@lemma/llm-small-model':
+        specifier: workspace:*
+        version: link:../../llm/small-model
       '@lemma/sessions-files':
         specifier: workspace:*
         version: link:../../sessions/files
@@ -1991,6 +2058,40 @@ importers:
       '@lemma/threads':
         specifier: workspace:*
         version: link:../../threads/contract
+      '@lemma/web':
+        specifier: workspace:*
+        version: link:../../../packages/web
+      effect:
+        specifier: 4.0.5
+        version: 4.0.5
+      solid-js:
+        specifier: 1.9.17
+        version: 1.9.17
+    devDependencies:
+      '@types/node':
+        specifier: 24.19.2
+        version: 24.19.2
+      tsrs:
+        specifier: 0.18.0-ts7.1.0-dev.20260929
+        version: 0.18.0-ts7.1.0-dev.20260929
+      vitest:
+        specifier: 5.0.5
+        version: 5.0.5(@types/node@24.19.2)(vite@8.3.4(@types/node@24.19.2)(esbuild@0.28.2)(jiti@2.7.0))
+
+  domains/llm/small-model:
+    dependencies:
+      '@lemma/core':
+        specifier: workspace:*
+        version: link:../../../packages/core
+      '@lemma/llm':
+        specifier: workspace:*
+        version: link:../contract
+      '@lemma/look':
+        specifier: workspace:*
+        version: link:../../look/contract
+      '@lemma/settings':
+        specifier: workspace:*
+        version: link:../../settings/contract
       '@lemma/web':
         specifier: workspace:*
         version: link:../../../packages/web
@@ -4398,6 +4499,9 @@ importers:
       '@lemma/agent-modes':
         specifier: workspace:*
         version: link:../../domains/agent/modes
+      '@lemma/agent-titles':
+        specifier: workspace:*
+        version: link:../../domains/agent/titles
       '@lemma/browser':
         specifier: workspace:*
         version: link:../../domains/browser/contract
@@ -4470,6 +4574,9 @@ importers:
       '@lemma/llm-pi-ai':
         specifier: workspace:*
         version: link:../../domains/llm/pi-ai
+      '@lemma/llm-small-model':
+        specifier: workspace:*
+        version: link:../../domains/llm/small-model
       '@lemma/mcp':
         specifier: workspace:*
         version: link:../../domains/mcp/contract

@@ -28,6 +28,8 @@ import profiles from "@lemma/profiles-switcher/web";
 import skills from "@lemma/skills-files/web";
 import modelPicker from "@lemma/llm-model-picker";
 import modes from "@lemma/agent-modes/web";
+import smallModel from "@lemma/llm-small-model/web";
+import titles from "@lemma/agent-titles/web";
 import models from "@lemma/llm-client";
 import pages from "@lemma/frame-pages";
 import palette from "@lemma/actions-palette";
@@ -104,6 +106,8 @@ export const bundled: readonly Plugin[] = [
   modes,
   agentLoop,
   modelPicker,
+  smallModel,
+  titles,
   compaction,
   workspaceBar,
   workspaceTidy,

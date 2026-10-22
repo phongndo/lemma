@@ -70,6 +70,31 @@ describe("configSetting", () => {
     });
   });
 
+  it("unsets a field with no default, as one written over the wire, where undefined is dropped", () =>
+    createRoot((dispose) => {
+      const [list] = createSignal<readonly PluginStatus[]>([
+        {
+          id: "p",
+          version: "0.1.0",
+          source: "bundled",
+          enabled: true,
+          provides: [],
+          requires: [],
+          state: "active",
+          configFields: [{ key: "model", title: "Model", type: "string", optional: true }],
+          config: { values: { model: "a/b" }, secretsSet: [] },
+        },
+      ]);
+      const written: Readonly<Record<string, unknown>>[] = [];
+      const plugins = {
+        list,
+        setConfig: async (_plugin: PluginStatus, values: Readonly<Record<string, unknown>>) => void written.push(values),
+      } as unknown as PluginsService;
+      configSetting<string | undefined>(plugins, harness().notify, "p", "model").set(undefined);
+      expect(written.map((values) => JSON.parse(JSON.stringify(values)))).toEqual([{ model: null }]);
+      dispose();
+    }));
+
   it("writes nothing for the value already running", () =>
     createRoot((dispose) => {
       const { plugins, notify, writes } = harness();

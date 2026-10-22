@@ -226,7 +226,8 @@ describe("agent", () => {
         yield* Effect.flatMap(Agent, (a) => a.prompt(id, text("Say   hello\nplease")));
         const events = yield* log(id);
         expect(types(events)).toEqual(["turn-start", "message", "title", "step-start", "request", "message", "step-end", "turn-end"]);
-        expect(ofType(events, "title")[0]!.title).toBe("Say hello please");
+        // Provisional: a better title may replace it (agent.titles).
+        expect(ofType(events, "title")[0]).toMatchObject({ title: "Say hello please", provisional: true });
         const [user, answer] = ofType(events, "message");
         expect(user!.message).toMatchObject({ role: "user", content: text("Say   hello\nplease") });
         expect(answer!.message).toMatchObject({ role: "assistant", content: text("Hello there") });
