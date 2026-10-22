@@ -14,7 +14,12 @@ import { Channel, ReleaseError } from "@lemma/release";
  * What this plugin reads of `lemma update --check --json`: the channel the installer's lemma follows and its newest
  * release, neither for a pinned release. It compares them with what the host runs, which may not be that lemma.
  */
-export const CheckAnswer = Schema.Struct({ channel: Schema.optional(Channel), newest: Schema.optional(Schema.String) });
+export const CheckAnswer = Schema.Struct({
+  /** The release the installer's lemma is: what `lemma update` restarts the host on when the channel has none newer. */
+  version: Schema.optional(Schema.String),
+  channel: Schema.optional(Channel),
+  newest: Schema.optional(Schema.String),
+});
 export type CheckAnswer = typeof CheckAnswer.Type;
 
 /** What `lemma update --json` answers: the release installed, and whether that took installing. */

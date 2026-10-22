@@ -1,4 +1,4 @@
-import { chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -59,7 +59,7 @@ const release = (fields: Record<string, unknown> = {}) => ({
 });
 
 /** What the installer's `lemma update --check` answers: its own version, the channel it follows, and that channel's newest. */
-const checked = (newest: string, channel = "nightly") => ({ version: newest, channel, newest, newer: false });
+const checked = (newest: string, channel = "nightly", version = "0.2.7") => ({ version, channel, newest, newer: false });
 
 /** Runs the plugin over the stand-ins, handing `body` its channels, its doctor check, and the notices it publishes. */
 const withPlugin = <A>(
@@ -192,6 +192,37 @@ describe("release.updates", () => {
     // A second after answering, apart from the host.
     const restarted = await settled(() => readFile(join(dir, "restarted"), "utf8"), undefined, 10_000);
     expect(restarted?.trim()).toBe("restart --force");
+  });
+
+  it("offers what updating restarts on: the installer's lemma when it is newer than the channel's newest", async () => {
+    // A terminal installed 0.2.9 since this host started on 0.2.7, and stable then went back to 0.2.8.
+    await write("version.json", release({ channel: "stable" }));
+    await write("check.json", checked("0.2.8", "stable", "0.2.9"));
+    await write("update.json", { updated: false, version: "0.2.9", channel: "stable" });
+    const { status, result } = await withPlugin(({ channels }) =>
+      Effect.gen(function* () {
+        const status = (yield* resultOf(channels.check, undefined)) as ReleaseStatus;
+        return { status, result: (yield* resultOf(channels.update, {})) as UpdateResult };
+      }),
+    );
+    expect(status).toMatchObject({ newest: "0.2.9", newer: true });
+    expect(result).toEqual({ version: "0.2.9", updated: false, restarting: true });
+  });
+
+  it("lets the next update through when the restart could not be started", async () => {
+    await write("version.json", release());
+    await write("update.json", { updated: true, version: "0.2.9", from: "0.2.7" });
+    // Where the restart's output goes is a file, so its folder cannot be made.
+    await mkdir(join(dir, "home"), { recursive: true });
+    await writeFile(join(dir, "home", "logs"), "");
+    const [first, second] = await withPlugin(({ channels }) =>
+      Effect.gen(function* () {
+        const first = yield* Effect.flip(resultOf(channels.update, {}));
+        return [first, yield* Effect.flip(resultOf(channels.update, {}))] as const;
+      }),
+    );
+    expect(first).toMatchObject({ reason: "Failed", message: expect.stringContaining("Lemma 0.2.9 is installed, but its restart could not be started") });
+    expect(second).toMatchObject({ reason: "Failed" });
   });
 
   it("starts no second update while the first one's restart is still to come", async () => {

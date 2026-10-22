@@ -8,11 +8,10 @@ not supported. On NixOS, its Node.js needs
 Each release also has the [desktop app](#the-desktop-app) for those platforms.
 
 ```sh
-curl -fsSL https://github.com/phongndo/lemma/releases/latest/download/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/phongndo/lemma/main/scripts/install.sh | sh
 ```
 
-That is the stable release's own installer, as each release carries one. It
-needs `curl`, `tar`, and `shasum` or `sha256sum`. It downloads
+It installs the stable release, or says there is none yet. It needs `curl`, `tar`, and `shasum` or `sha256sum`. It downloads
 this machine's archive of a [release](https://github.com/phongndo/lemma/releases),
 checks it against its SHA-256, puts it in a directory of its own under
 `~/.local/share/lemma/releases`, and links `~/.local/bin/lemma` to it. It
@@ -33,8 +32,7 @@ and is promoted, so a stable release is the same files nightly users ran
 | `stable`  | the release marked latest (the default) | using Lemma                              |
 | `nightly` | the newest release                      | trying what is on `main`, and testing it |
 
-The newest nightly's installer has no fixed address, so for nightly, take
-`main`'s:
+For nightly, give the installer its channel:
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/phongndo/lemma/main/scripts/install.sh | LEMMA_CHANNEL=nightly sh
@@ -121,7 +119,8 @@ lemma update 0.2.5              # install that release: an older one rolls back
 With no version, `lemma update` installs the channel's newest only when it is
 newer, so a stable release rolled back leaves you where you are: going back is
 `lemma update <version>`. It installs as the installer does, with the
-installer the release carries, one install at a time: the new release in a
+installer the release carries, one install at a time (an install that was
+killed leaves a lock the next takes back): the new release in a
 directory of its own, `lemma` switched to it once it runs, the release before
 kept and older ones removed but for any a running host still uses. A running
 host keeps the release it started with until `lemma restart` stops it, saying

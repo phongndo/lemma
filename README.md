@@ -15,7 +15,7 @@ a release may change.
 On macOS (Apple silicon) or Linux (x64 or arm64):
 
 ```sh
-curl -fsSL https://github.com/phongndo/lemma/releases/latest/download/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/phongndo/lemma/main/scripts/install.sh | sh
 cd your-project
 lemma serve
 ```

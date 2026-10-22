@@ -112,20 +112,23 @@ describe("the installer", () => {
     expect((await install({ LEMMA_CHANNEL: "nightly" })).err).toContain("answered 502");
   });
 
-  test("installs one at a time: another install's lock refuses it, and one done leaves no lock", async () => {
+  test("installs one at a time: another install's lock refuses it, one that stopped is taken back, and one done leaves no lock", async () => {
     await mkdir(join(data, "install.lock"));
     await writeFile(join(data, "install.lock", "pid"), `${process.pid}\n`);
     const refused = await install();
     expect(refused.code).toBe(1);
     expect(refused.err).toContain(`another install (pid ${process.pid}) is under way`);
-    // One that stopped, its process gone, left it.
+    expect(await releases()).toBe(0);
+    // One just taken, its pid not yet written, is under way too.
+    await rm(join(data, "install.lock", "pid"));
+    expect((await install()).err).toContain("another install is under way");
+    // One that stopped, its process gone, left it: taken back.
     const gone = spawn("true");
     await new Promise((done) => gone.once("exit", done));
     await writeFile(join(data, "install.lock", "pid"), `${gone.pid}\n`);
-    expect((await install()).err).toContain(`one that stopped left ${join(data, "install.lock")}`);
-    expect(await releases()).toBe(0);
-    await rm(join(data, "install.lock"), { recursive: true });
-    expect((await install()).code).toBe(0);
+    const taken = await install();
+    expect(taken.code).toBe(0);
+    expect(taken.err).toContain(`took back the lock an install that stopped (pid ${gone.pid}) left`);
     expect(await readdir(data)).toEqual(["releases"]);
   });
 

@@ -1,5 +1,5 @@
 #!/bin/sh
-# Installs a Lemma release (docs/installation.md): curl -fsSL https://github.com/phongndo/lemma/releases/latest/download/install.sh | sh
+# Installs a Lemma release (docs/installation.md): curl -fsSL https://raw.githubusercontent.com/phongndo/lemma/main/scripts/install.sh | sh
 set -eu
 
 channel=${LEMMA_CHANNEL:-}
@@ -38,6 +38,46 @@ case "$install_dir:$data_dir" in
   /*:/*) ;;
   *) fail "LEMMA_INSTALL_DIR and LEMMA_DATA_DIR must be absolute paths" ;;
 esac
+
+temporary=$(mktemp -d)
+pending=""
+locked=""
+cleanup() {
+  rm -rf "$temporary"
+  if [ -n "$pending" ]; then rm -rf "$pending"; fi
+  # Its own lock only: one taken back from it (below) is another installer's now.
+  if [ -n "$locked" ] && [ "$(cat "$locked/pid" 2>/dev/null || true)" = "$$" ]; then rm -rf "$locked"; fi
+}
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
+# One install at a time, from before it reads the command it replaces: another would prune the release this one puts
+# together, switch the command under it, or change which release is the one before. A directory is the lock, as mkdir
+# is atomic, naming its installer in a file renamed into place, so another reads the pid whole or not at all. A lock
+# whose installer is gone (killed past its cleanup) is taken back: moved aside, which one installer alone can do, and
+# removed once it is seen to be that one.
+mkdir -p "$data_dir/releases" "$install_dir"
+lock="$data_dir/install.lock"
+take_lock() {
+  mkdir "$lock" 2>/dev/null || return 1
+  locked=$lock
+  printf '%s\n' "$$" >"$lock/pid.new" && mv "$lock/pid.new" "$lock/pid"
+}
+if ! take_lock; then
+  holder=$(cat "$lock/pid" 2>/dev/null || true)
+  [ -n "$holder" ] || fail "another install is under way"
+  if kill -0 "$holder" 2>/dev/null; then fail "another install (pid $holder) is under way"; fi
+  stale="$lock.$$"
+  mv "$lock" "$stale" 2>/dev/null || fail "another install is under way"
+  if [ "$(cat "$stale/pid" 2>/dev/null || true)" != "$holder" ]; then
+    mv "$stale" "$lock" 2>/dev/null || true
+    fail "another install is under way"
+  fi
+  rm -rf "$stale"
+  printf 'lemma install: took back the lock an install that stopped (pid %s) left\n' "$holder" >&2
+  take_lock || fail "another install is under way"
+fi
 
 # Replace only a command this installer put there, never another package manager's or a user's own.
 destination="$install_dir/lemma"
@@ -88,30 +128,6 @@ printf '%s\n' "$tag" | LC_ALL=C grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$' || fail "no
 package="lemma-$tag-$platform-$arch"
 asset="$package.tar.gz"
 base_url=${LEMMA_RELEASE_BASE_URL:-"https://github.com/phongndo/lemma/releases/download/$tag"}
-temporary=$(mktemp -d)
-pending=""
-locked=""
-cleanup() {
-  rm -rf "$temporary"
-  if [ -n "$pending" ]; then rm -rf "$pending"; fi
-  if [ -n "$locked" ]; then rm -rf "$locked"; fi
-}
-trap cleanup EXIT
-trap 'exit 130' INT
-trap 'exit 143' TERM
-
-# One install at a time, as another would prune the release this one is putting together, or switch the command under
-# it: a directory as the lock, since mkdir is atomic, naming the installer that holds it.
-mkdir -p "$data_dir/releases" "$install_dir"
-lock="$data_dir/install.lock"
-if ! mkdir "$lock" 2>/dev/null; then
-  holder=$(cat "$lock/pid" 2>/dev/null || true)
-  if [ -n "$holder" ] && kill -0 "$holder" 2>/dev/null; then fail "another install (pid $holder) is under way"; fi
-  fail "another install is under way, or one that stopped left $lock: if none is running, remove it and install again"
-fi
-locked=$lock
-printf '%s\n' "$$" >"$lock/pid"
-
 printf 'Installing Lemma %s for %s-%s\n' "$tag" "$platform" "$arch"
 curl -fSL --retry 3 "$base_url/$asset" -o "$temporary/$asset" || fail "could not download $asset"
 curl -fsSL --retry 3 "$base_url/$asset.sha256" -o "$temporary/$asset.sha256" || fail "could not download $asset.sha256"

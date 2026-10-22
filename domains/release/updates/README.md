@@ -21,7 +21,10 @@ installed last, for the channel to follow and what to install:
   notice.
 
 It checks by itself a minute after the host starts, then every six hours, and
-says once per release, as a notice, when a newer one is out. It adds
+says once per release, as a notice, when a newer one is out: the channel's
+newest, or a release a terminal installed since the host started, when that is
+newer, as updating would restart on it. A pinned install follows no channel,
+so it neither checks nor offers to. It adds
 `lemma doctor`'s Updates check, which asks now. Its web half is Settings ›
 About, whose badge says when an update is out ([updating](../../../docs/installation.md#updating)).
 Its Update button asks first, as `lemma stop` does, what restarting cuts off,

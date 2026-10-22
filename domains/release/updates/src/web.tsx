@@ -218,7 +218,7 @@ export default defineWebPlugin({
                             : `No newer release is out on the ${now.channel} channel.`
                 }
               >
-                <Show when={now.updatable}>
+                <Show when={now.updatable && now.channel !== undefined}>
                   <Show
                     when={now.newer}
                     fallback={
@@ -267,24 +267,27 @@ export default defineWebPlugin({
       entries: () => {
         const now = status();
         if (now === undefined || !now.updatable) return [];
+        const channelRow = row(
+          "channel stable nightly pinned switch",
+          "Channel",
+          () => now.channel ?? "None",
+          () => `${CHANNEL_MEANS[now.channel ?? "none"]} Updating from a terminal can switch it.`,
+        );
+        // Pinned, it follows no channel: there is nothing to check for.
+        if (now.channel === undefined) return [channelRow];
         return [
           {
             text: "Check for updates automatically newer release notice",
             view: () => (
               <SettingRow
                 title="Check automatically"
-                description={`Ask every few hours whether a newer release is out${now.channel === undefined ? "" : ` on the ${now.channel} channel`}.${now.error === undefined ? "" : ` The last check failed: ${now.error}`}`}
+                description={`Ask every few hours whether a newer release is out on the ${now.channel} channel.${now.error === undefined ? "" : ` The last check failed: ${now.error}`}`}
               >
                 <Toggle label="Check for updates automatically" checked={checks.value() ?? true} onChange={(on) => checks.set(on)} />
               </SettingRow>
             ),
           },
-          row(
-            "channel stable nightly pinned switch",
-            "Channel",
-            () => now.channel ?? "None",
-            () => `${CHANNEL_MEANS[now.channel ?? "none"]} Updating from a terminal can switch it.`,
-          ),
+          channelRow,
         ];
       },
     });

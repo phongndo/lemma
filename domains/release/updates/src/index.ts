@@ -1,5 +1,5 @@
 import { join } from "node:path";
-import { Effect, Ref, Schedule, Schema } from "effect";
+import { Effect, Exit, Ref, Schedule, Schema } from "effect";
 import { CliChecks } from "@lemma/cli";
 import { Channels, Notice, Paths, serveChannel, shellWord } from "@lemma/contracts";
 import { definePlugin, Events } from "@lemma/core";
@@ -69,7 +69,11 @@ export default definePlugin({
       const { answer, error } = yield* Ref.get(found);
       // Until a check answers, the channel this release was installed from; then the installer's lemma's, none if pinned.
       const channel = answer === undefined ? about.channel : answer.channel;
-      const newest = answer?.newest;
+      // What updating moves this host to, as `lemma update` and the restart after it do: the channel's newest, or a
+      // release installed since this host started (a terminal's update) when that is newer.
+      const installedSince = answer?.version !== undefined && compareVersions(answer.version, about.version) > 0 ? answer.version : undefined;
+      const newest =
+        installedSince !== undefined && (answer?.newest === undefined || compareVersions(installedSince, answer.newest) > 0) ? installedSince : answer?.newest;
       return {
         build: about,
         updatable: installed(about),
@@ -113,29 +117,35 @@ export default definePlugin({
           });
         if (updating) return yield* new ReleaseError({ reason: "Busy", message: "An update is under way already" });
         updating = true;
-        const answer = yield* runLemma(shellWord(about.link), ["update", ...(version === undefined ? [] : [version])], UpdateAnswer, INSTALLING_MS).pipe(
-          Effect.onError(() => Effect.sync(() => (updating = false))),
-        );
-        // What this host runs already. One installed already but not running (a terminal's `lemma update`) restarts all the same.
-        if (answer.version === about.version) {
-          updating = false;
-          return { version: answer.version, updated: false, restarting: false };
-        }
-        restartError = undefined;
-        // Still updating until the restart ends: another update now would start a second restart under this one.
-        restartLater(about.link, restartLog, (why) => {
-          updating = false;
-          if (why === undefined) return;
-          restartError = why;
-          Effect.runFork(
-            events.publish(Notice, {
-              level: "error",
-              source: plugin.id,
-              message: `Lemma ${answer.version} is installed, but the host did not restart on it: ${why}`,
-            }),
-          );
-        });
-        return { version: answer.version, updated: answer.updated, restarting: true };
+        // Still updating once a restart is scheduled, until it ends: another update then would start a second restart
+        // under this one. Any other way this ends, a failure or a fault included, lets the next one through.
+        return yield* Effect.gen(function* () {
+          const answer = yield* runLemma(shellWord(about.link), ["update", ...(version === undefined ? [] : [version])], UpdateAnswer, INSTALLING_MS);
+          // What this host runs already. One installed already but not running (a terminal's `lemma update`) restarts all the same.
+          if (answer.version === about.version) return { version: answer.version, updated: false, restarting: false };
+          restartError = undefined;
+          yield* Effect.try({
+            try: () =>
+              restartLater(about.link, restartLog, (why) => {
+                updating = false;
+                if (why === undefined) return;
+                restartError = why;
+                Effect.runFork(
+                  events.publish(Notice, {
+                    level: "error",
+                    source: plugin.id,
+                    message: `Lemma ${answer.version} is installed, but the host did not restart on it: ${why}`,
+                  }),
+                );
+              }),
+            catch: (cause) =>
+              new ReleaseError({
+                reason: "Failed",
+                message: `Lemma ${answer.version} is installed, but its restart could not be started: ${cause instanceof Error ? cause.message : String(cause)}`,
+              }),
+          });
+          return { version: answer.version, updated: answer.updated, restarting: true };
+        }).pipe(Effect.onExit((exit) => (Exit.isSuccess(exit) && exit.value.restarting ? Effect.void : Effect.sync(() => (updating = false)))));
       });
 
     yield* plugin.add(
@@ -177,6 +187,13 @@ export default definePlugin({
         ),
     });
 
-    if (checks) yield* plugin.background("check for updates", Effect.delay(Effect.repeat(Effect.ignore(check), Schedule.spaced(EVERY)), FIRST));
+    // A pinned install follows no channel, so has nothing to ask about (a channel taken up in a terminal is followed
+    // once the host restarts on it).
+    const pinned = Effect.map(build, (about) => installed(about) && about.channel === undefined);
+    if (checks)
+      yield* plugin.background(
+        "check for updates",
+        Effect.delay(Effect.repeat(Effect.ignore(Effect.flatMap(pinned, (yes) => (yes ? Effect.void : check))), Schedule.spaced(EVERY)), FIRST),
+      );
   },
 });

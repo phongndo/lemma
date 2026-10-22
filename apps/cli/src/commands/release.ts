@@ -17,7 +17,7 @@ import { isReleaseVersion, newestRelease, readBuild, releasesApi } from "../rele
 
 const UPDATES = "Version and updates";
 
-const INSTALL = "curl -fsSL https://github.com/phongndo/lemma/releases/latest/download/install.sh | sh";
+const INSTALL = "curl -fsSL https://raw.githubusercontent.com/phongndo/lemma/main/scripts/install.sh | sh";
 
 const describeBuild = (build: Build): string => {
   const following = build.channel ?? (build.link === undefined ? undefined : "pinned");
@@ -122,17 +122,14 @@ const update = defineBuiltin({
       const asked = args.version === undefined ? undefined : String(args.version).replace(/^v/, "");
       if (asked !== undefined && !isReleaseVersion(asked)) return yield* usage(`"${String(args.version)}" is not a release's version, such as 0.2.7`);
       if (asked !== undefined && flags.check) return yield* usage("--check compares with the channel's newest release: give no version with it");
-      if (channel === undefined) {
-        const pinned = `Lemma ${build.version} was installed by version, so it follows no channel`;
-        if (flags.check)
-          return { json: { version: build.version, newer: false }, text: `${pinned}: lemma update --channel stable follows one, and installs its newest` };
-        if (asked === undefined) return yield* usage(`${pinned}: give a version to install, or --channel stable or nightly to follow one`);
-      }
+      const pinned = `Lemma ${build.version} was installed by version, so it follows no channel`;
+      if (channel === undefined && flags.check)
+        return { json: { version: build.version, newer: false }, text: `${pinned}: lemma update --channel stable follows one, and installs its newest` };
       const api = releasesApi(io.env);
       const target =
         asked ??
         (channel === undefined
-          ? undefined
+          ? yield* usage(`${pinned}: give a version to install, or --channel stable or nightly to follow one`)
           : yield* Effect.tryPromise({
               try: (signal) => newestRelease(api, channel, signal),
               catch: (error) =>
