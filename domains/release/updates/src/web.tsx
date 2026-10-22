@@ -2,7 +2,7 @@ import { For, Show, createMemo, createSignal } from "solid-js";
 import { CliChannels } from "@lemma/cli";
 import { Layers } from "@lemma/frame";
 import { Dialog, QuestionIcon, SettingRow, Spinner, Toggle } from "@lemma/look";
-import { ReleaseChannels } from "@lemma/release";
+import { INSTALLER_TITLES, ReleaseChannels } from "@lemma/release";
 import type { Channel, ReleaseStatus } from "@lemma/release";
 import { SettingsGroups, SettingsSections, configSetting } from "@lemma/settings";
 import type { SettingsEntry } from "@lemma/settings";
@@ -29,11 +29,18 @@ const CHANNEL_MEANS: Record<Channel | "none", string> = {
   none: "Installed by version, it stays on that version.",
 };
 
-/** Where updating is: asked, under way on the host, or waiting for the host to come back on the new release. */
+/**
+ * Where updating is: asked, under way on the host, waiting for the host to come back on the new release, or, the
+ * desktop app replaced (Homebrew's cask), waiting for it to be reopened.
+ */
 type Updating =
   | { readonly step: "confirm"; readonly cutOff: readonly string[] }
   | { readonly step: "installing" }
-  | { readonly step: "restarting"; readonly version: string };
+  | { readonly step: "restarting"; readonly version: string }
+  | { readonly step: "reopen"; readonly version: string };
+
+/** The desktop app's bridge (`apps/desktop/src/preload.cjs`), in its window: `relaunch` quits the app and opens it again. */
+const desktop = (window as Window & { lemmaDesktop?: { readonly relaunch?: () => Promise<void> } }).lemmaDesktop;
 
 /**
  * The web half of `release.updates`: Settings › About, what this Lemma is and whether a newer release is out, with a
@@ -106,6 +113,7 @@ export default defineWebPlugin({
       setUpdating({ step: "installing" });
       try {
         const result = await client.channel.call(ReleaseChannels.update, {});
+        if (result.reopen === true) return void setUpdating({ step: "reopen", version: result.version });
         if (!result.restarting) {
           setUpdating(undefined);
           notify.toast({ level: "info", message: `Lemma ${result.version} is installed already` });
@@ -131,34 +139,70 @@ export default defineWebPlugin({
       }
     };
 
-    /** While updating: what it cuts off, asked first; then what it is doing, until the page reloads on the new release. */
+    /** Whether updating replaces the desktop app this page is in (Homebrew's cask), which runs the release once reopened. */
+    const replacesApp = () => status()?.build.installer === "homebrew-cask" && desktop !== undefined;
+    /** How the host installs the release: with the package manager that installed this one, or the installer. */
+    const installing = () => {
+      const installer = status()?.build.installer;
+      return installer === undefined || installer === "script" ? "" : ` with ${INSTALLER_TITLES[installer]}`;
+    };
+
+    /**
+     * While updating: what it cuts off, asked first; then what it is doing, until the page reloads on the new release,
+     * or the desktop app, replaced, is reopened.
+     */
     const UpdateDialog = (props: { readonly step: Updating }) => (
       <Dialog
-        title={`Update to Lemma ${status()?.newest ?? ""}`}
+        title={props.step.step === "reopen" ? `Lemma ${props.step.version} is installed` : `Update to Lemma ${status()?.newest ?? ""}`}
         closeOnBackdrop={false}
-        onClose={props.step.step === "confirm" ? () => setUpdating(undefined) : undefined}
+        onClose={props.step.step === "confirm" || props.step.step === "reopen" ? () => setUpdating(undefined) : undefined}
         footer={
-          <Show when={props.step.step === "confirm"}>
-            <button type="button" class="button" onClick={() => setUpdating(undefined)}>
-              Cancel
-            </button>
-            <button type="button" class="button button-primary" data-autofocus onClick={plugin.action("update Lemma", update)}>
-              Update and restart
-            </button>
-          </Show>
+          <>
+            <Show when={props.step.step === "confirm"}>
+              <button type="button" class="button" onClick={() => setUpdating(undefined)}>
+                Cancel
+              </button>
+              <button type="button" class="button button-primary" data-autofocus onClick={plugin.action("update Lemma", update)}>
+                {replacesApp() ? "Update" : "Update and restart"}
+              </button>
+            </Show>
+            <Show when={props.step.step === "reopen"}>
+              <button type="button" class="button" onClick={() => setUpdating(undefined)}>
+                Later
+              </button>
+              <Show when={desktop?.relaunch}>
+                {(relaunch) => (
+                  <button type="button" class="button button-primary" data-autofocus onClick={plugin.action("reopen Lemma", () => relaunch()())}>
+                    Reopen Lemma
+                  </button>
+                )}
+              </Show>
+            </Show>
+          </>
         }
       >
         <Show
           when={props.step.step === "confirm" ? props.step : undefined}
           fallback={
-            <p>
-              <Spinner /> {props.step.step === "restarting" ? `Restarting the host on Lemma ${props.step.version}…` : "Installing…"}
-            </p>
+            <Show
+              when={props.step.step === "reopen"}
+              fallback={
+                <p>
+                  <Spinner /> {props.step.step === "restarting" ? `Restarting the host on Lemma ${props.step.version}…` : `Installing${installing()}…`}
+                </p>
+              }
+            >
+              <p>Homebrew replaced the app. It runs the new release once you quit and reopen it: what is running is cut off, and turns resume.</p>
+            </Show>
           }
         >
           {(asked) => (
             <>
-              <p>The host installs the release, then restarts on it, and this page reloads once it is back.</p>
+              <p>
+                {replacesApp()
+                  ? "Homebrew installs the release, replacing the app, which runs it once you reopen it."
+                  : `The host installs the release${installing()}, then restarts on it, and this page reloads once it is back.`}
+              </p>
               <Show when={asked().cutOff.length > 0}>
                 <p>Restarting cuts off what is running; turns resume once it is back:</p>
                 <ul>
@@ -207,15 +251,17 @@ export default defineWebPlugin({
             description={
               build().kind === "checkout"
                 ? "A checkout, as developers run Lemma: it updates with git."
-                : !now().updatable
-                  ? "Not installed by the installer, so it cannot replace it."
-                  : now().channel === undefined
-                    ? "Installed by version: it follows no channel."
-                    : now().newer
-                      ? `Lemma ${now().newest} is out on the ${now().channel} channel.`
-                      : now().newest === undefined
-                        ? `On the ${now().channel} channel.`
-                        : `No newer release is out on the ${now().channel} channel.`
+                : build().installer === undefined
+                  ? "Installed by neither the installer nor a package manager, so Lemma cannot replace it."
+                  : !now().updatable
+                    ? `${now().newer ? `Lemma ${now().newest} is out on the ${now().channel} channel. ` : ""}Installed with ${INSTALLER_TITLES[build().installer!]}, it updates as: ${build().update}.`
+                    : now().channel === undefined
+                      ? "Installed by version: it follows no channel."
+                      : now().newer
+                        ? `Lemma ${now().newest} is out on the ${now().channel} channel.`
+                        : now().newest === undefined
+                          ? `On the ${now().channel} channel.`
+                          : `No newer release is out on the ${now().channel} channel.`
             }
           >
             <Show when={now().updatable && now().channel !== undefined}>
@@ -250,10 +296,12 @@ export default defineWebPlugin({
         ),
       },
       row(
-        "installed where path root link",
+        "installed where path root link homebrew mise npm nix",
         () => (build().kind === "checkout" ? "Checkout" : "Installed"),
         () => build().root,
-        () => build().link && `Linked from ${build().link}`,
+        () =>
+          [build().installer && `With ${INSTALLER_TITLES[build().installer!]}`, build().link && `linked from ${build().link}`].filter(Boolean).join(", ") ||
+          undefined,
       ),
       row(
         "node.js runtime",
@@ -276,7 +324,12 @@ export default defineWebPlugin({
       "channel stable nightly pinned switch",
       () => "Channel",
       () => now().channel ?? "None",
-      () => `${CHANNEL_MEANS[now().channel ?? "none"]} Updating from a terminal can switch it.`,
+      () =>
+        `${CHANNEL_MEANS[now().channel ?? "none"]} ${
+          build().installer === "script"
+            ? "Updating from a terminal can switch it."
+            : `${INSTALLER_TITLES[build().installer!]} installs stable releases; the nightly channel comes from the installer.`
+        }`,
     );
 
     slots.add(SettingsGroups, {
@@ -292,7 +345,8 @@ export default defineWebPlugin({
       title: "Updates",
       entries: () => {
         const current = status();
-        if (current === undefined || !current.updatable) return [];
+        // A checkout updates with git, and a release nothing installed follows no channel.
+        if (current === undefined || current.build.kind === "checkout" || current.build.installer === undefined) return [];
         // Pinned, it follows no channel: there is nothing to check for.
         return current.channel === undefined ? [channelRow] : [checkRow, channelRow];
       },

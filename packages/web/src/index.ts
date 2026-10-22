@@ -37,6 +37,9 @@
  *   checkout's `lemma-dev`), which `llm.client` offers a sign-in back to. Its
  *   `openProfile(name)` shows another profile in a window of its own, starting
  *   its host when none runs; the `profiles.switcher` plugin uses it. Its
+ *   `relaunch()` quits the app, asking first as Quit does, and opens it again,
+ *   as the release Homebrew's cask installed; the `release.updates` plugin uses
+ *   it. Its
  *   `browser` lets the page hold Chromium pages (`<webview>` elements in its
  *   `partition`): `forwardKeys(bindings)` names the app's bindings a page with
  *   focus hands on (they arrive as a `keydown` where focus is), and

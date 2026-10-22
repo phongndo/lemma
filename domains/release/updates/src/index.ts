@@ -3,7 +3,7 @@ import { Effect, Exit, Ref, Schedule, Schema } from "effect";
 import { CliChecks } from "@lemma/cli";
 import { Channels, Notice, Paths, serveChannel, shellWord } from "@lemma/contracts";
 import { definePlugin, Events } from "@lemma/core";
-import { Build, compareVersions, RELEASE_CONTRACT, ReleaseChannels, ReleaseError } from "@lemma/release";
+import { Build, compareVersions, INSTALLER_TITLES, RELEASE_CONTRACT, ReleaseChannels, ReleaseError, UPDATABLE } from "@lemma/release";
 import type { ReleaseStatus } from "@lemma/release";
 import { CheckAnswer, restartLater, runLemma, UpdateAnswer } from "./lemma.ts";
 
@@ -31,15 +31,16 @@ interface Found {
   readonly error?: string;
 }
 
-const installed = (build: Build): build is Build & { readonly link: string } =>
-  build.kind === "release" && build.link !== undefined && build.dataDir !== undefined;
+/** Whether `lemma update` replaces `build`: installed by the installer or a package manager it runs. */
+const updatable = (build: Build): boolean => build.kind === "release" && build.installer !== undefined && UPDATABLE.has(build.installer);
 
 /**
  * What this Lemma is, and updating it (`ReleaseChannels`): what `lemma version` says, a check now and then for a newer
  * release on the install's channel (`lemma update --check`), said once per release as a notice and in `lemma doctor`,
- * and installing one, after which the host restarts on it (`lemma update`, then `lemma restart`). It asks the `lemma`
- * command for all of it, which knows a release from a checkout and how to replace one: the one beside the host for
- * what it runs, and the one the installer links, the release installed last, for the channel and what to install.
+ * and installing one, after which the host restarts on it (`lemma update`, then `lemma restart`), or, in the desktop
+ * app Homebrew's cask replaced, offers to reopen it. It asks the `lemma` command for all of it, which knows a release
+ * from a checkout, who installed it, and how to replace one: the one beside the host for what it runs, and the one the
+ * installer or package manager links, the release installed last, for the channel and what to install.
  */
 export default definePlugin({
   id: "release.updates",
@@ -76,7 +77,7 @@ export default definePlugin({
         installedSince !== undefined && (answer?.newest === undefined || compareVersions(installedSince, answer.newest) > 0) ? installedSince : answer?.newest;
       return {
         build: about,
-        updatable: installed(about),
+        updatable: updatable(about),
         newer: newest !== undefined && compareVersions(newest, about.version) > 0,
         ...(channel === undefined ? {} : { channel }),
         ...(newest === undefined ? {} : { newest }),
@@ -86,11 +87,13 @@ export default definePlugin({
     });
 
     // The installer's lemma, not this host's: after `lemma update --channel` in a terminal, it follows the new channel.
+    // A package manager's, or this host's when it links none.
     const check = Effect.gen(function* () {
       const about = yield* build;
-      // A checkout updates with git, and a release the installer did not install is not lemma update's to replace.
-      if (!installed(about)) return yield* status;
-      const answer = yield* Effect.result(runLemma(shellWord(about.link), ["update", "--check"], CheckAnswer, ASKING_MS));
+      // A checkout updates with git, and a release nothing installed has no channel to ask about.
+      if (about.kind === "checkout" || about.installer === undefined) return yield* status;
+      const asking = about.link === undefined ? cli : shellWord(about.link);
+      const answer = yield* Effect.result(runLemma(asking, ["update", "--check"], CheckAnswer, ASKING_MS));
       if (answer._tag === "Failure") yield* Ref.update(found, (last) => ({ ...last, error: answer.failure.message }));
       else yield* Ref.set(found, { answer: answer.success });
       const now = yield* status;
@@ -99,7 +102,7 @@ export default definePlugin({
         yield* events.publish(Notice, {
           level: "info",
           source: plugin.id,
-          message: `Lemma ${now.newest} is out on ${now.channel}, and this is ${about.version}: Settings › About updates to it`,
+          message: `Lemma ${now.newest} is out on ${now.channel}, and this is ${about.version}: ${now.updatable ? "Settings › About updates to it" : (about.update ?? "")}`,
         });
       }
       return now;
@@ -110,23 +113,31 @@ export default definePlugin({
         const about = yield* build;
         if (about.kind === "checkout")
           return yield* new ReleaseError({ reason: "Checkout", message: `This host runs from a checkout (${about.root}): update it with git` });
-        if (!installed(about))
+        if (!updatable(about))
           return yield* new ReleaseError({
             reason: "NotInstalled",
-            message: `The installer did not install this release (${about.root}), so it cannot replace it`,
+            message:
+              about.installer === undefined
+                ? `Neither the installer nor a package manager installed this release (${about.root}), so it cannot replace it`
+                : `This release was installed with ${INSTALLER_TITLES[about.installer]}, so Lemma cannot replace it: ${about.update ?? ""}`,
           });
         if (updating) return yield* new ReleaseError({ reason: "Busy", message: "An update is under way already" });
         updating = true;
         // Still updating once a restart is scheduled, until it ends: another update then would start a second restart
         // under this one. Any other way this ends, a failure or a fault included, lets the next one through.
         return yield* Effect.gen(function* () {
-          const answer = yield* runLemma(shellWord(about.link), ["update", ...(version === undefined ? [] : [version])], UpdateAnswer, INSTALLING_MS);
+          const lemma = about.link === undefined ? cli : shellWord(about.link);
+          const answer = yield* runLemma(lemma, ["update", ...(version === undefined ? [] : [version])], UpdateAnswer, INSTALLING_MS);
           // What this host runs already. One installed already but not running (a terminal's `lemma update`) restarts all the same.
           if (answer.version === about.version) return { version: answer.version, updated: false, restarting: false };
+          // The desktop app Homebrew's cask replaced, this host running in it: the app runs the new release once reopened.
+          if (answer.reopen === true && process.versions.electron !== undefined)
+            return { version: answer.version, updated: answer.updated, restarting: false, reopen: true };
+          const restarting = answer.command ?? about.link ?? join(about.root, "bin", "lemma");
           restartError = undefined;
           yield* Effect.try({
             try: () =>
-              restartLater(about.link, restartLog, (why) => {
+              restartLater(restarting, restartLog, (why) => {
                 updating = false;
                 if (why === undefined) return;
                 restartError = why;
@@ -165,13 +176,13 @@ export default definePlugin({
       title: "Updates",
       run: () =>
         Effect.map(check, (now) =>
-          !now.updatable
+          now.build.kind === "checkout" || now.build.installer === undefined
             ? {
                 status: "ok" as const,
                 message:
                   now.build.kind === "checkout"
                     ? `A checkout, at ${now.build.version}: it updates with git`
-                    : `Lemma ${now.build.version}, not installed by the installer`,
+                    : `Lemma ${now.build.version}, installed by neither the installer nor a package manager`,
               }
             : now.error !== undefined
               ? { status: "warn" as const, message: `Could not ask whether a newer release is out: ${now.error}` }
@@ -181,7 +192,7 @@ export default definePlugin({
                   ? {
                       status: "warn" as const,
                       message: `Lemma ${now.newest} is out on ${now.channel}, and this is ${now.build.version}`,
-                      fix: "lemma update, then lemma restart",
+                      fix: now.updatable ? "lemma update, then lemma restart" : (now.build.update ?? "lemma update"),
                     }
                   : { status: "ok" as const, message: `Lemma ${now.build.version}: no newer release is out on ${now.channel}` },
         ),
@@ -189,7 +200,7 @@ export default definePlugin({
 
     // A pinned install follows no channel, so has nothing to ask about (a channel taken up in a terminal is followed
     // once the host restarts on it).
-    const pinned = Effect.map(build, (about) => installed(about) && about.channel === undefined);
+    const pinned = Effect.map(build, (about) => about.installer === "script" && about.channel === undefined);
     if (checks)
       yield* plugin.background(
         "check for updates",

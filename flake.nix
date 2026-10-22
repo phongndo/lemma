@@ -62,6 +62,54 @@
         }
       );
 
+      # Lemma's stable release, as `nix profile install github:phongndo/lemma` or a flake input installs it
+      # (docs/installation.md#nix): the release's archive, which nix/release.json names (the Promote workflow writes it),
+      # with what installed it. On Linux it runs on nixpkgs' Node.js 24 rather than the one it carries, which patchelf
+      # breaks, and its packages' native libraries are patched to find theirs in the store, so NixOS needs no nix-ld. A
+      # release is for Apple silicon, and Linux on arm64 and x86_64.
+      packages = forAllSystems (
+        system:
+        let
+          pkgs = import nixpkgs { inherit system; };
+          inherit (pkgs) lib;
+          release = builtins.fromJSON (builtins.readFile ./nix/release.json);
+          archive = release.archives.${system} or null;
+        in
+        lib.optionalAttrs (archive != null) rec {
+          lemma = pkgs.stdenv.mkDerivation {
+            pname = "lemma";
+            inherit (release) version;
+            src = pkgs.fetchurl { inherit (archive) url hash; };
+            nativeBuildInputs = lib.optionals pkgs.stdenv.hostPlatform.isLinux [ pkgs.autoPatchelfHook ];
+            buildInputs = lib.optionals pkgs.stdenv.hostPlatform.isLinux [ pkgs.stdenv.cc.cc.lib ];
+            dontConfigure = true;
+            dontBuild = true;
+            dontStrip = true;
+            # The release's own command alone: its packages' scripts run on the Node.js it carries.
+            dontPatchShebangs = true;
+            installPhase = ''
+              runHook preInstall
+              mkdir -p $out/share/lemma $out/bin
+              cp -R . $out/share/lemma
+              printf '{"installer": "nix"}\n' > $out/share/lemma/install.json
+              patchShebangs --host $out/share/lemma/bin
+              ${lib.optionalString pkgs.stdenv.hostPlatform.isLinux "ln -sf ${pkgs.nodejs_24}/bin/node $out/share/lemma/runtime/bin/node"}
+              ln -s $out/share/lemma/bin/lemma $out/bin/lemma
+              runHook postInstall
+            '';
+            meta = {
+              description = "Agent harness in which every part is a plugin";
+              homepage = "https://github.com/phongndo/lemma";
+              license = lib.licenses.mit;
+              mainProgram = "lemma";
+              platforms = builtins.attrNames release.archives;
+              sourceProvenance = [ lib.sourceTypes.binaryNativeCode ];
+            };
+          };
+          default = lemma;
+        }
+      );
+
       formatter = forAllSystems (
         system:
         let

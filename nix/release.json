@@ -1,0 +1,17 @@
+{
+  "version": "0.2.0",
+  "archives": {
+    "aarch64-darwin": {
+      "url": "https://github.com/phongndo/lemma/releases/download/v0.2.0/lemma-v0.2.0-darwin-arm64.tar.gz",
+      "hash": "sha256-qnkXqz5QIZG+l3D5uVHbxcnD7r4PannkQ5FwlFHvqJk="
+    },
+    "aarch64-linux": {
+      "url": "https://github.com/phongndo/lemma/releases/download/v0.2.0/lemma-v0.2.0-linux-arm64.tar.gz",
+      "hash": "sha256-Ir+Y9hZULGun+lDRWlk1yhuCxUFkdEOfcLcMxIB13aI="
+    },
+    "x86_64-linux": {
+      "url": "https://github.com/phongndo/lemma/releases/download/v0.2.0/lemma-v0.2.0-linux-x64.tar.gz",
+      "hash": "sha256-R7SjIembEYhWIK3FrEZhV+zIu0Si/dRbHH/hyivo5Nw="
+    }
+  }
+}

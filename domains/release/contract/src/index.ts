@@ -22,6 +22,32 @@ export const compareVersions = (a: string, b: string): number => {
   return 0;
 };
 
+/**
+ * How a release was installed, which says how it updates: `script`, the installer (`curl … | sh`); `homebrew`, the
+ * tap's formula; `homebrew-cask`, the tap's cask (the desktop app, with its `lemma`); `mise`, mise's GitHub backend;
+ * `npm`, the `lemma-harness` package; `nix`, the flake's package; `desktop`, the desktop app from its file.
+ */
+export const INSTALLERS = ["script", "homebrew", "homebrew-cask", "mise", "npm", "nix", "desktop"] as const;
+export const Installer = Schema.Literals(INSTALLERS);
+export type Installer = typeof Installer.Type;
+
+/**
+ * The installers whose releases `lemma update` (and so `release.update`) replaces, by running them: Nix's is the
+ * user's configuration's to change, and the desktop app from its file is downloaded again.
+ */
+export const UPDATABLE: ReadonlySet<Installer> = new Set<Installer>(["script", "homebrew", "homebrew-cask", "mise", "npm"]);
+
+/** What each installer is called in a sentence: "installed with Homebrew". */
+export const INSTALLER_TITLES: Readonly<Record<Installer, string>> = {
+  script: "the installer",
+  homebrew: "Homebrew",
+  "homebrew-cask": "Homebrew's cask",
+  mise: "mise",
+  npm: "npm",
+  nix: "Nix",
+  desktop: "the desktop app's download",
+};
+
 /** What `lemma version --json` says of a Lemma: its release, or a checkout. */
 export const Build = Schema.Struct({
   /** What `lemma --version` prints. */
@@ -34,9 +60,17 @@ export const Build = Schema.Struct({
   commit: Schema.optional(Schema.String),
   /** When the release was built, in ISO 8601. */
   built: Schema.optional(Schema.String),
+  /** How it was installed (`Installer`); absent for a checkout, or a release unpacked by hand. */
+  installer: Schema.optional(Installer),
   /**
-   * What the installer recorded: the channel updates come from (none for a release installed by version, which is
-   * pinned), the `lemma` command it links, and where it keeps releases.
+   * How it updates as a person would update it: `lemma update`, the package manager's command, or where to download
+   * the next release. Absent when nothing installed it.
+   */
+  update: Schema.optional(Schema.String),
+  /**
+   * The channel updates come from: what the installer recorded (none for a release installed by version, which is
+   * pinned); a package manager's is stable. The `lemma` command the installer or package manager puts on PATH, which
+   * runs the release it installed last, and where the installer keeps releases.
    */
   channel: Schema.optional(Channel),
   link: Schema.optional(Schema.String),
@@ -49,7 +83,11 @@ export type Build = typeof Build.Type;
 /** This Lemma, and what the last check for a newer release found. */
 export const ReleaseStatus = Schema.Struct({
   build: Build,
-  /** Whether `release.update` can replace it: a release the installer installed, not a checkout. */
+  /**
+   * Whether `release.update` can replace it: a release the installer installed, or a package manager `lemma update`
+   * runs (Homebrew, mise, npm); not a checkout, Nix's, or the desktop app from its file, which `build.update` says how
+   * to update.
+   */
   updatable: Schema.Boolean,
   /**
    * The channel updates come from: what the installer recorded with the release installed last, which `lemma update
@@ -73,12 +111,18 @@ export const UpdateResult = Schema.Struct({
   updated: Schema.Boolean,
   /** True when the host stops after answering and starts again on `version`: the page should reload once it is back. */
   restarting: Schema.Boolean,
+  /**
+   * True when the update replaced the desktop app this host runs in (Homebrew's cask): it runs `version` once the app
+   * is reopened, which the page offers (`lemmaDesktop.relaunch`).
+   */
+  reopen: Schema.optional(Schema.Boolean),
 });
 export type UpdateResult = typeof UpdateResult.Type;
 
 /**
- * Why a release channel's call failed: `Checkout` (a checkout updates with git), `NotInstalled` (a release the
- * installer did not install), `Busy` (an update is under way), `Failed` (what `lemma` said).
+ * Why a release channel's call failed: `Checkout` (a checkout updates with git), `NotInstalled` (a release `lemma
+ * update` cannot replace: Nix's, the desktop app from its file, or one unpacked by hand; its message says how it
+ * updates), `Busy` (an update is under way), `Failed` (what `lemma` said).
  */
 export class ReleaseError extends Data.TaggedError("ReleaseError")<{
   readonly reason: "Checkout" | "NotInstalled" | "Busy" | "Failed";

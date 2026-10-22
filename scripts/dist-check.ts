@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { once } from "node:events";
 import { createReadStream, existsSync } from "node:fs";
-import { mkdir, readdir, readFile, realpath, writeFile } from "node:fs/promises";
+import { cp, mkdir, readdir, readFile, realpath, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { basename, dirname, join, resolve } from "node:path";
@@ -12,9 +12,10 @@ import { settled } from "./e2e.ts";
 
 /*
  * Installs a release archive for this platform (`pnpm dist` builds it at the checkout's version; or pass its path) as a
- * user would, with scripts/install.sh, outside the checkout and with a `node` on PATH that fails (dist-trial.ts), then
- * runs it: a host, the web app it serves, a plugin file in TypeScript, the native file search, the CLI the agent is
- * told of, and an agent's turn that runs a tool, on the scripted provider (no API key).
+ * user would, with scripts/install.sh, outside the checkout and with a `node` on PATH that fails (dist-trial.ts), and
+ * as npm's lemma-harness fetches it, then runs it: a host, the web app it serves, a plugin file in TypeScript, the
+ * native file search, the CLI the agent is told of, and an agent's turn that runs a tool, on the scripted provider (no
+ * API key).
  */
 
 const root = fileURLToPath(new URL("..", import.meta.url));
@@ -80,7 +81,19 @@ try {
   const about = JSON.parse(await command(lemma, ["version", "--json"])) as Record<string, unknown>;
   assert.deepEqual(
     { ...about, commit: typeof about.commit, built: typeof about.built, root: typeof about.root },
-    { version, kind: "release", channel: "nightly", link: lemma, dataDir: data, node: about.node, commit: "string", built: "string", root: "string" },
+    {
+      version,
+      kind: "release",
+      installer: "script",
+      update: "lemma update",
+      channel: "nightly",
+      link: lemma,
+      dataDir: data,
+      node: about.node,
+      commit: "string",
+      built: "string",
+      root: "string",
+    },
     "lemma version says what the release is and how it was installed",
   );
   assert.deepEqual(JSON.parse(await command(lemma, ["update", "--check", "--json"])), {
@@ -94,9 +107,11 @@ try {
     updated: true,
     from: version,
     version,
+    installer: "script",
     channel: "stable",
     root: dirname(dirname(await realpath(lemma))),
     link: lemma,
+    command: lemma,
     host: null,
   });
   assert.notEqual(await realpath(lemma), before, "lemma update installs with the installer the release carries");
@@ -104,6 +119,24 @@ try {
   const service = JSON.parse(await command(lemma, ["service", "install", "--print", "--json"])) as { command: string[] };
   assert.deepEqual(service.command, [lemma, "serve", "--no-open"], "a service runs the lemma the installer links, so the newest release");
   console.log("installer: install, reinstall, pruning, a bad checksum, channels, lemma version, and lemma update passed");
+
+  // npm's lemma-harness, as npm installs it: its launcher fetches this release into a directory of its own the first
+  // time it runs, on whatever Node.js runs it (packaging/npm).
+  const npmData = join(trial.temporary, "npm");
+  const launcher = join(trial.temporary, "npm prefix/lib/node_modules/lemma-harness");
+  await cp(join(root, "packaging/npm"), launcher, { recursive: true });
+  const manifest = JSON.parse(await readFile(join(launcher, "package.json"), "utf8")) as Record<string, unknown>;
+  await writeFile(join(launcher, "package.json"), JSON.stringify({ ...manifest, version }));
+  const npmLemma = (args: readonly string[]) => command(process.execPath, [join(launcher, "bin/lemma.js"), ...args], 0, { LEMMA_NPM_DIR: npmData });
+  assert.equal((await npmLemma(["--version"])).trim(), version);
+  const viaNpm = JSON.parse(await npmLemma(["version", "--json"])) as Record<string, unknown>;
+  assert.deepEqual(
+    { installer: viaNpm.installer, channel: viaNpm.channel, link: viaNpm.link, root: viaNpm.root },
+    { installer: "npm", channel: "stable", link: join(npmData, "current/bin/lemma"), root: join(npmData, basename(archive, ".tar.gz")) },
+    "npm's lemma runs the release it fetched, and says npm installed it",
+  );
+  assert.deepEqual(JSON.parse(await npmLemma(["update", "--check", "--json"])), { version, channel: "stable", newest: version, newer: false });
+  console.log("npm: lemma-harness fetches its release, runs it, and checks for updates on stable passed");
 
   await trial.provide();
   // A user's plugin file, in TypeScript, importing what the host links into the home.

@@ -1,0 +1,31 @@
+{
+  "name": "lemma-harness",
+  "version": "0.0.0",
+  "description": "Lemma, an agent harness in which every part is a plugin: the lemma command, which fetches the release it is for",
+  "homepage": "https://github.com/phongndo/lemma",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/phongndo/lemma.git",
+    "directory": "packaging/npm"
+  },
+  "bin": {
+    "lemma": "bin/lemma.js"
+  },
+  "files": [
+    "bin",
+    "README.md"
+  ],
+  "os": [
+    "darwin",
+    "linux"
+  ],
+  "cpu": [
+    "arm64",
+    "x64"
+  ],
+  "type": "module",
+  "engines": {
+    "node": ">=18"
+  }
+}

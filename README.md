@@ -21,8 +21,10 @@ lemma serve
 ```
 
 `lemma serve` starts the host and opens the web app, where you log in to a
-provider. That installs the stable release; [Installation](docs/installation.md)
-covers the nightly channel (the newest build of `main`), updating, and
+provider. That installs the stable release, as Homebrew
+(`brew install phongndo/tap/lemma`, or `--cask` for the desktop app), mise,
+npm (`lemma-harness`), and Nix do too; [Installation](docs/installation.md)
+covers each, the nightly channel (the newest build of `main`), updating, and
 removing a release; [Development](docs/development.md) running Lemma from a
 checkout.
 

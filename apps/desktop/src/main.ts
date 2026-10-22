@@ -307,6 +307,15 @@ ipcMain.handle("lemma:reload", async (event) => {
   }
 });
 
+// A page's reopening of the app once Homebrew's cask replaced it (`release.updates`): it quits as Quit does, asking
+// first what stopping its hosts cuts off, then opens again, the release now installed. Kept running, it reopens nothing.
+let relaunching = false;
+ipcMain.handle("lemma:relaunch", (event) => {
+  if (senderOf(event) === undefined) throw new Error("Only an app window's page can reopen the app.");
+  relaunching = true;
+  app.quit();
+});
+
 /** A profile's name as this app keeps it: the default's under one name, whichever of its names (`core`) it was given. */
 const canonicalProfile = (name: string) => (isDefaultProfile(name) ? DEFAULT_PROFILE : name);
 
@@ -607,6 +616,7 @@ if (!app.requestSingleInstanceLock()) {
     const started = [...hosts].filter(([, held]) => held.child !== undefined).map(([name]) => name);
     if (started.length === 0) {
       quitting = true;
+      if (relaunching) app.relaunch();
       return;
     }
     event.preventDefault();
@@ -625,6 +635,7 @@ if (!app.requestSingleInstanceLock()) {
           cancelId: 1,
         });
         if (response !== 0) {
+          relaunching = false;
           // Kept running: a quit that came from closing the last window leaves none, and off macOS nothing else opens one.
           const url = pageAt(first);
           if (url !== undefined && windows().length === 0) openWindow(first, url);
@@ -632,6 +643,7 @@ if (!app.requestSingleInstanceLock()) {
         }
       }
       quitting = true;
+      if (relaunching) app.relaunch();
       await Promise.all(started.map(stopHost));
       app.quit();
     });

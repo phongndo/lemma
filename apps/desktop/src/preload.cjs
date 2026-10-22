@@ -6,6 +6,8 @@ contextBridge.exposeInMainWorld("lemmaDesktop", {
   // The scheme of the links that open this app (`lemma`, a checkout's `lemma-dev`), for a page that offers one.
   deepLinkScheme: process.argv.find((arg) => arg.startsWith("--lemma-deep-link-scheme="))?.slice("--lemma-deep-link-scheme=".length) ?? "lemma",
   reload: () => ipcRenderer.invoke("lemma:reload"),
+  // Quits the app, asking first as Quit does, and opens it again: the release Homebrew's cask installed (`lemma:relaunch`).
+  relaunch: () => ipcRenderer.invoke("lemma:relaunch"),
   // The window's controls on Windows and Linux take the page's colors: its background and muted text, as `#rrggbb`.
   titleBar: {
     setColors: (background, symbols) => ipcRenderer.send("lemma:title-bar", String(background), String(symbols)),
