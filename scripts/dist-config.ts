@@ -38,6 +38,15 @@ export const hostTarget = (): Target => {
 /** `lemma-v0.2.7-darwin-arm64`: the archive's top directory, and with `.tar.gz` its file name. */
 export const packageName = (release: string, target: Target): string => `lemma-v${release}-${target}`;
 
+/** `lemma-desktop-v0.2.7-darwin-arm64`: the desktop app's file name, before its format's extension (dist-desktop.ts). */
+export const desktopPackageName = (release: string, target: Target): string => `lemma-desktop-v${release}-${target}`;
+
+/** The version and target a desktop app's file name says it holds, and its format. */
+export const parseDesktopPackageName = (file: string): { readonly version: string; readonly target: Target; readonly format: string } | undefined => {
+  const match = /^lemma-desktop-v(\d+\.\d+\.\d+)-([a-z0-9-]+)\.(dmg|AppImage|deb)$/.exec(file);
+  return match && isTarget(match[2]!) ? { version: match[1]!, target: match[2], format: match[3]! } : undefined;
+};
+
 /** The version and target an archive's file name says it holds. */
 export const parsePackageName = (file: string): { readonly version: string; readonly target: Target } | undefined => {
   const match = /^lemma-v(\d+\.\d+\.\d+)-([a-z0-9-]+)\.tar\.gz$/.exec(file);

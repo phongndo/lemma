@@ -17,8 +17,9 @@ import type { Target } from "./dist-config.ts";
  *   release.json           what it is: its version, the commit it was built from, and when (`lemma version`)
  *   scripts/install.sh     the installer, which `lemma update` runs to install another release
  *   runtime/bin/node       the official Node.js build dist-config.ts pins, by version and checksum
- *   apps/, packages/, …    the workspace, laid out as in the checkout: the `lemma` command's packages and what they
- *                          read beside their sources (a profile's files), the web app's build, and the docs and examples
+ *   apps/, packages/, …    the workspace, laid out as in the checkout: the `lemma` command's packages and the desktop
+ *                          app's (scripts/dist-desktop.ts makes the app from the archive), what they read beside their
+ *                          sources (a profile's files, the app icon), the web app's build, and the docs and examples
  *   node_modules/          their production dependencies, installed from the lockfile for the target
  *
  * The workspace keeps its layout because Lemma runs its TypeScript sources, which Node strips of their types only
@@ -104,9 +105,10 @@ try {
   run("pnpm", ["build"]);
   run("pnpm", ["--filter", "@lemma/web-app", "build"]);
 
-  // Every project's manifest, so the frozen lockfile matches the workspace; the sources of the command's production
-  // closure only, and the builds its packages export.
-  const command = projects(["--filter-prod", "@lemma/cli-app..."]).map((project) => relative(root, project.path));
+  // Every project's manifest, so the frozen lockfile matches the workspace; the sources of the command's and the desktop
+  // app's production closures only, and the builds their packages export.
+  const closures = ["--filter-prod", "@lemma/cli-app...", "--filter-prod", "@lemma/desktop..."];
+  const included = projects(closures).map((project) => relative(root, project.path));
   const manifests = projects(["--recursive"]).map((project) => relative(root, join(project.path, "package.json")));
   const sources = tracked([
     "package.json",
@@ -116,13 +118,14 @@ try {
     "LICENSE",
     "README.md",
     "scripts/install.sh",
+    "assets/brand/icon-dark.png",
     "docs",
     "examples",
     ...manifests,
-    ...command,
+    ...included,
   ]);
   const builds = ["apps/web/dist"];
-  for (const path of command) {
+  for (const path of included) {
     const manifest = await readFile(join(root, path, "package.json"), "utf8");
     if (manifest.includes('"./dist/')) builds.push(join(path, "dist"));
   }
@@ -135,7 +138,7 @@ try {
     const name = packageName(release, target);
     const stage = join(temporary, name);
     await cp(workspace, stage, { recursive: true });
-    run("pnpm", ["--filter-prod", "@lemma/cli-app...", "install", "--prod", "--frozen-lockfile", "--ignore-scripts", ...platformFlags(target)], stage);
+    run("pnpm", [...closures, "install", "--prod", "--frozen-lockfile", "--ignore-scripts", ...platformFlags(target)], stage);
 
     const nodeName = `node-v${nodeVersion}-${target}`;
     const response = await fetch(`https://nodejs.org/dist/v${nodeVersion}/${nodeName}.tar.gz`);

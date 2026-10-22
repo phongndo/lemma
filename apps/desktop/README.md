@@ -11,6 +11,11 @@ nix develop -c pnpm desktop   # build the core and the web app, then open the wi
 nix develop -c pnpm dev:desktop   # the window again while `pnpm dev` runs, as after editing src/main.ts
 ```
 
+Each release has it ([installation](../../docs/installation.md#the-desktop-app)),
+built by `scripts/dist-desktop.ts` ([releases](../../docs/development.md#releases)),
+whose main process is this `src/main.ts` as the release's archive has it: what
+it reads beside its sources, as the icon, is in the archive (`scripts/dist.ts`).
+
 ## Behavior
 
 - **Attach first.** Like the CLI, it opens the page of the host `LEMMA_URL` or
@@ -86,6 +91,9 @@ nix develop -c pnpm dev:desktop   # the window again while `pnpm dev` runs, as a
   shows it in that profile's window. The app registers
   itself as the scheme's handler when it starts. Run from source on macOS,
   that registers Electron itself: a link reaches the app while it runs, and
-  with it closed opens Electron's default app instead.
+  with it closed opens Electron's default app instead. Released, macOS has the
+  scheme from the app's Info.plist and Linux from the desktop entry the Debian
+  package installs; an AppImage has no desktop entry, so only `lemma open`
+  reaches it, while it runs.
 - The start script clears `ELECTRON_RUN_AS_NODE`, which terminals inside other
   Electron apps can inherit and which would run Electron as plain Node.
