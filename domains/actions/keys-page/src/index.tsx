@@ -1,4 +1,4 @@
-import { For, Show, createMemo, createSignal } from "solid-js";
+import { For, Show, createMemo, createSignal, mapArray } from "solid-js";
 import { bindingOf, formatKeys } from "@lemma/web/keys";
 import { KEYMAP_PLUGIN, bindingRows, conflicts, defaultKeys, formatBindings, keysFor, labelOf, overridesFrom, withOverride, Actions } from "@lemma/actions";
 import type { KeyOverrides, Action } from "@lemma/actions";
@@ -268,13 +268,17 @@ function KeysBody(props: { deps: Deps }) {
   // A line per row by its action and key, so one being re-recorded survives the list updating.
   const lines = createMemo(() => rows().map((row) => JSON.stringify([row.action.id, row.key ?? null])));
   const bound = () => rows().filter((row) => row.key !== undefined).length;
-  // What other plugins add to this section comes first.
-  const extras = createMemo(() =>
-    deps.slots
-      .list(SettingsGroups)
-      .filter((group) => group.section === SECTION && group.id !== SECTION)
-      .map((group) => ({ group, entries: group.entries().filter((entry) => matchesQuery(query(), entry.text)) }))
-      .filter(({ entries }) => entries.length > 0),
+  // What other plugins add to this section comes first: each group's entries in a memo of its own, as Settings asks
+  // them (`SettingsGroup.entries`), and the search choosing among them, so neither another group's change nor a
+  // keystroke draws again the rows that stay.
+  const extras = createMemo(
+    mapArray(
+      () => deps.slots.list(SettingsGroups).filter((group) => group.section === SECTION && group.id !== SECTION),
+      (group) => {
+        const entries = createMemo(() => group.entries());
+        return { group, shown: createMemo(() => entries().filter((entry) => matchesQuery(query(), entry.text))) };
+      },
+    ),
   );
   return (
     <div class="keys-page">
@@ -288,13 +292,15 @@ function KeysBody(props: { deps: Deps }) {
         <p class="callout">The keymap plugin is off, so shortcuts do nothing until it is back on (Settings › Plugins).</p>
       </Show>
       <For each={extras()}>
-        {({ group, entries }) => (
-          <section class="settings-group">
-            <Show when={group.title}>{(title) => <h3 class="settings-group-title">{title()}</h3>}</Show>
-            <div class="settings-rows">
-              <For each={entries}>{(entry) => entry.view()}</For>
-            </div>
-          </section>
+        {({ group, shown }) => (
+          <Show when={shown().length > 0}>
+            <section class="settings-group">
+              <Show when={group.title}>{(title) => <h3 class="settings-group-title">{title()}</h3>}</Show>
+              <div class="settings-rows">
+                <For each={shown()}>{(entry) => entry.view()}</For>
+              </div>
+            </section>
+          </Show>
         )}
       </For>
       <section class="settings-group">
