@@ -46,9 +46,22 @@ together; when they drift apart, `nix develop -c pnpm test:durations` measures
 again. The `passed` job succeeds only when every
 other job does, so it is the one check a branch rule needs to require. Each commit on main also uploads its
 bundle size and benchmark numbers (`metrics-<sha>`). Daily it reruns
-every job on main, unchanged, so a failure there is a flake to fix, and runs the
-tests with fresh seeds and many more random cases, the mutation checks, and the
-performance checks; a failure prints the command that repeats it.
+every job on main, unchanged, so a flake shows, and runs the tests with fresh
+seeds and many more random cases, the mutation checks, and the performance
+checks; a failure prints the command that repeats it.
+
+A red run means a change broke something, not that a runner was slow. CI
+tries a failed test again, twice, a second apart (`--retry.count=2
+--retry.delay=1000`), and runs a UI check lane that failed once more
+(`--retry=1`); locally neither retries, so a flake shows at once. What a
+failed try saved (a test's evidence, a lane's traces) is uploaded even when a
+retry passes. A check that passes only on a retry passes the run, as a warning
+on it and in its summary, with what its failed try said (`scripts/flaky.ts`),
+and on main the `flakes` job files it as an issue labelled `flaky`, or comments
+on its open one, with each runner it flaked on (`scripts/file-issue.ts`); a
+failure to file leaves the run passed. A flake is a race in the test or the
+code: fix it, and close its issue.
+
 `.github/workflows/bench.yml` compares the core's and the harness's benchmarks with a base
 revision (by hand, or on a pull request labelled `performance`); locally,
 `node scripts/bench-compare.ts` (see [the core's README](../packages/core/README.md#develop)).
