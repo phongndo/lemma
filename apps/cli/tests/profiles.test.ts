@@ -22,7 +22,8 @@ describe("profiles: separate Lemmas on this machine", () => {
     });
     const made = JSON.parse((await invoke(["profile", "create", "desk", "--json"], root)).out);
     expect(made).toMatchObject({ name: "desk", home: join(root, "profiles", "desk") });
-    expect(made.port).toBeGreaterThanOrEqual(7434);
+    // From a checkout, as these tests run, on a checkout's ports: above its own default, 7533.
+    expect(made.port).toBeGreaterThanOrEqual(7534);
     expect(JSON.parse(await readFile(join(root, "profiles", "desk", "profile.json"), "utf8"))).toEqual({ port: made.port });
     expect((await invoke(["profile", "-q"], root)).out.split("\n")).toEqual(["default", "desk"]);
     // The one a command uses is the one --profile or LEMMA_PROFILE names.

@@ -21,7 +21,7 @@ The guide is `STYLE.md`; its row's `config.guide` names another file.
 To use it:
 
 ```sh
-ln -s "$PWD/examples/writing" ~/.lemma/plugins/writing   # or copy the folder
+ln -s "$PWD/examples/writing" ~/.lemma-dev/plugins/writing   # or copy the folder, into ~/.lemma/plugins for an installed Lemma
 ```
 
 `nix develop -c pnpm --filter @lemma/example-writing test` runs it in real

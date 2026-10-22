@@ -33,7 +33,7 @@ names another.
 To use it:
 
 ```sh
-ln -s "$PWD/examples/inbox" ~/.lemma/plugins/inbox   # or copy the folder
+ln -s "$PWD/examples/inbox" ~/.lemma-dev/plugins/inbox   # or copy the folder, into ~/.lemma/plugins for an installed Lemma
 ```
 
 `nix develop -c pnpm --filter @lemma/example-inbox test` runs it in real

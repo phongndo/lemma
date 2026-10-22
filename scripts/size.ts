@@ -19,8 +19,10 @@ const BUDGET: Readonly<Record<string, number>> = {
   // Raised from 2,800 for profiles (a host refuses a profile never made, and keeps its port) and renamed plugins (a row
   // under a former id moves to the plugin's as it is written): both are the host's own, before or beneath any plugin.
   // Its launch is JavaScript (start.mjs, launch.mjs: the compile cache, Effect's bundle, its Node.js flags), which
-  // loads before the compile cache is on, and is counted with the rest.
-  "packages/host": 3_000,
+  // loads before the compile cache is on, and is counted with the rest. Raised from 3,000 to keep an installed Lemma and
+  // a checkout apart (paths.ts: each one's home and port, the other's home refused, what its tools are told of its own),
+  // which the host, the CLI, and the desktop app decide before any plugin runs.
+  "packages/host": 3_050,
   "packages/composition": 850,
   "packages/web": 2_000,
   "packages/client": 800,

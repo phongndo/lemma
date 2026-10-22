@@ -31,7 +31,7 @@ names another.
 To use it:
 
 ```sh
-ln -s "$PWD/examples/notes" ~/.lemma/plugins/notes   # or copy the folder
+ln -s "$PWD/examples/notes" ~/.lemma-dev/plugins/notes   # or copy the folder, into ~/.lemma/plugins for an installed Lemma
 ```
 
 `nix develop -c pnpm --filter @lemma/example-notes test` runs it in real

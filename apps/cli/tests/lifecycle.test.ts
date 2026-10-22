@@ -37,6 +37,43 @@ const runWith = async (argv: readonly string[], home: string, fields: Partial<Io
   return { code, out: out.replace(/\n$/, ""), err: err.join("\n") };
 };
 
+describe("the other kind's home", () => {
+  test("a checkout's lemma starts, stops, and restarts no host on an installed Lemma's home, nor puts a service there, unless allowed", async () => {
+    const user = await mkdtemp(join(tmpdir(), "lemma-cli-kinds-"));
+    try {
+      const installed = join(user, ".lemma");
+      for (const argv of [["serve", "--detach"], ["stop"], ["restart"], ["service", "install", "--print"]]) {
+        const refused = await invoke([...argv, "--json"], installed, "/", { HOME: user });
+        expect(refused.code, argv.join(" ")).toBe(ExitCode.failed);
+        expect(JSON.parse(refused.err).error).toMatchObject({ code: "OtherHome", message: expect.stringContaining("is an installed Lemma's home") });
+      }
+      // Allowed, it goes on to find no host there.
+      const allowed = await invoke(["stop", "--json"], installed, "/", { HOME: user, LEMMA_ALLOW_OTHER_HOME: "1" });
+      expect(JSON.parse(allowed.out)).toMatchObject({ stopped: false });
+      expect(existsSync(installed)).toBe(false);
+    } finally {
+      await rm(user, { recursive: true, force: true });
+    }
+  });
+
+  test("a checkout's service is named apart from an installed Lemma's, its profiles' too", async () => {
+    const home = await mkdtemp(join(tmpdir(), "lemma-cli-service-"));
+    try {
+      const self = [process.execPath, "--conditions=lemma-source", cliMain];
+      const named = async (fields: Partial<Io> = {}) => {
+        const printed = await runWith(["service", "install", "--print", "--json"], home, { self, ...fields });
+        expect(printed.code, printed.err).toBe(ExitCode.ok);
+        return (JSON.parse(printed.out) as { file: string }).file.split("/").at(-1);
+      };
+      const mac = process.platform === "darwin";
+      expect(await named()).toBe(mac ? "dev.lemma.dev-host.plist" : "dev-lemma.service");
+      expect(await named({ env: { LEMMA_HOME: home, LEMMA_PROFILE: "work" } })).toBe(mac ? "dev.lemma.dev-host.work.plist" : "dev-lemma-work.service");
+    } finally {
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+});
+
 describe("a host started in the background", () => {
   let home: string;
   let pid: number | undefined;

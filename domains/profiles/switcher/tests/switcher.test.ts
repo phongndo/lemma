@@ -67,6 +67,11 @@ describe("profiles.switcher", () => {
     expect(fromDesk.find((profile) => profile.current)?.name).toBe("desk");
   });
 
+  it("makes profiles on ports from the one its host names, so a checkout's keep off an installed Lemma's", async () => {
+    const made = await ok<ProfileInfo>(call("profiles.create", { name: "work" }, { config: { firstPort: 7534 } }));
+    expect(made.port).toBeGreaterThanOrEqual(7534);
+  });
+
   it("refuses to make a profile twice, or one named default or no name at all", async () => {
     await ok(call("profiles.create", { name: "work" }));
     expect(await failure(call("profiles.create", { name: "work" }))).toMatchObject({ reason: "Exists" });

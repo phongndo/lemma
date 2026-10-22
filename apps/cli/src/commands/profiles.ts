@@ -1,6 +1,7 @@
 import { Effect } from "effect";
 import { table } from "@lemma/cli";
 import { DEFAULT_PROFILE, profileNameProblem, profileOf } from "@lemma/contracts/profiles";
+import { buildKind, KINDS } from "@lemma/host/paths";
 import { profileTitle } from "@lemma/profiles";
 import { createProfile, listProfiles, portOf, readTitle, removeProfile } from "@lemma/profiles/local";
 import { CliError, defineBuiltin, ExitCode, usage } from "../command.ts";
@@ -74,7 +75,7 @@ const profileCreate = defineBuiltin({
   examples: ["lemma profile create research", "lemma --profile research serve"],
   run: ({ io, args }) =>
     Effect.gen(function* () {
-      const made = yield* createProfile(rootOf(io), args.name).pipe(
+      const made = yield* createProfile(rootOf(io), args.name, undefined, KINDS[buildKind].port + 1).pipe(
         Effect.mapError((error) =>
           error.reason === "Name" ? usage(error.message) : new CliError({ code: error.reason, message: error.message, exit: ExitCode.failed }),
         ),

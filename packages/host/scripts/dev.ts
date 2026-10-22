@@ -8,7 +8,7 @@ import { Effect } from "effect";
 import { appUrl } from "@lemma/contracts";
 import { readDiscovery } from "@lemma/contracts/discovery";
 import { HOST_FLAGS } from "../src/launch.mjs";
-import { resolvePaths } from "../src/paths.ts";
+import { KINDS, otherHomeProblem, resolvePaths } from "../src/paths.ts";
 
 /**
  * `pnpm dev`: the host, the web app's dev server, and the desktop window on
@@ -20,9 +20,9 @@ import { resolvePaths } from "../src/paths.ts";
  * proxies `/rpc` and `/api` to the host. Quitting the window leaves the rest
  * running, and `pnpm dev:desktop` opens it again. Ctrl+C stops everything.
  *
- * It runs on the checkout's own home (the root package.json's scripts default
- * `LEMMA_HOME` to `~/.lemma-dev`) and port, so an installed Lemma runs beside
- * it, its sessions and settings untouched.
+ * It runs on the checkout's own home (`~/.lemma-dev`, unless `LEMMA_HOME` names
+ * another) and port, so an installed Lemma runs beside it, its sessions and
+ * settings untouched (`KINDS`).
  */
 
 const root = fileURLToPath(new URL("../../..", import.meta.url));
@@ -33,14 +33,12 @@ const vite = join(web, "node_modules/vite/bin/vite.js");
 /** Electron's launcher, which passes a stop signal on to the app. */
 const electron = join(desktop, "node_modules/electron/cli.js");
 const project = process.env.INIT_CWD ?? process.cwd();
-const { home } = resolvePaths({ env: process.env, cwd: project });
+const paths = resolvePaths({ env: process.env, cwd: project });
+const { home } = paths;
 /** The address `pnpm dev:desktop` loads by default. */
 const WEB_PORT = 5173;
-/**
- * The host's: not the 7433 an installed Lemma's host listens on, and the same across the restarts `--watch` makes, as
- * the dev server proxies to it.
- */
-const HOST_PORT = 7434;
+/** The host's, a checkout's own (`KINDS`), named so it is the same across the restarts `--watch` makes, as the dev server proxies to it. */
+const HOST_PORT = KINDS.checkout.port;
 const STARTUP_TIMEOUT_MS = 30_000;
 
 const say = (message: string) => console.log(`lemma dev: ${message}`);
@@ -53,6 +51,11 @@ const free = (port: number) =>
     probe.listen(port, "127.0.0.1", () => probe.close(() => resolve(true)));
   });
 
+const otherHome = otherHomeProblem(paths.root, process.env);
+if (otherHome !== undefined) {
+  say(otherHome);
+  process.exit(1);
+}
 const already = await discover();
 if (already !== undefined) {
   say(`a host is already running (pid ${already.pid}, ${already.url}). Stop it first, so the one this starts can restart on edits.`);

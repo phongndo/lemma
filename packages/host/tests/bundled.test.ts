@@ -7,6 +7,7 @@ import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { appDefaults, bundled as shipped, bundledCode, bundledWeb, cliCommand, webDist } from "../src/bundled.ts";
+import { KINDS } from "../src/paths.ts";
 import { runtimeCapabilities } from "../src/runtime.ts";
 import { domainPlugins } from "../../../scripts/plugins.ts";
 
@@ -48,14 +49,23 @@ describe("bundled", () => {
 });
 
 describe("appDefaults", () => {
-  test("enables every plugin, with the web app served and the CLI named to the agent by default", () => {
-    expect(entries()).toEqual({ "agent.loop": { config: { cli: cliCommand } }, "transport.server": { config: { staticDir: webDist } }, "tools.registry": {} });
+  test("enables every plugin, with the web app served on its kind's port and the CLI named to the agent by default", () => {
+    expect(entries()).toEqual({
+      "agent.loop": { config: { cli: cliCommand } },
+      "transport.server": { config: { staticDir: webDist, port: KINDS.checkout.port } },
+      "tools.registry": {},
+    });
   });
 
-  test("a transport config row keeps the web app unless it sets staticDir itself", () => {
+  test("a transport config row keeps the web app and the port unless it sets them itself", () => {
     expect(entries({ "transport.server": { config: { port: 8000 } } })["transport.server"]).toEqual({ config: { staticDir: webDist, port: 8000 } });
-    expect(entries({ "transport.server": { config: { staticDir: "/srv/ui" } } })["transport.server"]).toEqual({ config: { staticDir: "/srv/ui" } });
-    expect(entries({ "transport.server": { enabled: false } })["transport.server"]).toEqual({ config: { staticDir: webDist }, enabled: false });
+    expect(entries({ "transport.server": { config: { staticDir: "/srv/ui" } } })["transport.server"]).toEqual({
+      config: { staticDir: "/srv/ui", port: KINDS.checkout.port },
+    });
+    expect(entries({ "transport.server": { enabled: false } })["transport.server"]).toEqual({
+      config: { staticDir: webDist, port: KINDS.checkout.port },
+      enabled: false,
+    });
   });
 
   test("names the CLI so the agent's shell runs it on the host's Node.js, with none on PATH", () => {

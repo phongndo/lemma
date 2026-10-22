@@ -18,7 +18,7 @@ import type { HostChanges, Read } from "./control.ts";
 import { SHUTDOWN_TIMEOUT_MS } from "./limits.ts";
 import { linkHostPackages } from "./links.ts";
 import { loadLocalPlugins } from "./local.ts";
-import { resolvePaths } from "./paths.ts";
+import { homeForTools, otherHomeProblem, resolvePaths } from "./paths.ts";
 import { holdHostLock, teeLog } from "./process.ts";
 import { recordStall, watchStalls } from "./stall.ts";
 import type { CodeOwner } from "./stall-owners.ts";
@@ -116,6 +116,12 @@ if (profileProblem !== undefined || (paths.profile !== undefined && !existsSync(
   console.error(`lemma: LEMMA_PROFILE: ${profileProblem ?? `there is no profile "${profile}"; \`lemma profile create ${profile}\` makes one`}`);
   process.exit(1);
 }
+// Never on the other kind's home (`otherHomeProblem`): an installed Lemma's, from a checkout, or a checkout's, from a release.
+const otherHome = otherHomeProblem(paths.root, process.env);
+if (otherHome !== undefined) {
+  console.error(`lemma: ${otherHome}`);
+  process.exit(1);
+}
 // One host per home, said before anything starts: a second would break the sessions store's single writer.
 const holder = holdHostLock(paths.home);
 if (holder !== undefined) {
@@ -129,10 +135,13 @@ teeLog(
 );
 // What the host's tools run reaches this host: a \`lemma\` command the agent runs finds it in this home and profile,
 // whatever the environment the host was started in names (another host's LEMMA_URL, a default environment), and prints
-// JSON.
-process.env.LEMMA_HOME = paths.root;
-if (paths.profile === undefined) delete process.env.LEMMA_PROFILE;
-else process.env.LEMMA_PROFILE = paths.profile;
+// JSON; its kind's own root and default profile go unnamed (\`homeForTools\`). Leave to running on the other kind's
+// home (\`LEMMA_ALLOW_OTHER_HOME\`) is this host's alone, not its tools'.
+for (const [key, value] of Object.entries(homeForTools(paths, process.env))) {
+  if (value === undefined) delete process.env[key];
+  else process.env[key] = value;
+}
+delete process.env.LEMMA_ALLOW_OTHER_HOME;
 process.env.LEMMA_ENV = "local";
 process.env.LEMMA_AGENT = "1";
 delete process.env.LEMMA_URL;

@@ -21,7 +21,7 @@ these are its files:
 To use it:
 
 ```sh
-ln -s "$PWD/examples/glossary" ~/.lemma/plugins/glossary   # or copy the folder
+ln -s "$PWD/examples/glossary" ~/.lemma-dev/plugins/glossary   # or copy the folder, into ~/.lemma/plugins for an installed Lemma
 ```
 
 `nix develop -c pnpm --filter @lemma/example-glossary test` runs it in real

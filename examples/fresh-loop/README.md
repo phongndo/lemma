@@ -21,7 +21,7 @@ rebuilds from the log, and the transcript marks where each turn started fresh.
 To use it:
 
 ```sh
-ln -s "$PWD/examples/fresh-loop" ~/.lemma/plugins/fresh-loop   # agent.loop turns off while it runs
+ln -s "$PWD/examples/fresh-loop" ~/.lemma-dev/plugins/fresh-loop   # agent.loop turns off while it runs
 ```
 
 `nix develop -c pnpm --filter @lemma/example-fresh-loop test` runs the Agent

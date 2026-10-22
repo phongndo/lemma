@@ -22,7 +22,8 @@ const TransportConfig = Schema.Struct({
   port: Schema.Number.check(Schema.isInt(), Schema.isBetween({ minimum: 0, maximum: 65535 }))
     .pipe(Schema.withDecodingDefaultType(Effect.sync(() => 7433)))
     .annotate({
-      description: "0 asks the OS for a free port; the chosen one lands in transport.json.",
+      description:
+        "0 asks the OS for a free port; the chosen one lands in transport.json. The host supplies its kind's: 7433 for an installed Lemma, 7533 for a checkout.",
     }),
   token: Schema.optional(Schema.NonEmptyString).annotate({
     ...secret,

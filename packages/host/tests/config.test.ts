@@ -5,7 +5,7 @@ import { dirname, join } from "node:path";
 import { Effect } from "effect";
 import { parse as parseJsonc } from "jsonc-parser";
 import { isTrusted, loadComposition, patchConfig, projectPluginsDir, updateConfig } from "../src/config.ts";
-import { resolvePaths } from "../src/paths.ts";
+import { buildKind, defaultRoot, homeForTools, otherHomeProblem, resolvePaths } from "../src/paths.ts";
 import type { PathsService } from "../src/paths.ts";
 
 async function withPaths<A>(body: (paths: PathsService) => Promise<A>): Promise<A> {
@@ -22,7 +22,7 @@ async function withPaths<A>(body: (paths: PathsService) => Promise<A>): Promise<
 
 describe("resolvePaths", () => {
   test("defaults to ~/.lemma and derives every location", () => {
-    const paths = resolvePaths({ env: { HOME: "/home/me" }, cwd: "/work/app" });
+    const paths = resolvePaths({ env: { HOME: "/home/me" }, cwd: "/work/app", kind: "release" });
     expect(paths).toEqual({
       home: "/home/me/.lemma",
       root: "/home/me/.lemma",
@@ -30,6 +30,12 @@ describe("resolvePaths", () => {
       projectConfig: "/work/app/.lemma/config.jsonc",
       cwd: "/work/app",
     });
+  });
+
+  test("run from a checkout, as these tests are, defaults to ~/.lemma-dev", () => {
+    expect(buildKind).toBe("checkout");
+    expect(resolvePaths({ env: { HOME: "/home/me" }, cwd: "/work/app" }).root).toBe("/home/me/.lemma-dev");
+    expect(resolvePaths({ env: { HOME: "/home/me", LEMMA_PROFILE: "desk" }, cwd: "/work/app" }).home).toBe("/home/me/.lemma-dev/profiles/desk");
   });
 
   test("LEMMA_HOME overrides the home directory", () => {
@@ -40,12 +46,12 @@ describe("resolvePaths", () => {
   });
 
   test("LEMMA_PROFILE names a profile, whose home is under the root's profiles", () => {
-    const paths = resolvePaths({ env: { HOME: "/home/me", LEMMA_PROFILE: "desk" }, cwd: "/work/app" });
+    const paths = resolvePaths({ env: { HOME: "/home/me", LEMMA_PROFILE: "desk" }, cwd: "/work/app", kind: "release" });
     expect(paths).toMatchObject({ home: "/home/me/.lemma/profiles/desk", root: "/home/me/.lemma", profile: "desk" });
     expect(paths.userConfig).toBe("/home/me/.lemma/profiles/desk/config.jsonc");
     // The default is the root's own.
     for (const LEMMA_PROFILE of ["default", "", " "]) {
-      const own = resolvePaths({ env: { HOME: "/home/me", LEMMA_PROFILE }, cwd: "/work/app" });
+      const own = resolvePaths({ env: { HOME: "/home/me", LEMMA_PROFILE }, cwd: "/work/app", kind: "release" });
       expect(own.home).toBe("/home/me/.lemma");
       expect(own.profile).toBeUndefined();
     }
@@ -363,4 +369,32 @@ describe("updateConfig", () => {
       expect(failed.severity).toBe("error");
       expect(failed.message.startsWith(`${paths.userConfig}:`)).toBe(true);
     }));
+});
+
+describe("the other kind's home", () => {
+  const env = { HOME: "/home/me" };
+
+  test("each kind keeps off the other's root, wherever its profiles are, unless allowed", () => {
+    expect(otherHomeProblem("/home/me/.lemma", env, "checkout")).toMatch(
+      /^\/home\/me\/\.lemma is an installed Lemma's home; a checkout keeps to its own, \/home\/me\/\.lemma-dev\./,
+    );
+    expect(otherHomeProblem("/home/me/.lemma-dev/", env, "release")).toMatch(
+      /is a checkout's home; an installed Lemma keeps to its own, \/home\/me\/\.lemma\./,
+    );
+    expect(otherHomeProblem("/home/me/.lemma", { ...env, LEMMA_ALLOW_OTHER_HOME: "1" }, "checkout")).toBeUndefined();
+    // Its own, and any other a LEMMA_HOME names, are its to use.
+    for (const kind of ["release", "checkout"] as const) {
+      expect(otherHomeProblem(defaultRoot(env, kind), env, kind)).toBeUndefined();
+      expect(otherHomeProblem("/var/lemma", env, kind)).toBeUndefined();
+    }
+  });
+
+  test("a host names its home to its tools unless it is its kind's own root and default profile, which its lemma finds by itself", () => {
+    const release = resolvePaths({ env, cwd: "/work", kind: "release" });
+    // A checkout's scripts an installed Lemma's agent runs (pnpm dev) then use the checkout's home.
+    expect(homeForTools(release, env, "release")).toEqual({ LEMMA_HOME: undefined, LEMMA_PROFILE: undefined });
+    expect(homeForTools({ ...release, profile: "desk" }, env, "release")).toEqual({ LEMMA_HOME: "/home/me/.lemma", LEMMA_PROFILE: "desk" });
+    expect(homeForTools({ root: "/var/lemma" }, env, "release")).toEqual({ LEMMA_HOME: "/var/lemma", LEMMA_PROFILE: undefined });
+    expect(homeForTools(resolvePaths({ env, cwd: "/work", kind: "checkout" }), env, "checkout").LEMMA_HOME).toBeUndefined();
+  });
 });

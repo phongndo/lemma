@@ -33,9 +33,11 @@ loginctl enable-linger $USER   # Linux: keep it running without a login session,
 names the `lemma` command the installer links, so after an update `lemma
 restart` (or Settings › About's Update) runs the service on the new release
 ([installation](installation.md#updating)). From a checkout, `nix develop -c
-pnpm lemma service install` runs the checkout's home, `~/.lemma-dev`, unless
-`LEMMA_HOME` names another, on a `node` that lives in the Nix store and may be
-garbage-collected: on NixOS and nix-darwin, declare that service in the system
+pnpm lemma service install` installs a service of the checkout's own,
+`dev-lemma` (launchd's `dev.lemma.dev-host`), beside an installed Lemma's
+([development](development.md)). It runs the checkout's home, `~/.lemma-dev`,
+unless `LEMMA_HOME` names another, on a `node` that lives in the Nix store and
+may be garbage-collected: on NixOS and nix-darwin, declare that service in the system
 configuration instead (`systemd.user.services`, `launchd.user.agents`) from
 what `--print` shows. `lemma stop` stops a host the service runs through
 the service manager; `lemma logs` shows what it printed.

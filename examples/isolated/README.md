@@ -36,7 +36,7 @@ Its row's `config` sets `timeoutMs` (30 seconds) and `memoryMb` (256).
 To use it, put your tools in `tools.mjs` and:
 
 ```sh
-ln -s "$PWD/examples/isolated" ~/.lemma/plugins/isolated   # or copy the folder
+ln -s "$PWD/examples/isolated" ~/.lemma-dev/plugins/isolated   # or copy the folder, into ~/.lemma/plugins for an installed Lemma
 ```
 
 `nix develop -c pnpm --filter @lemma/example-isolated test` runs its tools

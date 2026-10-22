@@ -17,6 +17,11 @@ export const Config = Schema.Struct({
     description:
       "How to run the lemma command, which starts a profile's host (`serve --detach`). The host supplies its own; without one, a profile is opened only while its host runs.",
   }),
+  firstPort: Schema.optional(Schema.Number.check(Schema.isInt(), Schema.isBetween({ minimum: 1, maximum: 65535 }))).annotate({
+    title: "First profile port",
+    description:
+      "The lowest port a profile it makes listens on, each taking the next free one. The host supplies one above its own default port (7434 for an installed Lemma, 7534 for a checkout), so the two's profiles keep apart.",
+  }),
 });
 export type Config = typeof Config.Type;
 
@@ -163,7 +168,7 @@ export default definePlugin({
     );
     yield* owner.add(
       Channels,
-      serveChannel(ProfileChannels.create, ({ name, title }) => Effect.flatMap(createProfile(paths.root, name, title), infoOf)),
+      serveChannel(ProfileChannels.create, ({ name, title }) => Effect.flatMap(createProfile(paths.root, name, title, owner.config.firstPort), infoOf)),
     );
     yield* owner.add(
       Channels,

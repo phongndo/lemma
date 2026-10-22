@@ -24,7 +24,7 @@ Both halves import only what the host or the page supplies, so the folder
 needs no install step. To use it:
 
 ```sh
-ln -s "$PWD/examples/ticker" ~/.lemma/plugins/ticker   # or copy the folder: the host loads it, and open web apps follow
+ln -s "$PWD/examples/ticker" ~/.lemma-dev/plugins/ticker   # or copy the folder, into ~/.lemma/plugins for an installed Lemma: the host loads it, and open web apps follow
 ```
 
 The page is at `/ticker`, and the palette's **Ticker: Show prices** opens it.

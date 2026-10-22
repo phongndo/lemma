@@ -15,7 +15,7 @@ import { HOST_FLAGS } from "@lemma/host/launch";
 import { deepLinkTarget, isLoopback, ProfileChannels, profileAddress, profileTitle } from "@lemma/profiles";
 import { readTitle } from "@lemma/profiles/local";
 import { SHUTDOWN_TIMEOUT_MS as HOST_SHUTDOWN_MS } from "@lemma/host/limits";
-import { hostFiles, resolvePaths } from "@lemma/host/paths";
+import { hostFiles, otherHomeProblem, resolvePaths } from "@lemma/host/paths";
 import { browserPartition, hostBrowser } from "./browser.ts";
 
 // The desktop app is the web app in a window: it shows what the host's transport serves, so the two never differ.
@@ -29,6 +29,8 @@ const hostMain = fileURLToPath(import.meta.resolve("@lemma/host"));
 const project = process.env.INIT_CWD ?? homedir();
 const profileProblem = profileOf(process.env) === undefined ? undefined : profileNameProblem(profileOf(process.env)!);
 const paths = resolvePaths({ env: profileProblem === undefined ? process.env : { ...process.env, LEMMA_PROFILE: undefined }, cwd: project });
+/** Never on the other kind's home (`otherHomeProblem`), neither attaching to a host there nor starting one. */
+const otherHome = otherHomeProblem(paths.root, process.env);
 /** Development: the page comes from the web app's dev server (`pnpm dev`), which proxies to the first profile's host, so edits hot-reload. */
 const webUrl = process.env.LEMMA_WEB_URL;
 const STARTUP_TIMEOUT_MS = 30_000;
@@ -522,6 +524,7 @@ if (!app.requestSingleInstanceLock()) {
     .whenReady()
     .then(async () => {
       if (profileProblem !== undefined) throw new Error(`LEMMA_PROFILE: ${profileProblem}`);
+      if (otherHome !== undefined) throw new Error(otherHome);
       // Windows and Linux take the window's `icon`; the macOS Dock takes the app's.
       app.dock?.setIcon(icon);
       Menu.setApplicationMenu(Menu.buildFromTemplate(menu));
