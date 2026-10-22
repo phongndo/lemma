@@ -98,7 +98,7 @@ export const cask = (version: string, sha256: string, base?: string): string => 
   homepage "${HOMEPAGE}"
 
   depends_on arch: :arm64
-  depends_on macos: ">= :ventura"
+  depends_on macos: :ventura
 
   app "Lemma.app"
   binary "#{appdir}/Lemma.app/Contents/Resources/lemma/bin/lemma"
