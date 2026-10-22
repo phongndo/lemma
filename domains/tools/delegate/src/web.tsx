@@ -176,10 +176,12 @@ export default defineWebPlugin({
       const named = typeof call.args?.["title"] === "string" ? (call.args["title"] as string).trim() : "";
       const title = session !== undefined ? sessionTitle(session) : (details.title ?? (named !== "" ? named : firstLine(asked) || "Agent"));
       const waiting = call.state === "running" || call.state === "queued";
-      // How its thread heard it ended, which outlives the agent's thread (one dropped while it waited for a slot).
+      // How its thread heard it ended, which outlives the agent's thread (one dropped while it waited for a slot): for a
+      // background call, whose own result says only that it started; a waited-on call's result is its own.
       const heard = details.sessionId === undefined ? undefined : model.outcomes().get(details.sessionId);
+      const own = details.ended === "running" ? undefined : details.ended;
       // A call stopped or failed with no word of its agent: its turn went with it.
-      const ended = heard?.ended ?? details.ended ?? (call.state === "interrupted" ? "cancelled" : call.state === "error" ? "error" : undefined);
+      const ended = own ?? heard?.ended ?? details.ended ?? (call.state === "interrupted" ? "cancelled" : call.state === "error" ? "error" : undefined);
       const current = session === undefined ? undefined : model.state(session, ended === undefined ? undefined : { ended, emptyAt: details.emptyAt });
       // While the call waits, an agent not at work has yet to start: it waits for a slot, or for its prompt.
       const state: AgentState = current === undefined ? (waiting ? "queued" : endedState(ended)) : waiting && !isActive(current) ? "queued" : current;
@@ -203,9 +205,10 @@ export default defineWebPlugin({
     function CallDisplay(props: ToolBodyProps) {
       const plugin = usePlugin();
       const agent = createMemo(() => callAgent(props));
-      // One waiting for a slot is dropped, and its empty thread goes; one at work has its turn cancelled.
+      // The host half stops it as it is (`delegate.stop`); with no host half serving that (off, or delegations off), its
+      // turn is cancelled.
       const stop = plugin.action("stop an agent", async (sessionId: string) => {
-        if (!(await client.channel.call(DelegateChannels.drop, { sessionId }))) await client.channel.call(AgentChannels.cancel, { sessionId });
+        await client.channel.call(DelegateChannels.stop, { sessionId }).catch(() => client.channel.call(AgentChannels.cancel, { sessionId }));
       });
       return (
         <AgentRow

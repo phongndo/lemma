@@ -3,7 +3,8 @@ import * as path from "node:path";
 import { Effect, Result, Schedule, Schema, Semaphore } from "effect";
 import type { Context } from "effect";
 import type { Registries } from "@lemma/core";
-import { callHere, HostError, InteractionError } from "@lemma/contracts";
+import { callHere } from "@lemma/cli";
+import { HostError, InteractionError } from "@lemma/contracts";
 import type { Interaction } from "@lemma/contracts";
 import { AgentChannels, ModeChannels, MODES_PLUGIN, offeredFor } from "@lemma/agent";
 import type { ModeInfo, PromptOutcome, TurnOptions, WhenBusy } from "@lemma/agent";
@@ -137,6 +138,8 @@ export interface DelegateOptions {
   readonly background: Background;
   /** The slots at each depth, shared with the background agents' waiting. */
   readonly slotsAt: (depth: number) => Semaphore.Semaphore;
+  /** The waited-on agents whose prompts are being placed, by agent: the request id Stop withdraws (`delegate.stop`). */
+  readonly placing: Map<string, string>;
 }
 
 /** Slots at each depth, apart: a parent holds one until its turn ends, which may wait on its own agents' slots. */
@@ -168,7 +171,20 @@ export const place = (
     requestId: job.requestId,
     ...(job.whenBusy === undefined ? {} : { whenBusy: job.whenBusy }),
     ...(job.options === undefined ? {} : { options: job.options }),
-  }).pipe(Effect.onInterrupt(() => (cancelOnInterrupt ? Effect.ignore(callHere(registries, AgentChannels.cancel, { sessionId: job.child })) : Effect.void)));
+  }).pipe(Effect.onInterrupt(() => (cancelOnInterrupt ? Effect.ignore(stopTurn(registries, job.child, job.requestId)) : Effect.void)));
+
+/**
+ * Stops an agent's own work for `requestId`: its prompt taken out of the queue while it waits behind another turn (a
+ * person's, a follow-up's), else its turn cancelled. Cancelling first would end that other turn instead. Answers
+ * whether the prompt was withdrawn.
+ */
+export const stopTurn = (registries: Reader, child: string, requestId: string): Effect.Effect<boolean, unknown> =>
+  Effect.flatMap(callHere(registries, AgentChannels.withdraw, { sessionId: child, requestId }), (withdrawn) =>
+    withdrawn ? Effect.succeed(true) : Effect.as(callHere(registries, AgentChannels.cancel, { sessionId: child }), false),
+  );
+
+/** Whether a call failed because the session it named is not there: the sessions plugin's own `NotFound`, not a channel no plugin serves. */
+export const sessionGone = (error: unknown): boolean => !(error instanceof HostError) && isCode("NotFound")(error);
 
 /** How an agent's turn ended, and its answer: what its call resolves to, and its notice tells. */
 export interface Settled {
@@ -281,7 +297,8 @@ export const delegateTool = (options: DelegateOptions): Tool<DelegateInput> => {
    */
   const waitOn = (job: Job, base: Omit<DelegateDetails, "ended">, context: ToolContext) =>
     Effect.gen(function* () {
-      const placed = yield* Effect.result(place(registries, job, true));
+      options.placing.set(job.child, job.requestId);
+      const placed = yield* Effect.result(place(registries, job, true)).pipe(Effect.ensuring(Effect.sync(() => options.placing.delete(job.child))));
       if (Result.isFailure(placed)) {
         const reason = failure("agent.prompt", placed.failure);
         if (yield* discard(registries, job.child, job.emptyAt)) return textResult(`No agent was started: ${reason}`);

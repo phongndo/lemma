@@ -1,12 +1,13 @@
 import * as path from "node:path";
 import { Deferred, Effect, Exit, Result, Schedule, Schema } from "effect";
 import { definePlugin, Events, Registries } from "@lemma/core";
-import { callHere, Channels, Interaction, Paths, serveChannel } from "@lemma/contracts";
-import { AgentRequestHook, ModelNotice, PromptSections } from "@lemma/agent";
+import { callHere } from "@lemma/cli";
+import { Channels, Interaction, Paths, serveChannel } from "@lemma/contracts";
+import { AgentChannels, AgentRequestHook, ModelNotice, PromptSections } from "@lemma/agent";
 import { SessionAppended, SessionChannels, SessionRemoved } from "@lemma/sessions";
 import { Tools } from "@lemma/tools";
 import { DelegateChannels } from "./channels.ts";
-import { DELEGATE, delegateTool, depthSlots, discard, failure, isCode, modesSection, outcomeOf, place } from "./delegate.ts";
+import { DELEGATE, delegateTool, depthSlots, discard, failure, isCode, modesSection, outcomeOf, place, sessionGone, stopTurn } from "./delegate.ts";
 import type { Settled } from "./delegate.ts";
 import { jobFiles, workingSection } from "./jobs.ts";
 import type { Job } from "./jobs.ts";
@@ -49,6 +50,8 @@ const RETELL = "15 seconds";
 
 /** How a background agent ended that its thread was deleted under, before how it ended could be read. */
 const GONE: Settled = { ended: "error", answer: "", error: "Its thread was deleted before it finished." };
+/** How a background agent ended that was stopped before its prompt was placed: dropped, or its prompt withdrawn. */
+const STOPPED: Settled = { ended: "cancelled", answer: "", error: "It was stopped before it started." };
 
 /** What a finished agent tells the thread that started it, and the line a transcript shows for it. */
 const noticeOf = (job: Job, settled: Settled, budget: number) => {
@@ -83,8 +86,10 @@ export default definePlugin({
     /** The background agents this instance waits on, and those whose notice it owes, by thread and notice. */
     const working = new Map<string, Job>();
     const owed = new Map<string, Job>();
-    /** The background agents waiting for a slot, by agent: what drops one before its prompt is placed (`delegate.drop`). */
+    /** The background agents waiting for a slot, by agent: what drops one before its prompt is placed (`delegate.stop`). */
     const queued = new Map<string, Deferred.Deferred<void>>();
+    /** The waited-on agents whose prompts are being placed, by agent: their request ids, which Stop withdraws. */
+    const placing = new Map<string, string>();
     const key = (job: Pick<Job, "parent" | "noticeId">) => `${job.parent}\0${job.noticeId}`;
     const requestId = (job: Pick<Job, "noticeId">) => `${SOURCE}:${job.noticeId}`;
 
@@ -121,23 +126,23 @@ export default definePlugin({
     const wait = (job: Job, dropped: Deferred.Deferred<void> | undefined) =>
       Effect.gen(function* () {
         const placed = yield* Effect.result(slotted(job, dropped));
-        const settled: Settled = Result.isFailure(placed)
-          ? isCode("NotFound")(placed.failure)
-            ? GONE
-            : { ended: "error", answer: "", error: `It could not start: ${failure("agent.prompt", placed.failure)}` }
-          : placed.success === "dropped"
-            ? { ended: "cancelled", answer: "", error: "It was stopped before it started." }
-            : // Its thread deleted as its turn ended, or unreadable, it still ends, and its thread is told.
-              yield* outcomeOf(registries, job.child, job.requestId, placed.success).pipe(
-                Effect.catch((error) =>
-                  Effect.succeed<Settled>(
-                    isCode("NotFound")(error) ? GONE : { ended: "error", answer: "", error: `How it ended could not be read: ${failure("sessions", error)}` },
-                  ),
-                ),
-              );
-        // Refused or dropped before its prompt was placed, an agent its call made that holds nothing goes, as a
+        const stopped = Result.isFailure(placed) ? isCode("Retracted")(placed.failure) : placed.success === "dropped";
+        const settled = yield* Effect.suspend((): Effect.Effect<Settled, unknown> => {
+          if (stopped) return Effect.succeed(STOPPED);
+          if (Result.isFailure(placed))
+            return Effect.succeed(
+              sessionGone(placed.failure) ? GONE : { ended: "error", answer: "", error: `It could not start: ${failure("agent.prompt", placed.failure)}` },
+            );
+          if (placed.success === "dropped") return Effect.succeed(STOPPED);
+          // Its thread deleted as its turn ended, it still ends, and its thread is told. Any other failure to read how it
+          // ended keeps its file, so a restart waits on it again.
+          return outcomeOf(registries, job.child, job.requestId, placed.success).pipe(
+            Effect.catch((error) => (sessionGone(error) ? Effect.succeed(GONE) : Effect.fail(error))),
+          );
+        });
+        // Refused or stopped before its prompt was placed, an agent its call made that holds nothing goes, as a
         // waited-on one does; one that holds work (a turn ran, or a person wrote to it) stays.
-        if (Result.isFailure(placed) ? !isCode("NotFound")(placed.failure) : placed.success === "dropped") yield* discard(registries, job.child, job.emptyAt);
+        if (stopped || (Result.isFailure(placed) && !sessionGone(placed.failure))) yield* discard(registries, job.child, job.emptyAt);
         const parent = yield* Effect.exit(told(job));
         // The thread it reports to is gone, or has heard already: nothing is owed.
         if (Exit.isFailure(parent) || parent.value) return yield* forget(job);
@@ -154,16 +159,28 @@ export default definePlugin({
         ).pipe(Effect.repeat({ schedule: Schedule.spaced(RETELL), while: owing }));
       });
 
-    const start = (job: Job) =>
+    /** Whether the agent's log has its prompt: placed before a restart, its turn runs on its own. */
+    const placedBefore = (job: Job) =>
+      Effect.map(Effect.exit(callHere(registries, SessionChannels.events, { sessionId: job.child })), (log) =>
+        Exit.isSuccess(log) ? log.value.some((event) => event.data.type === "message" && event.data.requestId === job.requestId) : false,
+      );
+
+    const droppable = (job: Job) => Effect.tap(Deferred.make<void>(), (dropped) => Effect.sync(() => queued.set(job.child, dropped)));
+
+    const start = (job: Job, reloaded = false) =>
       Effect.gen(function* () {
         if (working.has(key(job)) || owed.has(key(job))) return;
         working.set(key(job), job);
         // Droppable from the moment the call names it, until its slot comes.
-        const dropped = job.followUp === true ? undefined : yield* Deferred.make<void>();
-        if (dropped !== undefined) queued.set(job.child, dropped);
+        const fresh = reloaded || job.followUp === true ? undefined : yield* droppable(job);
         yield* owner.background(
           `agent ${job.child}`,
-          wait(job, dropped).pipe(Effect.catch((error) => Effect.logWarning(`tools.delegate: waiting on agent ${job.child}: ${String(error)}`))),
+          Effect.gen(function* () {
+            // One a restart left is droppable only if its prompt was never placed: a placed one's turn runs on its own,
+            // taking no slot, and Stop withdraws or cancels it instead.
+            const dropped = fresh ?? (reloaded && job.followUp !== true && !(yield* placedBefore(job)) ? yield* droppable(job) : undefined);
+            yield* wait(job, dropped);
+          }).pipe(Effect.catch((error) => Effect.logWarning(`tools.delegate: waiting on agent ${job.child}: ${String(error)}`))),
         );
       }).pipe(Effect.catch(() => Effect.void));
 
@@ -177,6 +194,7 @@ export default definePlugin({
         confirm: config.confirm,
         budget: config.maxOutputChars,
         slotsAt,
+        placing,
         background: {
           start: (job) =>
             Effect.andThen(
@@ -189,12 +207,22 @@ export default definePlugin({
 
     yield* owner.add(
       Channels,
-      serveChannel(DelegateChannels.drop, ({ sessionId }) =>
-        Effect.suspend(() => {
-          const dropped = queued.get(sessionId);
-          if (dropped === undefined) return Effect.succeed(false);
-          queued.delete(sessionId);
-          return Effect.as(Deferred.succeed(dropped, undefined), true);
+      serveChannel(DelegateChannels.stop, ({ sessionId }) =>
+        Effect.gen(function* () {
+          // Taken out of the queue and told in one step, so an interruption cannot leave it neither dropped nor placed.
+          const dropped = yield* Effect.uninterruptible(
+            Effect.suspend(() => {
+              const waiting = queued.get(sessionId);
+              if (waiting === undefined) return Effect.succeed(false);
+              queued.delete(sessionId);
+              return Effect.as(Deferred.succeed(waiting, undefined), true);
+            }),
+          );
+          if (dropped) return "dropped" as const;
+          const requestId = [...working.values()].find((job) => job.child === sessionId)?.requestId ?? placing.get(sessionId);
+          if (requestId !== undefined) return (yield* stopTurn(registries, sessionId, requestId)) ? ("withdrawn" as const) : ("cancelled" as const);
+          yield* callHere(registries, AgentChannels.cancel, { sessionId });
+          return "cancelled" as const;
         }),
       ),
     );
@@ -243,6 +271,6 @@ export default definePlugin({
     );
 
     // What a reload or a restart left: each background agent waited on again, its thread told when it finishes.
-    for (const job of yield* Effect.promise(() => files.all())) yield* start(job);
+    for (const job of yield* Effect.promise(() => files.all())) yield* start(job, true);
   },
 });

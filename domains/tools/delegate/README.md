@@ -4,7 +4,7 @@ The `delegate` tool: a task handed to an agent, a thread of its own that works
 for this one. Adds it to `Tools`, and a section to the agent's
 `PromptSections` naming the modes offered to agents and the thread's agents
 still at work; requires `Interaction` (to ask first, when configured) and
-`Paths` (where background agents are kept); serves `delegate.drop` (below). It
+`Paths` (where background agents are kept); serves `delegate.stop` (below). It
 reaches the sessions store, the agent, and the modes as a client does, through
 `sessions.*`, `agent.*`, and `modes.list`, so it requires none of them, and a
 reload of any does not restart it. Its web half (`./web`) shows agents in the
@@ -94,17 +94,20 @@ that ran to its end):
 Once the thread logged it (`SessionAppended`), the file goes; until then the
 notice is published again every 15 seconds, since one no agent hears (as
 while one reloads) is lost, and the agent places an id once. A reload or a
-restart waits on each kept agent again, placing its prompt if it never was; a
-thread that heard already is not told twice, and one deleted is told nothing.
-Its agents work on, threads of their own. An agent whose own thread is deleted,
-or cannot be read, as its turn ends still ends, as an error, and its thread is
-told so.
+restart waits on each kept agent again, placing its prompt if it never was (one
+whose log has it takes no slot: its turn runs on its own); a thread that heard
+already is not told twice, and one deleted is told nothing. Its agents work on,
+threads of their own. An agent whose own thread is deleted as its turn ends
+still ends, as an error, and its thread is told so; one whose ending cannot be
+read otherwise is kept, and waited on again after a restart.
 
-While it waits for a slot, a background agent can be dropped:
-`delegate.drop { sessionId }` (its row's Stop) never places its prompt,
-deletes its thread unless something was written to it meanwhile, and tells the
-thread it reports to that it was stopped (`ended="cancelled"`). It answers
-whether it dropped one: an agent at work is stopped with `agent.cancel`.
+`delegate.stop { sessionId }` (an agent's row's Stop) stops an agent as it is,
+answering which it did. One waiting for a slot is `dropped`: its prompt never
+placed, its thread deleted unless something was written to it meanwhile, and
+the thread it reports to told it was stopped (`ended="cancelled"`). One whose
+prompt waits behind another turn (a person's, a follow-up's) has it
+`withdrawn` (`agent.withdraw`), so that turn runs on. Any other has its turn
+`cancelled`.
 
 The `tools.delegate.agents` section, in a request that offers the tool, lists
 the modes offered to agents in the thread's directory, and the thread's
@@ -138,8 +141,8 @@ result's `details.emptyAt`).
   each (`ToolView.displays`), a script's too. A finished background agent's
   notice shows as the agent, finished, failed, or stopped
   (`ContextViews`), where its thread heard it. An agent at work, or a
-  background one queued, has Stop: a queued one is dropped (`delegate.drop`),
-  any other has its turn cancelled.
+  background one queued, has Stop (`delegate.stop`, or `agent.cancel` with no
+  host half to serve it).
 - **Above the composer**, while the thread's agents work: their pictures, each
   opening its agent, and how long they have worked ("Waiting on 2 agents"
   once the thread itself is idle).

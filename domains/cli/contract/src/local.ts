@@ -1,7 +1,7 @@
 import { Effect, Stream } from "effect";
 import type { Context } from "effect";
 import type { Registries } from "@lemma/core";
-import { answering, Channels, elementsOf, HostError, withChannel, withdrawnFrom } from "@lemma/contracts";
+import { answering, Channels, elementsOf, HostError, resultOf, withChannel, withdrawnFrom } from "@lemma/contracts";
 import type { ChannelDeclaration, ChannelStream } from "@lemma/contracts";
 
 /*
@@ -9,13 +9,21 @@ import type { ChannelDeclaration, ChannelStream } from "@lemma/contracts";
  * the channels it serves rather than the capability behind them: so the
  * command's plugin requires nothing, and does not restart when that domain's
  * plugin reloads, and a call or a stream goes on across the reload as a
- * client's does. A call is the runtime's `callHere`, made again on the
- * replacement when `repeatable`; a stream is opened again (`followHere`).
+ * client's does. A `repeatable` call is made again on the replacement
+ * (`withChannel`); a stream is opened again (`followHere`).
  */
 
-export { callHere } from "@lemma/contracts";
-
 type Reader = Context.Service.Shape<typeof Registries>;
+
+/** Calls the channel `declaration` names, with what answers for its id, as the transport serves a client's call; values are not encoded. */
+export const callHere = <Payload, Success>(
+  registries: Reader,
+  declaration: ChannelDeclaration<"call", Payload, Success>,
+  payload: Payload,
+): Effect.Effect<Success, unknown> =>
+  withChannel(registries, declaration.id, "call", ({ item }, left) =>
+    resultOf(item, payload, { left, withdrawn: withdrawnFrom(declaration.id, "call") }),
+  ) as Effect.Effect<Success, unknown>;
 
 const isWithdrawn = (error: unknown, id: string) => error instanceof HostError && error.code === "Withdrawn" && error.subject === id;
 

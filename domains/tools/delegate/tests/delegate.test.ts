@@ -6,7 +6,8 @@ import { TestClock } from "effect/testing";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { definePlugin, Events, Hooks, makeCore, PluginContext, Registries } from "@lemma/core";
 import type { Plugin } from "@lemma/core";
-import { callHere, Channels, Interaction, InteractionError, serveChannel } from "@lemma/contracts";
+import { callHere } from "@lemma/cli";
+import { Channels, Interaction, InteractionError, serveChannel } from "@lemma/contracts";
 import type { Channel } from "@lemma/contracts";
 import { pathsPlugin } from "@lemma/contracts/testing";
 import { AgentChannels, AgentError, AgentRequestHook, ModeChannels, ModelNotice, PromptSections } from "@lemma/agent";
@@ -51,20 +52,40 @@ interface State {
   release?: Deferred.Deferred<void>;
   /** How many notices to drop before the agent hears them, as while it reloads. */
   deaf?: number;
+  /** The request ids Stop asked to withdraw, and those of prompts waiting behind another turn ("behind"). */
+  readonly withdrawn: string[];
+  readonly behind: string[];
+  /** Sessions whose log, once their turn ended, cannot be read ("unreadable"). */
+  readonly unreadable: Set<string>;
+  /** Sessions whose turn runs from before the test (a restart cut the waiting off): asked again, it waits for it. */
+  running?: readonly string[];
   modes?: readonly { name: string; description?: string; model?: string; thinking?: string; use?: ("thread" | "agent")[]; source: "bundled" }[];
 }
 
-const fresh = (): State => ({ sessions: new Map(), placed: [], cancelled: [], deleted: [], forked: [], notices: [] });
+const fresh = (): State => ({
+  sessions: new Map(),
+  placed: [],
+  cancelled: [],
+  deleted: [],
+  forked: [],
+  notices: [],
+  withdrawn: [],
+  behind: [],
+  unreadable: new Set(),
+});
 
 /**
  * The sessions store, the agent, and the modes, faked as the channels a client reaches: a prompt makes a turn that
  * answers "did: <prompt>", runs until cancelled on "hang", waits for `release` on "wait", is refused on "refuse", and
- * deletes its session as it ends on "vanish". A cancel ends a hanging turn as cancelled and answers once it has, after
- * the prompt waiting on it, as the agent does.
+ * deletes its session as it ends on "vanish". On "behind" it waits queued behind another turn, unlogged, until
+ * withdrawn; on "unreadable" its log cannot be read once its turn ends. A cancel ends a hanging turn as cancelled and
+ * answers once it has, after the prompt waiting on it, as the agent does.
  */
 const fakes = (state: State) => {
   let made = 0;
   const hanging = new Map<string, { readonly turnId: string; readonly ended: Deferred.Deferred<void> }>();
+  const queuedBehind = new Map<string, Deferred.Deferred<void, AgentError>>();
+  for (const sessionId of state.running ?? []) hanging.set(sessionId, { turnId: "t-before", ended: Deferred.makeUnsafe<void>() });
   const append = (sessionId: string, data: EventData) => {
     const session = state.sessions.get(sessionId)!;
     const event: SessionEvent = {
@@ -104,7 +125,11 @@ const fakes = (state: State) => {
           [...state.sessions.values()].map((session) => session.info).filter((info) => cwd === undefined || info.cwd === cwd),
         ),
         serveChannel(SessionChannels.get, ({ sessionId }) => state.sessions.get(sessionId)?.info ?? Effect.fail(missing(sessionId))),
-        serveChannel(SessionChannels.events, ({ sessionId }) => state.sessions.get(sessionId)?.log ?? Effect.fail(missing(sessionId))),
+        serveChannel(SessionChannels.events, ({ sessionId }) =>
+          state.unreadable.has(sessionId)
+            ? Effect.fail(new SessionError({ sessionId, reason: "Io", message: "The disk did not answer" }))
+            : (state.sessions.get(sessionId)?.log ?? Effect.fail(missing(sessionId))),
+        ),
         serveChannel(SessionChannels.setTitle, ({ sessionId, title }) => {
           append(sessionId, { type: "title", title });
           return state.sessions.get(sessionId)!.info;
@@ -125,6 +150,16 @@ const fakes = (state: State) => {
             for (let i = 0; i < 20; i++) yield* Effect.yieldNow;
           }),
         ),
+        serveChannel(AgentChannels.withdraw, ({ sessionId, requestId }) =>
+          Effect.gen(function* () {
+            state.withdrawn.push(requestId);
+            const waiting = queuedBehind.get(requestId);
+            if (waiting === undefined) return false;
+            queuedBehind.delete(requestId);
+            yield* Deferred.fail(waiting, new AgentError({ sessionId, reason: "Retracted", message: "Withdrawn before a turn placed it" }));
+            return true;
+          }),
+        ),
         serveChannel(ModeChannels.list, () => ({ modes: state.modes ?? [], default: "work" })),
         serveChannel(AgentChannels.prompt, ({ sessionId, content, requestId, options, whenBusy }) =>
           Effect.gen(function* (): Effect.fn.Return<PromptOutcome, AgentError | SessionError> {
@@ -133,7 +168,18 @@ const fakes = (state: State) => {
             const text = content[0]?.type === "text" ? content[0].text : "";
             if (text === "refuse") return yield* new AgentError({ sessionId, reason: "NoModel", message: "Unknown model: mock/nope" });
             // Asked again with a request id it placed: waits on that turn, placing nothing.
-            if (session.log.some((event) => event.data.type === "message" && event.data.requestId === requestId)) return { kind: "placed" };
+            if (session.log.some((event) => event.data.type === "message" && event.data.requestId === requestId)) {
+              const turn = hanging.get(sessionId);
+              if (turn !== undefined) yield* Deferred.await(turn.ended);
+              return { kind: "placed" };
+            }
+            if (text === "behind") {
+              const waiting = yield* Deferred.make<void, AgentError>();
+              queuedBehind.set(requestId, waiting);
+              state.behind.push(requestId);
+              yield* Deferred.await(waiting);
+              return { kind: "placed" };
+            }
             state.placed.push({ sessionId, requestId, text, options, whenBusy });
             const turnId = `t${state.placed.length}`;
             append(sessionId, {
@@ -166,6 +212,7 @@ const fakes = (state: State) => {
             append(sessionId, { type: "step-end", turnId, stepId });
             append(sessionId, { type: "turn-end", turnId, reason: "done" });
             if (text === "vanish") state.sessions.delete(sessionId);
+            if (text === "unreadable") state.unreadable.add(sessionId);
             return { kind: "placed" };
           }),
         ),
@@ -645,7 +692,7 @@ describe("background agents, when things go wrong", () => {
     expect(section ?? "").not.toContain("Gone");
   });
 
-  it("are dropped while they wait for a slot: never placed, their empty thread deleted, and the thread told", async () => {
+  it("are dropped by Stop while they wait for a slot: never placed, their empty thread deleted, and the thread told", async () => {
     const state: State = { ...fresh(), release: Effect.runSync(Deferred.make<void>()) };
     caller(state);
     const answers = await withCore(
@@ -655,23 +702,96 @@ describe("background agents, when things go wrong", () => {
         const first = yield* Effect.forkChild(call({ prompt: "wait" }));
         while (state.placed.length === 0) yield* Effect.yieldNow;
         const queued = yield* call({ prompt: "never", title: "Queued", background: true }, { toolCallId: "c2" });
-        const drop = (sessionId: string) => callHere(registries, DelegateChannels.drop, { sessionId });
-        // One at work is not waiting for a slot: Stop cancels its turn instead.
-        const working = yield* drop(state.placed[0]!.sessionId);
-        const dropped = yield* drop(structured(queued).sessionId);
+        const stop = (sessionId: string) => callHere(registries, DelegateChannels.stop, { sessionId });
+        const dropped = yield* stop(structured(queued).sessionId);
         while (state.notices.length === 0) yield* Effect.yieldNow;
-        const again = yield* drop(structured(queued).sessionId);
+        // One at work has nothing queued to withdraw: its turn is cancelled.
+        const working = yield* stop(state.placed[0]!.sessionId);
         yield* Deferred.succeed(state.release!, undefined);
         yield* Fiber.join(first);
-        return { working, dropped, again };
+        return { dropped, working };
       }),
       { config: { maxDelegations: 1 } },
     );
-    expect(answers).toEqual({ working: false, dropped: true, again: false });
+    expect(answers).toEqual({ dropped: "dropped", working: "cancelled" });
+    expect(state.withdrawn).toEqual(["tools.delegate/c1"]);
+    expect(state.cancelled).toEqual(["a1"]);
     expect(state.placed.map((placed) => placed.text)).toEqual(["wait"]);
     expect(state.deleted).toEqual(["a2"]);
     expect(state.notices[0]).toMatchObject({ sessionId: "p", id: "c2", display: "Queued was stopped" });
     expect(state.notices[0]!.text).toContain('ended="cancelled"');
+  });
+
+  it("are stopped by withdrawing their prompt while it waits behind another turn, cancelling no turn", async () => {
+    const state = fresh();
+    caller(state);
+    const answer = await withCore(
+      state,
+      Effect.gen(function* () {
+        const registries = yield* Registries;
+        const started = yield* call({ prompt: "behind", title: "Behind", background: true });
+        while (state.behind.length === 0) yield* Effect.yieldNow;
+        const answer = yield* callHere(registries, DelegateChannels.stop, { sessionId: structured(started).sessionId });
+        while (state.notices.length === 0) yield* Effect.yieldNow;
+        return answer;
+      }),
+    );
+    expect(answer).toBe("withdrawn");
+    expect(state.cancelled).toEqual([]);
+    expect(state.deleted).toEqual(["a1"]);
+    expect(state.notices[0]).toMatchObject({ sessionId: "p", display: "Behind was stopped" });
+  });
+
+  it("placed before a restart take no slot when waited on again, and Stop stops their turn rather than dropping them", async () => {
+    const state: State = { ...fresh(), running: ["a7", "a8"] };
+    caller(state);
+    const dir = path.join(home, "delegate", "agents");
+    // Two agents at one depth, one slot: each one's prompt was placed, and its turn runs on.
+    for (const [child, call] of [
+      ["a7", "c7"],
+      ["a8", "c8"],
+    ] as const) {
+      const requestId = `tools.delegate/${call}`;
+      const message = { role: "user" as const, content: [{ type: "text" as const, text: "go" }], timestamp: 0 };
+      state.sessions.set(child, {
+        info: { id: child, cwd: "/work", parent: { sessionId: "p", toolCallId: call }, createdAt: 1, updatedAt: 1, lastSeq: 2, leaf: `${child}-2` },
+        log: [
+          { seq: 1, id: `${child}-1`, parent: null, at: 0, data: { type: "turn-start", turnId: "t-before" } },
+          { seq: 2, id: `${child}-2`, parent: `${child}-1`, at: 0, data: { type: "message", turnId: "t-before", requestId, message } },
+        ],
+      });
+      await jobFiles(dir).save({ parent: "p", child, prompt: "go", requestId, depth: 1, noticeId: call, title: child });
+    }
+    const answers = await withCore(
+      state,
+      Effect.gen(function* () {
+        const registries = yield* Registries;
+        for (let i = 0; i < 50; i++) yield* Effect.yieldNow;
+        const stop = (sessionId: string) => callHere(registries, DelegateChannels.stop, { sessionId });
+        return [yield* stop("a7"), yield* stop("a8")];
+      }),
+      { config: { maxDelegations: 1 } },
+    );
+    expect(answers).toEqual(["cancelled", "cancelled"]);
+    expect(state.cancelled).toEqual(["a7", "a8"]);
+    expect(state.deleted).toEqual([]);
+  });
+
+  it("keep their file, and tell nothing, when how they ended cannot be read: a restart waits on them again", async () => {
+    const state = fresh();
+    caller(state);
+    const dir = path.join(home, "delegate", "agents");
+    const files = await withCore(
+      state,
+      Effect.gen(function* () {
+        yield* call({ prompt: "unreadable", title: "Unread", background: true });
+        while (!state.unreadable.has("a1")) yield* Effect.yieldNow;
+        for (let i = 0; i < 200; i++) yield* Effect.yieldNow;
+        return yield* Effect.promise(() => jobFiles(dir).all());
+      }),
+    );
+    expect(state.notices).toEqual([]);
+    expect(files).toMatchObject([{ child: "a1", title: "Unread" }]);
   });
 
   it("tell the thread again until it logs the notice: one no agent heard is not lost", async () => {
