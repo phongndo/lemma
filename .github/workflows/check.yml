@@ -5,8 +5,8 @@ on:
   push:
     branches: [main]
   workflow_dispatch:
-  # Daily, every job: main reruns unchanged, so a failure there is a flake to fix (docs/development.md), and the
-  # nightly job runs its long seeded tests.
+  # Daily, every job: main reruns unchanged, so a flake shows (docs/development.md). The long seeded checks are the
+  # Soak workflow's.
   schedule:
     - cron: "23 7 * * *"
 
@@ -237,60 +237,3 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
-
-  # Nightly (or by hand): the tests with a fresh seed and many more property-test cases, and the performance checks.
-  nightly:
-    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    env:
-      # Each run new seeds; a re-run keeps them. The kernel's property test allows 60 s, which bounds its cases.
-      LEMMA_SEQUENCE_SEED: ${{ github.run_number }}
-      LEMMA_SEQUENCE_RUNS: "3000"
-      # The session log's simulation (crashes, torn writes, failing disks) and the agent's conversations.
-      LEMMA_SIM_SEED: ${{ github.run_number }}
-      LEMMA_SIM_RUNS: "20000"
-      LEMMA_CONVERSATION_SEED: ${{ github.run_number }}
-      LEMMA_CONVERSATION_RUNS: "500"
-      # The harness simulation (packages/sim): a window of seeds no earlier night ran, at the runner's full length.
-      LEMMA_HARNESS_SEED: ${{ github.run_number }}00000
-      LEMMA_HARNESS_RUNS: "2000"
-      LEMMA_HARNESS_TICKS: "200"
-      # The harness from the outside (scripts/torture.ts): a real host killed and stopped under a seeded workload.
-      LEMMA_TORTURE_SEED: ${{ github.run_number }}
-      LEMMA_TORTURE_SECONDS: "180"
-      LEMMA_BENCH_OUTPUT_DIR: /tmp/lemma-performance
-      LEMMA_TEST_ARTIFACTS: /tmp/lemma-test-evidence
-      # Shared runner timings are advisory; correctness/resource assertions fail.
-      LEMMA_PERF_ENFORCE: "0"
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: ./.github/actions/dev-shell
-      # The randomized tests (the core's, the session log's simulation, the agent's conversations, the harness
-      # simulation), many more of them;
-      # every test runs in the jobs above.
-      - run: nix develop -c pnpm test:random
-      - run: nix develop -c pnpm torture
-      - run: nix develop -c pnpm test:mutations
-      - run: nix develop -c pnpm perf:check
-      - if: failure()
-        run: >-
-          echo "::error title=Reproduce::git checkout $GITHUB_SHA &&
-          LEMMA_SEQUENCE_SEED=$LEMMA_SEQUENCE_SEED LEMMA_SEQUENCE_RUNS=$LEMMA_SEQUENCE_RUNS
-          LEMMA_SIM_SEED=$LEMMA_SIM_SEED LEMMA_SIM_RUNS=$LEMMA_SIM_RUNS
-          LEMMA_CONVERSATION_SEED=$LEMMA_CONVERSATION_SEED LEMMA_CONVERSATION_RUNS=$LEMMA_CONVERSATION_RUNS
-          LEMMA_HARNESS_SEED=$LEMMA_HARNESS_SEED LEMMA_HARNESS_RUNS=$LEMMA_HARNESS_RUNS LEMMA_HARNESS_TICKS=$LEMMA_HARNESS_TICKS
-          nix develop -c pnpm test:random (a failing property also prints its replay path; a failing simulation seed, its pnpm sim command);
-          the torture test's workload: LEMMA_TORTURE_SEED=$LEMMA_TORTURE_SEED LEMMA_TORTURE_SECONDS=$LEMMA_TORTURE_SECONDS nix develop -c pnpm torture"
-      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        if: always()
-        with:
-          name: performance
-          path: /tmp/lemma-performance
-          if-no-files-found: warn
-      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        if: failure()
-        with:
-          name: nightly-test-evidence
-          path: /tmp/lemma-test-evidence
-          if-no-files-found: ignore

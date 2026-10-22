@@ -7,7 +7,7 @@ import { saveWorldFailure } from "../src/artifacts.ts";
 
 /*
  * The harness under a workload and faults drawn from each seed (`World`): a safety phase with the faults on, a liveness
- * phase with them off, then the checker's audit of the log it left. `pnpm test` runs 100 seeds; the nightly job runs
+ * phase with them off, then the checker's audit of the log it left. `pnpm test` runs 100 seeds; the Soak workflow runs
  * many more (`LEMMA_HARNESS_RUNS`). A failure prints the seed and the command that replays it.
  *
  * Across the seeds, every kind of action, fault, and outcome must show up at least once: a kind that never does is a

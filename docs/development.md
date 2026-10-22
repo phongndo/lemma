@@ -46,9 +46,7 @@ together; when they drift apart, `nix develop -c pnpm test:durations` measures
 again. The `passed` job succeeds only when every
 other job does, so it is the one check a branch rule needs to require. Each commit on main also uploads its
 bundle size and benchmark numbers (`metrics-<sha>`). Daily it reruns
-every job on main, unchanged, so a flake shows, and runs the tests with fresh
-seeds and many more random cases, the mutation checks, and the performance
-checks; a failure prints the command that repeats it.
+every job on main, unchanged, so a flake shows.
 
 A red run means a change broke something, not that a runner was slow. CI
 tries a failed test again, twice, a second apart (`--retry.count=2
@@ -61,6 +59,14 @@ and on main the `flakes` job files it as an issue labelled `flaky`, or comments
 on its open one, with each runner it flaked on (`scripts/file-issue.ts`); a
 failure to file leaves the run passed. A flake is a race in the test or the
 code: fix it, and close its issue.
+
+The long checks are the Soak workflow's (`.github/workflows/soak.yml`), daily
+on main: the tests with fresh seeds and many more random cases, the torture
+test, the mutation checks, and the performance checks, each within a timeout of
+its own. What one finds is a bug to fix, not a change that broke: a check that
+fails, or hangs past its timeout, opens an issue labelled `soak`, or comments on
+its open one, with the command that replays it and the end of its output, and
+the run passes. It fails only when it cannot file what it found.
 
 `.github/workflows/bench.yml` compares the core's and the harness's benchmarks with a base
 revision (by hand, or on a pull request labelled `performance`); locally,
@@ -129,8 +135,8 @@ one with `nix develop .#browser -c pnpm exec playwright install chromium`, or
 set `LEMMA_CHROMIUM` to an existing executable.
 
 Randomized tests run a fixed number of seeded cases in `pnpm test` and many
-more nightly, through `pnpm test:random`; a failure prints the seed and path
-that replay it:
+more in the Soak workflow, through `pnpm test:random`; a failure prints the
+seed and path that replay it:
 
 | Test                                              | Checks                                                                                                                            | Variables (`_RUNS`, `_SEED`, `_PATH`) |
 | ------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------- |
@@ -154,7 +160,7 @@ simulated disk and the contract conformance suites.
 API key; `scripts/e2e.ts` starts it and a host for tests.
 
 `pnpm torture` tests the harness from the outside, under process faults
-(`scripts/torture.ts`, nightly):
+(`scripts/torture.ts`, in the Soak workflow):
 
 - **Setup.** A real host, the scripted provider over HTTP, and the CLI.
 - **Workload.** A seeded workload sends, retries, cancels, and withdraws

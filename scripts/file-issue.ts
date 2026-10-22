@@ -22,6 +22,7 @@ const { values } = parseArgs({
 /** The labels this files under, made on first use. */
 const LABELS: Readonly<Record<string, { readonly color: string; readonly description: string }>> = {
   flaky: { color: "fbca04", description: "A check that failed and then passed on a retry (scripts/flaky.ts)" },
+  soak: { color: "d93f0b", description: "What the Soak workflow's long checks found" },
 };
 
 const gh = (args: readonly string[], input?: string) => execFileSync("gh", args, { encoding: "utf8", input, stdio: ["pipe", "pipe", "inherit"] }).trim();

@@ -250,8 +250,8 @@ ending `max-steps`, a prompt answered `unknown`…) never happens across them,
 which would be a part of the space the generator stopped reaching. An action
 counts once it took effect (a checkout made, a plugin restarted), so one whose
 calls all fail is not taken for reached. The rarest kinds happen in about a
-tenth of runs, so any 100 seeds reach them all but about once in a thousand. The nightly
-job runs 2,000 seeds at 200 ticks from a window no earlier night ran (`pnpm
+tenth of runs, so any 100 seeds reach them all but about once in a thousand. The Soak
+workflow runs 2,000 seeds at 200 ticks from a window no earlier night ran (`pnpm
 test:random`). `tests/determinism.test.ts` checks a seed leaves the same disk
 in another process, starting no timer of the event loop's. Simulated runs name
 the date in UTC (`TZ`), so a run is the same on every machine. A seed that

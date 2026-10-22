@@ -1,0 +1,127 @@
+name: Soak
+
+# The long checks, daily on main and by hand; what one finds is filed as an issue rather than left as a red run on
+# main (docs/development.md).
+on:
+  schedule:
+    - cron: "23 7 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: soak
+  cancel-in-progress: false
+
+# Actions are pinned by commit, their version in the comment.
+jobs:
+  soak:
+    runs-on: ubuntu-latest
+    # Each check's own timeout, and the setup and the filing: a check that hangs is filed, as one that fails is.
+    timeout-minutes: 55
+    permissions:
+      contents: read
+      issues: write
+    defaults:
+      run:
+        # With pipefail, so a check's status survives the `tee` that keeps its output.
+        shell: bash
+    env:
+      # The seeds are the Seeds step's. The kernel's property test allows 60 s, which bounds its cases.
+      LEMMA_SEQUENCE_RUNS: "3000"
+      # The session log's simulation (crashes, torn writes, failing disks) and the agent's conversations.
+      LEMMA_SIM_RUNS: "20000"
+      LEMMA_CONVERSATION_RUNS: "500"
+      # The harness simulation (packages/sim), at the runner's full length.
+      LEMMA_HARNESS_RUNS: "2000"
+      LEMMA_HARNESS_TICKS: "200"
+      # The harness from the outside (scripts/torture.ts): a real host killed and stopped under a seeded workload.
+      LEMMA_TORTURE_SECONDS: "180"
+      LEMMA_BENCH_OUTPUT_DIR: /tmp/lemma-performance
+      LEMMA_TEST_ARTIFACTS: /tmp/lemma-test-evidence
+      # Shared runner timings are advisory; correctness/resource assertions fail.
+      LEMMA_PERF_ENFORCE: "0"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/dev-shell
+      # Each run new seeds, a re-run the same: past `pnpm test`'s own and every window Check's nightly job ran (its
+      # run numbers, under 1000), and for the harness simulation a window of 100000 no earlier run had.
+      - name: Seeds
+        run: |
+          seed=$((1000 + GITHUB_RUN_NUMBER))
+          {
+            echo "LEMMA_SEQUENCE_SEED=$seed"
+            echo "LEMMA_SIM_SEED=$seed"
+            echo "LEMMA_CONVERSATION_SEED=$seed"
+            echo "LEMMA_HARNESS_SEED=${seed}00000"
+            echo "LEMMA_TORTURE_SEED=$seed"
+          } >> "$GITHUB_ENV"
+      # Each check runs whether or not the one before failed, its output kept for the issue, within a timeout about half
+      # again what it takes. The randomized tests are the core's, the session log's simulation, the agent's
+      # conversations, and the harness simulation; every test runs in Check too.
+      - id: random
+        continue-on-error: true
+        timeout-minutes: 30
+        run: nix develop -c pnpm test:random 2>&1 | tee "$RUNNER_TEMP/random.log"
+      - id: torture
+        continue-on-error: true
+        timeout-minutes: 6
+        run: nix develop -c pnpm torture 2>&1 | tee "$RUNNER_TEMP/torture.log"
+      - id: mutations
+        continue-on-error: true
+        timeout-minutes: 4
+        run: nix develop -c pnpm test:mutations 2>&1 | tee "$RUNNER_TEMP/mutations.log"
+      - id: performance
+        continue-on-error: true
+        timeout-minutes: 5
+        run: nix develop -c pnpm perf:check 2>&1 | tee "$RUNNER_TEMP/performance.log"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: performance
+          path: /tmp/lemma-performance
+          if-no-files-found: warn
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: soak-test-evidence
+          path: /tmp/lemma-test-evidence
+          if-no-files-found: ignore
+      - name: File what failed
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RANDOM_OUTCOME: ${{ steps.random.outcome }}
+          TORTURE_OUTCOME: ${{ steps.torture.outcome }}
+          MUTATIONS_OUTCOME: ${{ steps.mutations.outcome }}
+          PERFORMANCE_OUTCOME: ${{ steps.performance.outcome }}
+        run: |
+          # check, its outcome, the command it ran, and what replays it
+          file() {
+            [[ "$2" == failure ]] || return 0
+            body="$RUNNER_TEMP/$1.md"
+            {
+              echo "\`$3\` failed in [Soak run $GITHUB_RUN_ID]($GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID), on main at ${GITHUB_SHA::7}."
+              echo
+              echo "Replay it:"
+              echo
+              echo '```sh'
+              echo "git checkout $GITHUB_SHA && $4"
+              echo '```'
+              echo
+              echo "Its output ended (the run's artifacts keep the evidence a failing seed saved):"
+              echo
+              echo '```text'
+              tail -n 80 "$RUNNER_TEMP/$1.log" | sed 's/\x1b\[[0-9;]*m//g'
+              echo '```'
+            } > "$body"
+            nix develop -c node scripts/file-issue.ts --label soak --title "Soak: $3 fails" --body-file "$body"
+            echo "::warning title=Soak::$3 failed; filed as an issue labelled soak"
+          }
+          file random "$RANDOM_OUTCOME" "pnpm test:random" "LEMMA_SEQUENCE_SEED=$LEMMA_SEQUENCE_SEED LEMMA_SEQUENCE_RUNS=$LEMMA_SEQUENCE_RUNS LEMMA_SIM_SEED=$LEMMA_SIM_SEED LEMMA_SIM_RUNS=$LEMMA_SIM_RUNS LEMMA_CONVERSATION_SEED=$LEMMA_CONVERSATION_SEED LEMMA_CONVERSATION_RUNS=$LEMMA_CONVERSATION_RUNS LEMMA_HARNESS_SEED=$LEMMA_HARNESS_SEED LEMMA_HARNESS_RUNS=$LEMMA_HARNESS_RUNS LEMMA_HARNESS_TICKS=$LEMMA_HARNESS_TICKS nix develop -c pnpm test:random   # a failing property also prints its replay path; a failing simulation seed, its pnpm sim command"
+          file torture "$TORTURE_OUTCOME" "pnpm torture" "LEMMA_TORTURE_SEED=$LEMMA_TORTURE_SEED LEMMA_TORTURE_SECONDS=$LEMMA_TORTURE_SECONDS nix develop -c pnpm torture"
+          file mutations "$MUTATIONS_OUTCOME" "pnpm test:mutations" "nix develop -c pnpm test:mutations"
+          file performance "$PERFORMANCE_OUTCOME" "pnpm perf:check" "LEMMA_PERF_ENFORCE=0 nix develop -c pnpm perf:check"
