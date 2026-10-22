@@ -1,8 +1,8 @@
 /** macOS writes app shortcuts with ⌘; Windows and Linux with Ctrl. */
-const isMac = typeof navigator !== "undefined" && /Mac|iPhone|iPad|iPod/.test(navigator.platform || navigator.userAgent);
+export const isMac = typeof navigator !== "undefined" && /Mac|iPhone|iPad|iPod/.test(navigator.platform || navigator.userAgent);
 
 /** What bindings read of a key press: a DOM `KeyboardEvent`, or another's in its terms (the desktop app's pages'). */
-export type KeyEvent = Pick<KeyboardEvent, "key" | "code" | "metaKey" | "ctrlKey" | "altKey" | "shiftKey">;
+export type KeyEvent = Pick<KeyboardEvent, "key" | "code" | "metaKey" | "ctrlKey" | "altKey" | "shiftKey"> & Partial<Pick<KeyboardEvent, "getModifierState">>;
 
 const modHeld = (event: Pick<KeyEvent, "metaKey" | "ctrlKey">, mac: boolean): boolean =>
   mac ? event.metaKey && !event.ctrlKey : event.ctrlKey && !event.metaKey;
@@ -54,7 +54,14 @@ const keyOf = (event: Pick<KeyboardEvent, "key" | "code">): string => {
   return event.key === " " ? "space" : event.key.toLowerCase();
 };
 
-const MODIFIERS = new Set(["meta", "control", "alt", "shift", "os", "capslock", "fn"]);
+const MODIFIERS = new Set(["meta", "control", "alt", "altgraph", "shift", "os", "capslock", "fn"]);
+
+/**
+ * Whether AltGr is held: off macOS it reports as Ctrl+Alt, and what it presses types a character (AltGr+A is ą on a
+ * Polish layout). Windows reports a real Ctrl+Alt as AltGr too on such layouts, so a binding is not refused for it: the
+ * keymap lets it type while focus is in a text field, and a shortcut is never recorded from it. On macOS ⌥ is Alt.
+ */
+export const typedWithAltGr = (event: KeyEvent, mac = isMac): boolean => !mac && event.getModifierState?.("AltGraph") === true;
 
 /**
  * The binding `event` presses, for recording a shortcut: `mod+shift+k`, `alt+arrowdown`, `/`.
@@ -62,6 +69,7 @@ const MODIFIERS = new Set(["meta", "control", "alt", "shift", "os", "capslock", 
  * for a symbol it is part of typing it (`?`).
  */
 export const bindingOf = (event: KeyEvent): string | undefined => {
+  if (typedWithAltGr(event)) return undefined;
   const key = keyOf(event);
   if (MODIFIERS.has(key) || key === "dead" || key === "unidentified") return undefined;
   const named = key.length > 1 || /^[a-z0-9]$/.test(key);
@@ -97,9 +105,8 @@ const SYMBOLS: Readonly<Record<string, string>> = {
  * Whether `event` presses `binding`. Shift must match for letters and when the
  * binding names it; for other keys it is whatever the layout needs to type
  * them (`/`, `?`). A symbol the key does not type with Shift held (`mod+shift+]`
- * types `}`) is known by the key's place, Shift counting. `mac`: whether `mod`
- * is ⌘, as on this platform when not said; the desktop app's main process,
- * matching its pages' keys, says.
+ * types `}`) is known by the key's place, Shift counting. `mac`: whether `mod` is ⌘, as on this platform when not said;
+ * the desktop app's main process, matching its pages' keys, says.
  */
 export const matchesKeys = (binding: string, event: KeyEvent, mac = isMac): boolean => {
   const { key, mod, shift, alt } = parse(binding);
@@ -111,12 +118,12 @@ export const matchesKeys = (binding: string, event: KeyEvent, mac = isMac): bool
 
 /**
  * Whether `event` holds down all of `binding` but its key: the modifiers it names, and no others, so that its key alone
- * would finish it (Ctrl alone, off macOS, for `mod+1`). A binding without a modifier is never held. `mac` as in
- * `matchesKeys`.
+ * would finish it (Ctrl alone, off macOS, for `mod+1`). A binding without a modifier is never held, nor one while AltGr
+ * is. `mac` as in `matchesKeys`.
  */
 export const holdsKeys = (binding: string, event: KeyEvent, mac = isMac): boolean => {
   const { mod, shift, alt } = parse(binding);
-  if (!mod && !shift && !alt) return false;
+  if ((!mod && !shift && !alt) || typedWithAltGr(event, mac)) return false;
   if (modHeld(event, mac) !== mod || event.shiftKey !== shift || event.altKey !== alt) return false;
   return mod || !(event.ctrlKey || event.metaKey);
 };

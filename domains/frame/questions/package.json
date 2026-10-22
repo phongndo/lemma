@@ -14,6 +14,7 @@
     "@lemma/contracts": "workspace:*",
     "@lemma/frame": "workspace:*",
     "@lemma/look": "workspace:*",
+    "@lemma/threads": "workspace:*",
     "@lemma/web": "workspace:*",
     "solid-js": "1.9.17"
   },

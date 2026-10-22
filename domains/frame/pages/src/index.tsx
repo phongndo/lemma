@@ -1,11 +1,15 @@
+import { createMemo, untrack } from "solid-js";
 import { RouteOutlet } from "@lemma/router-solid";
 import type { RouteFailure } from "@lemma/router-solid";
 import { Actions } from "@lemma/actions";
-import { MainRegion } from "@lemma/frame";
+import { inDesktop, MainRegion } from "@lemma/frame";
 import { NewThreadRoute } from "@lemma/sessions";
 import { SectionIds, SettingsRoute } from "@lemma/settings";
 import { Notify, Pages, Router, Slots, WebPlugins, defineWebPlugin } from "@lemma/web";
 import type { Page, SlotItem } from "@lemma/web";
+import { isMac } from "@lemma/web/keys";
+import { ahead, see } from "./history.ts";
+import type { Seen } from "./history.ts";
 import styles from "./pages.css?inline";
 
 /**
@@ -14,8 +18,8 @@ import styles from "./pages.css?inline";
  * with the plugin, at the same address; an address no route names says that.
  * Pages that share a component share its instance across their routes. A page
  * that throws fails alone: the rest of the app stays, the failure names its
- * plugin, and it is tried again on retry or the next navigation. Its keys go back
- * and forward through the addresses.
+ * plugin, and it is tried again on retry or the next navigation. Its actions go
+ * back and forward through the addresses.
  */
 export default defineWebPlugin({
   id: "frame.pages",
@@ -87,15 +91,28 @@ export default defineWebPlugin({
       />
     );
     slots.add(MainRegion, { id: "pages", phase: "default", component: Outlet });
-    // As Codex and T3 Code have them, in the desktop app too, which has no back button. Back stops at the first address
-    // the app showed in this tab, where the browser's back would leave the app.
+    // Keys for the desktop app, which has no back button: its browser view's (`apps/desktop/src/browser.ts`). In a
+    // browser they stay the browser's own. Back stops at the first address the app showed, where the browser's would
+    // leave the app.
+    // Whether the router's last move was a push, from its journal, which it writes before the location it lands on.
+    const pushed = () => {
+      const journal = untrack(router.journal);
+      for (let at = journal.length - 1; at >= 0; at--) {
+        const event = journal[at]!;
+        if (event.kind === "navigate") return event.action === "push";
+        if (event.kind === "moved") return false;
+      }
+      return false;
+    };
+    const history = createMemo((seen: Seen | undefined) => see(seen, router.location().index, pushed()), undefined);
     slots.add(Actions, {
       id: "pages.back",
       order: 30,
       title: "Go back",
       category: "View",
       keywords: ["history", "previous"],
-      keys: "mod+[",
+      ...(inDesktop ? { keys: isMac ? "mod+[" : "alt+arrowleft" } : {}),
+      whileTyping: true,
       when: () => router.location().index > 0,
       run: () => router.back(),
     });
@@ -105,7 +122,9 @@ export default defineWebPlugin({
       title: "Go forward",
       category: "View",
       keywords: ["history", "next"],
-      keys: "mod+]",
+      ...(inDesktop ? { keys: isMac ? "mod+]" : "alt+arrowright" } : {}),
+      whileTyping: true,
+      when: () => ahead(history()),
       run: () => router.go(1),
     });
   },

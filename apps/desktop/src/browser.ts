@@ -34,6 +34,8 @@ const forwarded = new WeakMap<WebContents, readonly string[]>();
  * keys a page hands on are the ones the app takes. `mod` is ⌘ on macOS, Ctrl elsewhere.
  */
 const presses = (binding: string, input: Input): boolean =>
+  // Off macOS, Ctrl+Alt may be AltGr typing in the page (ą), which a page's key event here cannot tell: never handed on.
+  !(!mac && input.control && input.alt) &&
   matchesKeys(binding, { key: input.key, code: input.code, metaKey: input.meta, ctrlKey: input.control, altKey: input.alt, shiftKey: input.shift }, mac);
 
 const toggleDevTools = (page: WebContents) => {

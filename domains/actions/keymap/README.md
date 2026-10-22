@@ -33,10 +33,14 @@ Keyboard says so). Requires `Slots`, `Dialogs` (`@lemma/frame`), and
   first in order for each binding, held back as above. It hears again
   (`undefined`) once a modifier changes, the window loses focus, or a key
   pressed with them runs nothing (`mod+c`); one that runs an action keeps the
-  hold, so `mod+1` then `mod+2` show throughout.
-- **Handled keys.** A key already handled (`defaultPrevented`), or typed while
-  composing text with an input method, is left alone. A key that runs an
-  action has its default prevented.
+  hold, so `mod+1` then `mod+2` show throughout. A modifier already handled
+  is held for something else: a quick-pick list showing (`createQuickHold`
+  in `@lemma/web/quick-pick`, a popover's menu) marks ⌘ handled for its own
+  `⌘1`, so no action hears it.
+- **Handled keys.** A key already handled (`defaultPrevented`), typed while
+  composing text with an input method, or typed with AltGr (which Windows
+  reports as Ctrl+Alt: AltGr+A types ą, not `mod+alt+a`) is left alone. A key
+  that runs an action has its default prevented.
 - **Replacing it.** Settings › Keyboard and the palette's shortcut hints read
   and write the `bindings` config of the plugin with this id (`KEYMAP_PLUGIN`,
   `overridesFrom`), so a replacement takes the id `actions.keymap` and reads

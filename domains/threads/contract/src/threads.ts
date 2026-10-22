@@ -519,8 +519,9 @@ export const ComposerFooter = defineSlot<Region>("composer.footer");
 export const ThreadStart = defineSlot<Region>("thread.start");
 
 /**
- * The thread card: an open thread's facts, in rows, floating over its chat's top right while the person keeps it open
- * (its header's switch, remembered): its mode, where it works, how full its context is, what it has cost. Each row is
+ * The thread card: an open thread's facts, in rows, floating over its chat's top right while the person has it open
+ * (its header's switch; closed at first, and as a menu of views opens there): its mode, where it works, how full its
+ * context is, what it has cost. Each row is
  * a plugin's, in order, drawn as a menu's rows are (`menu-item`, its icon in `menu-check`, `menu-label`, `menu-hint`);
  * a row that does something is a button, or a menu's trigger, of that class. Rows of a `group` sit together, groups in
  * the order their first rows come, set apart by a rule; a group whose rows draw nothing is left out. Changing a thread

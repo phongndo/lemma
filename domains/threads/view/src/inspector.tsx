@@ -184,6 +184,8 @@ export function createInspector(deps: {
   readonly focusChat: () => void;
   /** The key an action runs on, as Settings › Keyboard binds it, for a button's tip. */
   readonly keysOf: (action: string) => string | undefined;
+  /** A menu of views opened. */
+  readonly menuOpened: () => void;
 }): Inspector {
   const { threads, slots, router, keysOf } = deps;
   /** The tips' keys, read once for every tab. */
@@ -338,6 +340,7 @@ export function createInspector(deps: {
         triggerClass={props.triggerClass}
         placement={props.placement}
         controller={(given) => (handle = given)}
+        onOpen={deps.menuOpened}
       >
         {(close) => <ViewItems close={close} opener={props.opener} pick={props.pick} />}
       </Popover>

@@ -345,6 +345,7 @@ export const separate = async (): Promise<string> => {
   );
   // The worktree is a place in its project, never a project: its thread is the project's, and a new thread started from
   // it starts in the project, which offers the worktree to go on in.
+  await fork.click(".main-head .card-toggle", { timeout: 10_000 });
   await fork
     .waitForSelector(".thread-card [aria-label=Worktree]", { timeout: 10_000 })
     .catch(() => assert.fail("a thread in a worktree does not say so in its card"));
