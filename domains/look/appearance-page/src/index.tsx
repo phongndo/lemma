@@ -114,8 +114,13 @@ export default defineWebPlugin({
     // its entries again then keeps its rows drawn, and a menu open in one (`SettingsGroup.entries`).
     const previewRows = [{ text: "Preview look config", view: () => <Preview deps={deps} /> }];
     const schemeRow = { text: "Theme scheme color mode dark light system", view: () => <SchemePicker deps={deps} /> };
-    const lightRow = createMemo(() => ({ text: `Light theme palette ${titles("light")}`, view: () => <ThemeChoice deps={deps} scheme="light" /> }));
-    const darkRow = createMemo(() => ({ text: `Dark theme palette ${titles("dark")}`, view: () => <ThemeChoice deps={deps} scheme="dark" /> }));
+    const themeRow = (scheme: Scheme) => {
+      const named = createMemo(() => titles(scheme));
+      const label = scheme === "light" ? "Light" : "Dark";
+      return createMemo(() => ({ text: `${label} theme palette ${named()}`, view: () => <ThemeChoice deps={deps} scheme={scheme} /> }));
+    };
+    const lightRow = themeRow("light");
+    const darkRow = themeRow("dark");
     const accentRow = { text: "Accent color colour highlight primary buttons links", view: () => <AccentPicker deps={deps} /> };
     const textRows = [
       {
@@ -183,6 +188,19 @@ export default defineWebPlugin({
         description: "Shows each file's type as its own colored icon, wherever a file is named.",
       },
     ] as const;
+    // Made once each, offered while their plugin is there; a switch shows its plugin as it is, or as it last was.
+    const switchRows = switches.map((entry) => {
+      const found = createMemo<PluginStatus | undefined>((last) => pluginRow(entry.id) ?? last);
+      return {
+        id: entry.id,
+        text: entry.text,
+        view: () => (
+          <Show when={found()}>
+            {(plugin) => <PluginSwitch title={entry.title} description={entry.description} on={isOn(plugin())} onChange={(on) => turn(plugin(), on)} />}
+          </Show>
+        ),
+      };
+    });
 
     const section = SectionIds.appearance;
     slots.add(SettingsSections, {
@@ -235,25 +253,7 @@ export default defineWebPlugin({
       order: 40,
       section,
       title: "Code and files",
-      entries: () =>
-        switches.flatMap((entry) => {
-          const found = pluginRow(entry.id);
-          return found === undefined
-            ? []
-            : [
-                {
-                  text: entry.text,
-                  view: () => (
-                    <PluginSwitch
-                      title={entry.title}
-                      description={entry.description}
-                      on={isOn(pluginRow(entry.id) ?? found)}
-                      onChange={(on) => turn(pluginRow(entry.id) ?? found, on)}
-                    />
-                  ),
-                },
-              ];
-        }),
+      entries: () => switchRows.filter((row) => pluginRow(row.id) !== undefined),
     });
 
     const schemes: readonly { readonly value: SchemeChoice; readonly title: string }[] = [

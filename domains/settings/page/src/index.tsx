@@ -1,4 +1,4 @@
-import { For, Index, Show, createEffect, createMemo, createSignal, on, onCleanup, onMount, untrack } from "solid-js";
+import { For, Show, createEffect, createMemo, createSignal, on, onCleanup, onMount, untrack } from "solid-js";
 import { formatKeys, withKeys } from "@lemma/web/keys";
 import { shownKeysOf, Actions } from "@lemma/actions";
 import { filterGroups } from "./settings.ts";
@@ -27,24 +27,31 @@ const groupsOf = (slots: SlotsService, section: string): EntryGroup<SettingsEntr
   return merged.filter((group) => group.entries.length > 0);
 };
 
+/** The key an untitled group is drawn by: merged groups have one title each, and untitled ones merge too. */
+const UNTITLED = "\u0000";
+
 /**
- * Groups by place, so one whose entries are asked for again stays drawn, and rows by entry: an entry a group gives again
+ * Groups by title and rows by entry, so a group asked again stays drawn wherever it moves, and an entry given again
  * (`SettingsGroup.entries`) keeps its row, and whatever is open in it.
  */
 function Groups(props: { groups: readonly EntryGroup<SettingsEntry>[] }) {
+  const byTitle = createMemo(() => new Map(props.groups.map((group) => [group.title ?? UNTITLED, group])));
   return (
-    <Index each={props.groups}>
-      {(group) => (
-        <section class="settings-group">
-          <Show when={group().title}>
-            <h2 class="settings-group-title">{group().title}</h2>
-          </Show>
-          <div class="settings-rows">
-            <For each={group().entries}>{(entry) => entry.view()}</For>
-          </div>
-        </section>
-      )}
-    </Index>
+    <For each={[...byTitle().keys()]}>
+      {(key) => {
+        const group = () => byTitle().get(key);
+        return (
+          <section class="settings-group">
+            <Show when={group()?.title}>
+              <h2 class="settings-group-title">{group()?.title}</h2>
+            </Show>
+            <div class="settings-rows">
+              <For each={group()?.entries ?? []}>{(entry) => entry.view()}</For>
+            </div>
+          </section>
+        );
+      }}
+    </For>
   );
 }
 
@@ -269,15 +276,20 @@ export default defineWebPlugin({
               }
             >
               <Show when={results().length > 0} fallback={<p class="settings-empty">No settings match “{query().trim()}”</p>}>
-                <For each={results()}>
-                  {(found) => (
-                    <section class="settings-result">
-                      <button class="settings-result-title" onClick={() => open(found.section.id)} data-tip={`Open ${found.section.title}`}>
-                        <Contained slot={SettingsSections} item={found.section} component={found.section.icon} />
-                        {found.section.title}
-                      </button>
-                      <Groups groups={found.groups} />
-                    </section>
+                {/* By section, so a result stays drawn, and what is open in its rows, as the search or its groups change. */}
+                <For each={results().map((found) => found.section.id)}>
+                  {(id) => (
+                    <Show when={results().find((found) => found.section.id === id)}>
+                      {(found) => (
+                        <section class="settings-result">
+                          <button class="settings-result-title" onClick={() => open(found().section.id)} data-tip={`Open ${found().section.title}`}>
+                            <Contained slot={SettingsSections} item={found().section} component={found().section.icon} />
+                            {found().section.title}
+                          </button>
+                          <Groups groups={found().groups} />
+                        </section>
+                      )}
+                    </Show>
                   )}
                 </For>
               </Show>

@@ -200,26 +200,36 @@ export const separate = async (): Promise<string> => {
   await styled.click("[role=radiogroup][aria-label=Scheme] [role=radio]:has-text('Light')");
   await styled.click("button[aria-label='Light theme']");
   // A menu open in a settings row stays open when its group is asked for its rows again, as when the host answers a
-  // pick, or here a plugin adds a group to the section: a row the group gives again is kept.
-  await styled.evaluate(async () => {
-    document.querySelector("[role=menuitemradio]")!.setAttribute("data-check-kept", "");
-    const { SettingsGroups, SectionIds } = (await import("/src/ui/api.ts" as string)).api.contracts;
-    (window as any).removeLookGroup = (window as any).lookSlots.add(SettingsGroups, {
-      id: "check-recompute",
-      section: SectionIds.appearance,
-      order: 1_000,
-      title: "Check again",
-      entries: () => [{ text: "check again", view: () => document.createElement("p") }],
+  // pick, or here a plugin adds a group ahead of it: a row the group gives again is kept, in its section and in a search.
+  const keepsMenu = async (where: string) => {
+    await styled.waitForSelector("[role=menuitemradio]");
+    await styled.evaluate(async () => {
+      document.querySelector("[role=menuitemradio]")!.setAttribute("data-check-kept", "");
+      const { SettingsGroups, SectionIds } = (await import("/src/ui/api.ts" as string)).api.contracts;
+      (window as any).removeLookGroup = (window as any).lookSlots.add(SettingsGroups, {
+        id: "check-recompute",
+        section: SectionIds.appearance,
+        order: 5,
+        title: "Check again",
+        entries: () => [{ text: "check again theme palette", view: () => document.createElement("p") }],
+      });
     });
-  });
-  await drawn(styled);
-  assert.equal(await styled.locator("[role=menuitemradio][data-check-kept]").count(), 1, "a menu open in a settings row closed as its group was asked again");
-  await styled.evaluate(() => (window as any).removeLookGroup());
+    await drawn(styled);
+    assert.equal(await styled.locator("[role=menuitemradio][data-check-kept]").count(), 1, `a menu open in a settings row closed ${where}`);
+    await styled.evaluate(() => (window as any).removeLookGroup());
+    await drawn(styled);
+  };
+  await keepsMenu("as its section's groups were asked again");
   await styled.click("[role=menuitemradio]:has-text('Check day')");
   await styled.waitForFunction(() => document.documentElement.style.getPropertyValue("--bg") === "rgb(250, 240, 220)", undefined, { timeout: 5_000 });
   const day = await styled.evaluate(async () => (await import("/src/ui/api.ts" as string)).api.look.tokenColor("--bg-raised"));
   const [red, , blue] = [1, 3, 5].map((at) => Number.parseInt(day.slice(at, at + 2), 16)) as [number, number, number];
   assert(day !== "#ffffff" && red - blue > 15, `a light theme's raised surface does not follow its background: ${day}`);
+  await styled.fill("[aria-label='Search settings']", "light theme palette");
+  await styled.click(".settings-result button[aria-label='Light theme']");
+  await keepsMenu("in a search result as its section's groups were asked again");
+  await styled.keyboard.press("Escape");
+  await styled.fill("[aria-label='Search settings']", "");
   // The look changes with a stylesheet too (a web half's), once a linked one has loaded: what renderers redraw on.
   await styled.evaluate(async () => {
     const { onLookChange } = (await import("/src/ui/api.ts" as string)).api.look;
