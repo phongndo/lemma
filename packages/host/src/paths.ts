@@ -3,9 +3,12 @@ import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { Context } from "effect";
-import { DEEP_LINK_SCHEME, DEV_DEEP_LINK_SCHEME } from "@lemma/contracts";
+import { DEEP_LINK_SCHEME, DEV_DEEP_LINK_SCHEME } from "@lemma/contracts/addresses";
 import type { Paths } from "@lemma/contracts";
 import { profileHome, profileNameProblem, profileOf } from "@lemma/contracts/profiles";
+
+// Imports only what needs no build (types, and modules of no dependencies of their own): the web app's vite.config
+// reads it, before anything is built and without the `lemma-source` condition.
 
 export type PathsService = Context.Service.Shape<typeof Paths>;
 
