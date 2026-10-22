@@ -24,6 +24,16 @@ describe("identicon", () => {
     }
   });
 
+  it("fills a mark, not a dot or a block, in one of eight hues apart", () => {
+    for (let n = 0; n < 500; n++) {
+      const picture = identicon(`profile-${n}`);
+      const count = picture.cells.filter(Boolean).length;
+      expect(count).toBeGreaterThanOrEqual(5);
+      expect(count).toBeLessThanOrEqual(11);
+      expect(picture.hue % 45).toBe(0);
+    }
+  });
+
   it("spreads hues over the wheel", () => {
     const hues = Array.from({ length: 360 }, (_, n) => identicon(`agent-${n}`).hue);
     const sextants = new Set(hues.map((hue) => Math.floor(hue / 60)));

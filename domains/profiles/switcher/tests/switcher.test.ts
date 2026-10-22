@@ -101,6 +101,28 @@ describe("profiles.switcher", () => {
     expect(new Set(made.map((profile) => profile.port)).size).toBe(4);
   });
 
+  it("waits on another process making a profile, and takes back a lock one that stopped left", async () => {
+    const lock = path.join(root, "profiles", ".making");
+    await fs.mkdir(lock, { recursive: true });
+    const making = ok<ProfileInfo>(call("profiles.create", { name: "after" }));
+    // While the lock is held it makes nothing, over far more turns of the loop than making one takes.
+    for (let turn = 0; turn < 200; turn++) await fs.stat(root);
+    expect(await fs.readdir(path.join(root, "profiles"))).toEqual([".making"]);
+    await fs.rm(lock, { recursive: true });
+    expect((await making).name).toBe("after");
+    // Left by one killed while it held it, a minute ago and more.
+    await fs.mkdir(lock);
+    const old = new Date(Date.now() - 120_000);
+    await fs.utimes(lock, old, old);
+    expect((await ok<ProfileInfo>(call("profiles.create", { name: "stale" }))).name).toBe("stale");
+    expect(
+      await fs.stat(lock).then(
+        () => true,
+        () => false,
+      ),
+    ).toBe(false);
+  });
+
   it("opens a profile whose host runs: its address on its machine, its port, and its token", async () => {
     await ok(call("profiles.create", { name: "desk" }));
     await running("desk", 9001);

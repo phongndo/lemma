@@ -107,6 +107,13 @@ const profileRemove = defineBuiltin({
       if (isDefaultProfile(args.name)) return yield* usage(`"${args.name}" is the default profile, the home itself (${rootOf(io)}), which is never removed`);
       const problem = profileNameProblem(args.name);
       if (problem !== undefined) return yield* usage(problem);
+      // Not the profile this command runs in (an agent's shell, under that profile's host), whose host it would stop.
+      if (profileOf(io.env) === args.name)
+        return yield* new CliError({
+          code: "Current",
+          message: `This command runs in the profile "${args.name}": delete it from another profile`,
+          exit: ExitCode.failed,
+        });
       const profile = (yield* listProfiles(rootOf(io))).find((candidate) => candidate.name === args.name);
       if (profile === undefined) return { json: { removed: false, name: args.name }, text: `No profile "${args.name}"` };
       const doing = profile.running === undefined ? "Delete" : `Stop its host (pid ${profile.running.pid}) and delete`;

@@ -212,7 +212,8 @@ export const profileNameFor = (title: string, taken: Iterable<string>): string =
       .replace(/^-+|-+$/g, "")
       .slice(0, 36)
       .replace(/-+$/, "") || "profile";
-  // `default` and `core` are the home's own, which no folder can be.
+  // The default's names are the home's own, which no folder can be: `isDefaultProfile`'s (`@lemma/contracts/profiles`,
+  // which reads files, so not here, where a page runs this too).
   if (base !== "default" && base !== DEFAULT_PROFILE_TITLE.toLowerCase() && !used.has(base)) return base;
   for (let n = 2; ; n++) if (!used.has(`${base}-${n}`)) return `${base}-${n}`;
 };

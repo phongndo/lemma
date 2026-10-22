@@ -48,6 +48,8 @@ describe("profiles: separate Lemmas on this machine", () => {
     // No terminal to ask at: nothing is deleted without --force.
     expect(JSON.parse((await invoke(["profile", "remove", "desk", "--json"], root)).err).error.code).toBe("NotConfirmed");
     expect(existsSync(join(root, "profiles", "desk"))).toBe(true);
+    // Not from inside it: an agent's shell under the desk host would stop that host.
+    expect(JSON.parse((await invoke(["profile", "remove", "desk", "--force", "--json"], root, "/", { LEMMA_PROFILE: "desk" })).err).error.code).toBe("Current");
     expect(JSON.parse((await invoke(["profile", "remove", "desk", "--force", "--json"], root)).out)).toMatchObject({ removed: true, name: "desk" });
     expect(existsSync(join(root, "profiles", "desk"))).toBe(false);
   });

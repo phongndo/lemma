@@ -5,9 +5,9 @@ import { Channels, Paths, serveChannel } from "@lemma/contracts";
 import { readDiscovery } from "@lemma/contracts/discovery";
 import type { Discovery } from "@lemma/contracts/discovery";
 import { DEFAULT_PROFILE, isDefaultProfile, profileNameProblem } from "@lemma/contracts/profiles";
-import { createProfile, listProfiles, portOf, ProfileError, readAvatar, readTitle, removeProfile, writeAvatar, writeTitle } from "@lemma/profiles/local";
+import { createProfile, listProfiles, portOf, readAvatar, readTitle, removeProfile, writeAvatar, writeTitle } from "@lemma/profiles/local";
 import type { ProfileEntry } from "@lemma/profiles/local";
-import { ProfileChannels, PROFILES_CONTRACT, titleProblem } from "@lemma/profiles";
+import { ProfileChannels, PROFILES_CONTRACT } from "@lemma/profiles";
 import type { ProfileInfo } from "@lemma/profiles";
 
 /** Its row in config.jsonc's `plugins`. */
@@ -176,9 +176,7 @@ export default definePlugin({
       serveChannel(ProfileChannels.rename, ({ name, title }) =>
         Effect.gen(function* () {
           const entry = yield* find(name);
-          const wrong = titleProblem(title, { default: entry.name === DEFAULT_PROFILE });
-          if (wrong !== undefined) return yield* new ProfileError({ reason: "Title", message: wrong });
-          yield* writeTitle(entry.home, title);
+          yield* writeTitle(entry.home, title, { default: entry.name === DEFAULT_PROFILE });
           return yield* infoOf(entry);
         }),
       ),

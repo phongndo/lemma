@@ -36,7 +36,8 @@ const CELLS = [0, 1, 2, 3, 4];
 
 /**
  * A pattern: the seed's identicon (`identicon` in `@lemma/look`), as GitHub draws an account with no picture, its cells
- * in the seed's hue (`--profile-hue`), inset so a circle holds it whole.
+ * in the seed's hue (`--profile-hue`), inset so a circle holds it whole. Drawn apart from the `avatar` part's tile, which
+ * a circle would cut; its cells follow its seed (`<Show>`), as `<For>`'s rows are drawn once.
  */
 function PatternImage(props: { seed: string }) {
   const picture = createMemo(() => identicon(props.seed));
@@ -50,7 +51,13 @@ function PatternImage(props: { seed: string }) {
     >
       <For each={CELLS}>
         {(row) => (
-          <For each={CELLS}>{(column) => (filled(picture(), row, column) ? <rect x={column} y={row} width="1" height="1" fill="currentColor" /> : null)}</For>
+          <For each={CELLS}>
+            {(column) => (
+              <Show when={filled(picture(), row, column)}>
+                <rect x={column} y={row} width="1" height="1" fill="currentColor" />
+              </Show>
+            )}
+          </For>
         )}
       </For>
     </svg>
