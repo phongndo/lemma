@@ -35,8 +35,13 @@ const STARTUP_TIMEOUT_MS = 30_000;
 /** The host's own limit on stopping, and a margin: quitting sooner would cut off what it lets finish. */
 const SHUTDOWN_TIMEOUT_MS = HOST_SHUTDOWN_MS + 5_000;
 const REMOTE_TIMEOUT_MS = 10_000;
-/** The shared app icon (assets/brand); the dark tile reads on light and dark desktops alike. */
-const icon = fileURLToPath(new URL("../../../assets/brand/icon-dark.png", import.meta.url));
+/**
+ * The shared app icon (assets/brand); the dark tile reads on light and dark desktops alike. Run from a checkout, which
+ * has no `release.json` (a release's archive carries one at its root), the orange dev icon, so it is told apart from
+ * an installed Lemma.
+ */
+const release = existsSync(new URL("../../../release.json", import.meta.url));
+const icon = fileURLToPath(new URL(`../../../assets/brand/${release ? "icon-dark" : "icon-dev"}.png`, import.meta.url));
 
 /** What the app says of its own running (a host it started that exited, a start that failed): `<root>/logs/desktop.log`. */
 const logLine = (text: string) => {
