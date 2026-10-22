@@ -22,15 +22,8 @@ You help the user write. Keep their voice; say what you changed and why.
   plugin status), then `~/.lemma/modes/`, then `.lemma/modes/` in the
   session's directory; a later one of a name wins.
   Modes carry no code and only narrow what plugins offer, so a project's
-  load as its `AGENTS.md` and skills do.
-- **Before modes were named so** they were profiles: this plugin was
-  `agent.profiles`, and its row under that id still applies to it (`formerly`,
-  with a warning to rename the row). Modes in a `profiles` folder (yours, a
-  project's, or a package's `"resources": { "profiles": … }`) still load,
-  beneath those in `modes` of the same name, and it says once where to move
-  them. A thread from then logged its mode under `agent.profiles`, which it
-  reads too. The name `profile` now means another thing:
-  [profiles](../../profiles/README.md), a separate Lemma each.
+  load as its `AGENTS.md` and skills do. A mode is not a
+  [profile](../../../docs/configuration.md#profiles), which is a separate Lemma.
 - **Choosing.** The web half's Mode picker is on a new thread's start line
   (`ThreadStart`, first, before where it works): it sends the mode with the thread's
   first prompt
@@ -46,9 +39,7 @@ You help the user write. Keep their voice; say what you changed and why.
   Another mode is another thread. Switching mid-thread would change the
   system prompt and tools under a conversation the model began with others,
   and start the prompt cache over.
-- **What it does.** Its body is the `profile` section of the system prompt
-  (its id from before modes were named so: another would send every thread's
-  mode again, as a `prompt-update`). In
+- **What it does.** Its body is the `mode` section of the system prompt. In
   `AgentRequestHook`'s `select` phase, after every plugin has added its tools
   and sections, it keeps those its `tools` and `sections` allow: names, globs
   with `*`, or exclusions with `!`, applied in order, the last match deciding;
@@ -75,7 +66,7 @@ Three ship with Lemma: `work` (how to carry work through in a codebase), the
 default, with every tool and offered for both; `creator` (how to change Lemma
 itself: plugins, modes, and settings, checked with the `lemma` CLI), with every
 tool, for threads; and `explore`, for agents: it reads and searches (`read`,
-`grep`, `find`, `bash`), changes nothing, and reports what it found. With this plugin off,
+`grep`, and `find` only), changes nothing, and reports what it found. With this plugin off,
 the agent has its base prompt alone: what makes it a coding agent is a mode.
 `work`'s first line asks the model to carry a task through: a reminder to
 persist, one of three (with using tools and planning) that together raised

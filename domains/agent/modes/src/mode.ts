@@ -1,4 +1,4 @@
-import { MODES_PLUGIN, MODES_PLUGIN_FORMERLY } from "@lemma/agent";
+import { MODES_PLUGIN } from "@lemma/agent";
 import type { ModeUse } from "@lemma/agent";
 import type { SessionEvent } from "@lemma/sessions";
 
@@ -114,15 +114,14 @@ export const keeps = (patterns: readonly string[] | undefined, name: string): bo
 export const RENAMED: Readonly<Record<string, string>> = { coding: "work", general: "work" };
 
 /**
- * A thread's mode, as its first turn logged it (`turn-start`'s `plugins["agent.modes"]`, or, in a thread from before
- * modes were named so, `plugins["agent.profiles"]`): it is chosen for the thread and kept from then on. `undefined`
- * before its first turn; no `name` when that turn logged none (a thread from before modes were kept, or a client that
- * sent none), which then has the default.
+ * A thread's mode, as its first turn logged it (`turn-start`'s `plugins["agent.modes"]`): it is chosen for the thread
+ * and kept from then on. `undefined` before its first turn; no `name` when that turn logged none (a thread from before
+ * modes were kept, or a client that sent none), which then has the default.
  */
 export const firstMode = (branch: readonly SessionEvent[]): { readonly name?: string } | undefined => {
   for (const event of branch) {
     if (event.data.type !== "turn-start") continue;
-    const chosen = event.data.plugins?.[MODES_PLUGIN] ?? event.data.plugins?.[MODES_PLUGIN_FORMERLY];
+    const chosen = event.data.plugins?.[MODES_PLUGIN];
     return typeof chosen === "string" ? { name: chosen } : {};
   }
   return undefined;

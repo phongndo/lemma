@@ -1,31 +1,29 @@
 import { Effect } from "effect";
 import { table } from "@lemma/cli";
-import { DEFAULT_PROFILE, profileNameProblem, profileOf } from "@lemma/contracts/profiles";
+import { DEFAULT_PROFILE, isDefaultProfile, profileNameProblem, profileOf } from "@lemma/contracts/profiles";
 import { buildKind, KINDS } from "@lemma/host/paths";
 import { profileTitle } from "@lemma/profiles";
 import { createProfile, listProfiles, portOf, readTitle, removeProfile } from "@lemma/profiles/local";
 import { CliError, defineBuiltin, ExitCode, usage } from "../command.ts";
-import type { Builtin, Io } from "../command.ts";
+import type { Builtin } from "../command.ts";
+import { confirm } from "../confirm.ts";
 import { rootOf } from "../connect.ts";
+import { stopHost } from "./lifecycle.ts";
 
 /*
- * Profiles: separate Lemmas on this machine, each a home and a host of its own (`@lemma/contracts/profiles`). These
- * read and write the profiles' folders and need no host; `--profile <name>` (or `LEMMA_PROFILE`) points every other
- * command at one.
+ * Profiles (docs/configuration.md#profiles). These read and write the profiles' folders and need no host running
+ * (`profile remove` stops the profile's own first); `--profile <name>` (or `LEMMA_PROFILE`) points every other command
+ * at one.
  */
 
 const PROFILES = "Profiles: separate Lemmas on this machine (--profile picks one)";
-
-/** Asks at the terminal whether to go on; no when there is none. */
-const confirm = (io: Io, question: string): Effect.Effect<boolean> =>
-  io.ask === undefined ? Effect.succeed(false) : Effect.promise(() => io.ask!(`${question} [y/N] `, false).then((answer) => /^y(es)?$/i.test(answer.trim())));
 
 const profileList = defineBuiltin({
   path: ["profile"],
   group: PROFILES,
   summary: "The profiles on this machine: the default (the home's own) and those made, each with its port and whether its host runs",
   description:
-    "A profile is a separate Lemma: its own plugins, config, look, threads, and logins, served by its own host, at a port of its own. Nothing is shared between them. --profile <name> (or LEMMA_PROFILE) points any command at one, as `lemma --profile desk serve` starts its host.",
+    "A profile is a separate Lemma, a home and a host of its own, sharing nothing with another. --profile <name> (or LEMMA_PROFILE) points any command at one, as `lemma --profile desk serve` starts its host; --profile core is the default.",
   run: ({ io }) =>
     Effect.gen(function* () {
       const using = profileOf(io.env) ?? DEFAULT_PROFILE;
@@ -101,31 +99,27 @@ const profileRemove = defineBuiltin({
   group: PROFILES,
   summary: "Delete a profile and everything in its home: its threads, config, plugins, and logins",
   description:
-    "Its host must be stopped first (lemma --profile <name> stop). It asks at a terminal, and otherwise refuses unless --force. A user service for it (lemma --profile <name> service) is not removed: uninstall that first.",
+    "Its host, if one runs, is stopped first, whatever it is doing and whoever started it, as Settings › Profiles does. It asks at a terminal, and otherwise refuses unless --force. A user service for it (lemma --profile <name> service) is not removed: uninstall that first.",
   args: [{ name: "name", description: "The profile's name", required: true }],
-  flags: { force: { type: "boolean", description: "Delete it without asking" } },
+  flags: { force: { type: "boolean", description: "Stop its host and delete it without asking" } },
   run: ({ io, args, flags }) =>
     Effect.gen(function* () {
-      if (args.name === DEFAULT_PROFILE) return yield* usage(`"${DEFAULT_PROFILE}" is the home itself (${rootOf(io)}), which is never removed`);
+      if (isDefaultProfile(args.name)) return yield* usage(`"${args.name}" is the default profile, the home itself (${rootOf(io)}), which is never removed`);
       const problem = profileNameProblem(args.name);
       if (problem !== undefined) return yield* usage(problem);
       const profile = (yield* listProfiles(rootOf(io))).find((candidate) => candidate.name === args.name);
       if (profile === undefined) return { json: { removed: false, name: args.name }, text: `No profile "${args.name}"` };
-      if (profile.running !== undefined)
-        return yield* new CliError({
-          code: "Running",
-          message: `The profile "${args.name}" has a host running (pid ${profile.running.pid}): stop it first, with \`lemma --profile ${args.name} stop\``,
-          exit: ExitCode.failed,
-        });
+      const doing = profile.running === undefined ? "Delete" : `Stop its host (pid ${profile.running.pid}) and delete`;
       if (
         !flags.force &&
-        !(yield* confirm(io, `Delete the profile "${args.name}" and everything in ${profile.home}: its threads, config, plugins, and logins?`))
+        !(yield* confirm(io, `${doing} the profile "${args.name}" and everything in ${profile.home}: its threads, config, plugins, and logins?`))
       )
         return yield* new CliError({
           code: "NotConfirmed",
           message: `Nothing was deleted; --force deletes "${args.name}" without asking`,
           exit: ExitCode.failed,
         });
+      if (profile.running !== undefined) yield* stopHost({ ...io, env: { ...io.env, LEMMA_PROFILE: args.name } }, profile.running, true);
       yield* removeProfile(rootOf(io), args.name).pipe(
         Effect.mapError(
           (error) => new CliError({ code: error.reason === "Write" ? "WriteFailed" : error.reason, message: error.message, exit: ExitCode.failed }),

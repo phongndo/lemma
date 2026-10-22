@@ -5,7 +5,7 @@ import type { CliCommandInfo, CommandSpec } from "@lemma/cli";
 import { callChannel } from "@lemma/client";
 import { shellWord } from "@lemma/contracts";
 import { readEnvironments } from "@lemma/contracts/discovery";
-import { DEFAULT_PROFILE, profileNameProblem, profileOf } from "@lemma/contracts/profiles";
+import { isDefaultProfile, profileNameProblem, profileOf } from "@lemma/contracts/profiles";
 import { listProfiles } from "@lemma/profiles/local";
 import packageJson from "../package.json" with { type: "json" };
 import { hostCommands } from "./commands/host.ts";
@@ -286,7 +286,7 @@ const complete = (io: Io, globals: Globals, words: readonly string[]): Effect.Ef
  */
 const withProfile = (io: Io, globals: Pick<Globals, "profile">): Io | CliError => {
   const profile = globals.profile ?? profileOf(io.env);
-  const problem = profile === undefined || profile === DEFAULT_PROFILE ? undefined : profileNameProblem(profile);
+  const problem = profile === undefined || isDefaultProfile(profile) ? undefined : profileNameProblem(profile);
   if (problem !== undefined) return usage(`${globals.profile === undefined ? "LEMMA_PROFILE: " : "--profile: "}${problem}`);
   return globals.profile === undefined ? io : { ...io, env: { ...io.env, LEMMA_PROFILE: globals.profile } };
 };

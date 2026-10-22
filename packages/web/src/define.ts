@@ -44,8 +44,6 @@ export interface WebPluginContext<Config> extends Pick<PlainSetup<Config>, (type
 export interface WebPluginDefinition<Requires extends Capabilities, Provides extends Capabilities, Config> {
   readonly id: string;
   readonly version?: string;
-  /** Ids it had before a rename, as its host half's (`PluginManifest.formerly` in `@lemma/core`): rows under them apply to it. */
-  readonly formerly?: readonly string[];
   readonly config?: Schema.Codec<Config, any>;
   /**
    * Its stylesheet: applied while it runs (in the `plugins` cascade layer,
@@ -213,7 +211,6 @@ export function defineWebPlugin<const Requires extends Capabilities = {}, const 
     {
       id: definition.id,
       ...(definition.version === undefined ? {} : { version: definition.version }),
-      ...(definition.formerly === undefined ? {} : { formerly: definition.formerly }),
       ...(definition.uses === undefined ? {} : { uses: definition.uses }),
       ...(definition.implements === undefined ? {} : { implements: definition.implements }),
       ...(definition.config === undefined ? {} : { config: definition.config }),

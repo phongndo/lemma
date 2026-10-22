@@ -838,10 +838,10 @@ describe("finding tools", () => {
   });
 
   it("settles that section once a request's tools are chosen: it goes with codemode, or with the last tool it names", async () => {
-    // As a thread's profile keeps some of the tools on offer.
+    // As a thread's mode keeps some of the tools on offer.
     let keeps = (_: string) => true;
-    const profile = definePlugin({
-      id: "profile-fake",
+    const mode = definePlugin({
+      id: "mode-fake",
       layer: Layer.effectDiscard(
         Effect.flatMap(PluginContext, (owner) =>
           owner.on(AgentRequestHook, (draft, next) => next({ ...draft, tools: draft.tools.filter((tool) => keeps(tool.spec.name)) }), { phase: "select" }),
@@ -851,7 +851,7 @@ describe("finding tools", () => {
     const sent = await Effect.runPromise(
       Effect.scoped(
         Effect.gen(function* () {
-          const core = yield* coreOf([browser, profile]);
+          const core = yield* coreOf([browser, mode]);
           return yield* core.run(
             Effect.gen(function* () {
               const hooks = yield* Hooks;

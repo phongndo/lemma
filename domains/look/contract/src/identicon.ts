@@ -1,7 +1,8 @@
 /**
  * An identicon, as GitHub draws an account's default avatar: a 5×5 grid of cells, its two left columns mirrored on the
- * right, the cells and the color both from a hash of a seed (an agent's session id). The same seed draws the same
- * picture everywhere, with nothing stored. Pure, so the `avatar` part's default and its replacements share it.
+ * right, the cells and the color both from a hash of a seed (an agent's session id, a profile's name). The same seed
+ * draws the same picture everywhere, with nothing stored. Pure, so whatever draws one shares it: the `avatar` part's
+ * default and its replacements, and a profile's pattern.
  */
 export interface Identicon {
   /** The cells of the left three columns, row by row (15): the right two mirror the left two. */

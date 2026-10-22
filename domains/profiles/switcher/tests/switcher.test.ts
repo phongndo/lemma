@@ -72,11 +72,33 @@ describe("profiles.switcher", () => {
     expect(made.port).toBeGreaterThanOrEqual(7534);
   });
 
-  it("refuses to make a profile twice, or one named default or no name at all", async () => {
+  it("refuses to make a profile twice, or one named default, core, or no name at all, or shown as Core", async () => {
     await ok(call("profiles.create", { name: "work" }));
     expect(await failure(call("profiles.create", { name: "work" }))).toMatchObject({ reason: "Exists" });
-    expect(await failure(call("profiles.create", { name: "default" }))).toMatchObject({ reason: "Name" });
-    expect(await failure(call("profiles.create", { name: "../up" }))).toMatchObject({ reason: "Name" });
+    for (const name of ["default", "core", "../up"]) expect(await failure(call("profiles.create", { name }))).toMatchObject({ reason: "Name" });
+    expect(await failure(call("profiles.create", { name: "other", title: "core" }))).toMatchObject({ reason: "Title" });
+    expect(await failure(call("profiles.rename", { name: "work", title: "Core" }))).toMatchObject({ reason: "Title" });
+    // The default may be shown as Core again, and opened as core, in any case.
+    await ok(call("profiles.rename", { name: "default", title: "Core" }));
+    await running(undefined, 7433);
+    expect(await ok<OpenedProfile>(call("profiles.open", { name: "Core" }, { profile: "work" }))).toMatchObject({ name: "default", port: 7433 });
+  });
+
+  it("gives profiles made at once a port each", async () => {
+    const made = await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const core = yield* makeCore([pathsPlugin(root, { root }), switcher]);
+          const registries = yield* core.run(Registries);
+          return yield* Effect.forEach(
+            ["a", "b", "c", "d"],
+            (name) => callServed(registries, "profiles.create", { name }) as Effect.Effect<ProfileInfo, unknown>,
+            { concurrency: "unbounded" },
+          );
+        }),
+      ),
+    );
+    expect(new Set(made.map((profile) => profile.port)).size).toBe(4);
   });
 
   it("opens a profile whose host runs: its address on its machine, its port, and its token", async () => {

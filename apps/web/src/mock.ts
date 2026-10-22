@@ -559,7 +559,7 @@ export const createMockHost = (): Host => {
     },
     "mcp.servers": { provides: ["lemma/Mcp"], requires: ["lemma/Paths"] },
     "context.compaction": { requires: ["lemma/Sessions", "lemma/Llm"] },
-    "agent.modes": { requires: ["lemma/Paths"], contributes: [{ name: "lemma/agent.sections", items: 1, keys: ["profile"] }] },
+    "agent.modes": { requires: ["lemma/Paths"], contributes: [{ name: "lemma/agent.sections", items: 1, keys: ["mode"] }] },
     "profiles.switcher": { requires: ["lemma/Paths"] },
     "context.project": { requires: ["lemma/Paths"], contributes: [{ name: "lemma/agent.sections", items: 1, keys: ["project-context"] }] },
     "workspace.local": { provides: ["lemma/Workspace"], requires: ["lemma/Paths"] },

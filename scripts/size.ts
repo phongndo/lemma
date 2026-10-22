@@ -16,8 +16,7 @@ const BUDGET: Readonly<Record<string, number>> = {
   // channel answers (channels.ts): a stream's elements sent a chunk at a time, and a request's errors made only when it
   // fails, which no plugin could do for the others.
   "packages/contracts": 2_700,
-  // Raised from 2,800 for profiles (a host refuses a profile never made, and keeps its port) and renamed plugins (a row
-  // under a former id moves to the plugin's as it is written): both are the host's own, before or beneath any plugin.
+  // Raised from 2,800 for profiles: a host refuses a profile never made, and keeps its port, before any plugin runs.
   // Its launch is JavaScript (start.mjs, launch.mjs: the compile cache, Effect's bundle, its Node.js flags), which
   // loads before the compile cache is on, and is counted with the rest. Raised from 3,000 to keep an installed Lemma and
   // a checkout apart (paths.ts: each one's home and port, the other's home refused, what its tools are told of its own),

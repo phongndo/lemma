@@ -2,11 +2,10 @@ import { Schema } from "effect";
 import { appUrl, deepLinkPath, DEEP_LINK_SCHEME, defineChannel } from "@lemma/contracts";
 
 /*
- * Profiles: the Lemmas on one machine, each a home of its own (its plugins, config, threads, and logins) served by a
- * host of its own (`@lemma/contracts/profiles` says where they live). A host serves the list of its machine's
- * profiles, and opens one, starting its host when none runs, so a client reaches it there: from a page, the same
- * machine at that profile's port. Nothing crosses between profiles but this: what one profile's host answers of the
- * others.
+ * Profiles: the Lemmas on one machine (docs/configuration.md#profiles), each a home and a host of its own
+ * (`@lemma/contracts/profiles` says where they live). A host serves the list of its machine's profiles, and opens one,
+ * starting its host when none runs, so a client reaches it there: from a page, the same machine at that profile's
+ * port. Nothing crosses between profiles but this: what one profile's host answers of the others.
  */
 
 /**
@@ -34,16 +33,24 @@ export type AvatarChange = typeof AvatarChange.Type;
 /** The most a profile's picture may hold, decoded: a client shrinks one to a small square first. */
 export const MAX_PICTURE_BYTES = 512 * 1024;
 
-/** What the default profile is called until it is given another name. */
+/**
+ * What the default profile is called until it is given another name. It is the default's alone, whatever it is
+ * called: `--profile core` names it (`isDefaultProfile` in `@lemma/contracts/profiles`).
+ */
 export const DEFAULT_PROFILE_TITLE = "Core";
 
 /** The longest name a profile can be given. */
 export const MAX_TITLE_LENGTH = 60;
 
-/** Why `title` cannot be a profile's name as people read it, or undefined when it can: any text on one line, `MAX_TITLE_LENGTH` at most. */
-export const titleProblem = (title: string): string | undefined => {
+/**
+ * Why `title` cannot be a profile's name as people read it, or undefined when it can: any text on one line,
+ * `MAX_TITLE_LENGTH` at most; for `profile`, when said, not `DEFAULT_PROFILE_TITLE` unless it is the default.
+ */
+export const titleProblem = (title: string, profile?: Pick<ProfileInfo, "default">): string | undefined => {
   if ([...title].some((char) => char < " " || char === "\u007f")) return "A profile's name is one line of text";
   if (title.trim().length > MAX_TITLE_LENGTH) return `A profile's name is at most ${MAX_TITLE_LENGTH} characters`;
+  if (profile?.default === false && title.trim().toLowerCase() === DEFAULT_PROFILE_TITLE.toLowerCase())
+    return `${DEFAULT_PROFILE_TITLE} is the default profile's name`;
   return undefined;
 };
 
@@ -205,8 +212,8 @@ export const profileNameFor = (title: string, taken: Iterable<string>): string =
       .replace(/^-+|-+$/g, "")
       .slice(0, 36)
       .replace(/-+$/, "") || "profile";
-  // `default` is the home's own, which no folder can be.
-  if (base !== "default" && !used.has(base)) return base;
+  // `default` and `core` are the home's own, which no folder can be.
+  if (base !== "default" && base !== DEFAULT_PROFILE_TITLE.toLowerCase() && !used.has(base)) return base;
   for (let n = 2; ; n++) if (!used.has(`${base}-${n}`)) return `${base}-${n}`;
 };
 

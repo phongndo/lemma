@@ -1119,7 +1119,7 @@ export function runTurn(services: TurnServices, settings: TurnSettings, input: T
             at.pending.filter((call) => at.started.has(call.id) && !repeatable.has(call.name)).map((call) => [call.id, output(call.id)] as const),
           );
           // Held to what the step's request offered, as logged, as a call made before the restart was: a tool a
-          // profile or another handler took out is not there for it now either. A log from before the `nested` tools
+          // mode or another handler took out is not there for it now either. A log from before the `nested` tools
           // offered were logged has every one listed now.
           const logged = requestState(yield* branchNow);
           const declared = (logged.tools ?? []).map((spec) => spec.name);

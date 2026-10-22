@@ -14,6 +14,7 @@ import { SHUTDOWN_TIMEOUT_MS } from "@lemma/host/limits";
 import { buildKind, hostFiles, otherHomeProblem } from "@lemma/host/paths";
 import { CliError, defineBuiltin, ExitCode, usage } from "../command.ts";
 import type { Builtin, Globals, Io } from "../command.ts";
+import { confirm } from "../confirm.ts";
 import { connect, homeOf, otherProtocol, rootOf, toCliError } from "../connect.ts";
 import { startedByText } from "../format.ts";
 import { webIndex } from "../open.ts";
@@ -186,10 +187,6 @@ const serve = defineBuiltin({
     }),
 });
 
-/** Asks at the terminal whether to go on; no when there is none. */
-const confirm = (io: Io, question: string): Effect.Effect<boolean> =>
-  io.ask === undefined ? Effect.succeed(false) : Effect.promise(() => io.ask!(`${question} [y/N] `, false).then((answer) => /^y(es)?$/i.test(answer.trim())));
-
 /** How long a host may take to stop: its own shutdown deadline, and a margin. */
 const STOPPING = Duration.millis(SHUTDOWN_TIMEOUT_MS + 5_000);
 
@@ -270,6 +267,21 @@ const exited = (pid: number) =>
       });
   });
 
+/**
+ * Stops `running`, the host of `io`'s home and profile, as `lemma stop` does: asking first unless `force`, through its
+ * service when one runs it, and waiting for it to exit. What was known of it, and the service it was stopped through.
+ */
+export const stopHost = (io: Io, running: Discovery, force: boolean) =>
+  Effect.gen(function* () {
+    const host = yield* runningHost(io, running, force, "stop");
+    yield* agreed(io, force, "Stopping", host);
+    const service = host.startedBy === "service" ? serviceManager(profileOf(io.env)) : undefined;
+    if (service !== undefined) service.stop();
+    else process.kill(running.pid, "SIGTERM");
+    yield* exited(running.pid);
+    return { host, service };
+  });
+
 const stop = defineBuiltin({
   path: ["stop"],
   group: RUN,
@@ -284,12 +296,7 @@ const stop = defineBuiltin({
       const home = homeOf(io);
       const running = yield* readDiscovery(home);
       if (running === undefined) return { json: { stopped: false, home }, text: `No host runs for ${home}` };
-      const host = yield* runningHost(io, running, flags.force, "stop");
-      yield* agreed(io, flags.force, "Stopping", host);
-      const service = host.startedBy === "service" ? serviceManager(profileOf(io.env)) : undefined;
-      if (service !== undefined) service.stop();
-      else process.kill(running.pid, "SIGTERM");
-      yield* exited(running.pid);
+      const { host, service } = yield* stopHost(io, running, flags.force);
       return {
         json: { stopped: true, pid: running.pid, startedBy: host.startedBy ?? null, cutOff: host.items },
         text: `Stopped the host for ${home} (pid ${running.pid}, started ${startedByText(host.startedBy)})${service === undefined ? "" : "; the service stays installed and starts it again at login (lemma service)"}`,
