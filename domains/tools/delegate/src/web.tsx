@@ -2,11 +2,11 @@ import { For, Show, createMemo, createSignal } from "solid-js";
 import type { JSX } from "solid-js";
 import { AgentChannels } from "@lemma/agent";
 import type { SessionInfo } from "@lemma/sessions";
-import { ComposerNotices, ContextViews, sessionTitle, ThreadCard, ThreadHeader, Threads, ThreadWaits, ToolViews, waitingOn } from "@lemma/threads";
+import { ComposerNotices, ContextViews, sessionTitle, ThreadHeader, Threads, ThreadWaits, ToolViews, waitingOn } from "@lemma/threads";
 import type { ContextViewProps, ThreadsService, ToolBodyProps, ToolDisplaysProps } from "@lemma/threads";
-import { AgentIcon, Avatar, ChevronDownIcon, ChevronIcon, Icon, MoreIcon, Popover, StopIcon } from "@lemma/look";
+import { AgentIcon, Avatar, ChevronDownIcon, ChevronIcon, Icon, StopIcon } from "@lemma/look";
 import { Client, Slots, defineWebPlugin, usePlugin } from "@lemma/web";
-import type { ClientService, SlotsService } from "@lemma/web";
+import type { SlotsService } from "@lemma/web";
 import { createNow } from "@lemma/web/now";
 import {
   agentOfCall,
@@ -25,10 +25,9 @@ import {
   stateOf,
 } from "./agents.ts";
 import type { AgentOutcome, AgentState } from "./agents.ts";
+import { DelegateChannels } from "./channels.ts";
 import styles from "./delegate.css?inline";
 
-/** How many of a thread's previous agents its lineage lists before "Show more". */
-const PREVIOUS_SHOWN = 6;
 /** How many avatars a group stacks before "+n". */
 const STACKED = 4;
 
@@ -49,7 +48,6 @@ const plain = (text: string | undefined) =>
 interface Deps {
   readonly threads: ThreadsService;
   readonly slots: SlotsService;
-  readonly client: ClientService;
   readonly now: () => number;
 }
 
@@ -78,12 +76,11 @@ function AgentRow(props: {
   detail?: string | undefined;
   time?: string | undefined;
   stop?: (() => void) | undefined;
-  compact?: boolean;
 }) {
   const plugin = usePlugin();
   const open = plugin.action("open an agent's thread", () => (props.session === undefined ? Promise.resolve() : props.deps.threads.select(props.session.id)));
   return (
-    <div class="agent-row" classList={{ compact: props.compact === true }} data-state={props.state}>
+    <div class="agent-row" data-state={props.state}>
       <button
         type="button"
         class="agent-open"
@@ -94,7 +91,7 @@ function AgentRow(props: {
         onClick={() => open()}
         onPointerEnter={() => props.session !== undefined && props.deps.threads.preload(props.session.id)}
       >
-        <AgentAvatar seed={props.session?.id} state={props.state} size={props.compact === true ? 18 : 22} />
+        <AgentAvatar seed={props.session?.id} state={props.state} size={22} />
         <span class="agent-text">
           <span class="agent-line">
             <span class="agent-title">{props.title}</span>
@@ -115,7 +112,7 @@ function AgentRow(props: {
             type="button"
             class="icon-button agent-stop"
             aria-label={`Stop ${props.title}`}
-            data-tip="Stop it: its turn is cancelled"
+            data-tip={props.state === "queued" ? "Stop it: it never starts, and its empty thread goes" : "Stop it: its turn is cancelled"}
             onClick={() => stop()()}
           >
             <StopIcon />
@@ -146,141 +143,6 @@ const agentModel = (deps: Deps) => {
   return { outcomes, state, time, detail };
 };
 
-/**
- * The thread card's lineage, at its bottom: the thread this one works for, its agents at work, and those that finished
- * under "Previous agents", folded; a menu stops those at work or archives those done.
- */
-function Lineage(props: { deps: Deps; model: ReturnType<typeof agentModel> }) {
-  const { threads, client } = props.deps;
-  const plugin = usePlugin();
-  const [showPrevious, setShowPrevious] = createSignal(false);
-  const [all, setAll] = createSignal(false);
-  const parent = createMemo(() => {
-    const id = threads.active()?.parent?.sessionId;
-    return id === undefined ? undefined : { id, session: threads.list().find((session) => session.id === id) };
-  });
-  const agents = createMemo(() => childrenOf(threads.list(), threads.activeId()).map((session) => ({ session, state: props.model.state(session) })));
-  const working = createMemo(() => agents().filter((agent) => isActive(agent.state)));
-  const previous = createMemo(() => agents().filter((agent) => !isActive(agent.state)));
-  const stop = plugin.action("stop an agent", (sessionId: string) => client.channel.call(AgentChannels.cancel, { sessionId }));
-  const stopAll = plugin.action("stop the agents at work", () =>
-    Promise.all(working().map((agent) => client.channel.call(AgentChannels.cancel, { sessionId: agent.session.id }))),
-  );
-  const archive = plugin.action("archive previous agents", () => Promise.all(previous().map((agent) => threads.mark(agent.session.id, { archived: true }))));
-  const openParent = plugin.action("open the parent thread", () => threads.select(parent()!.id));
-  return (
-    <Show when={parent() !== undefined || agents().length > 0}>
-      <section class="lineage" aria-label="Lineage">
-        <header class="lineage-head">
-          <span class="lineage-title">Lineage</span>
-          <Show when={working().length > 0}>
-            <span class="lineage-count">· {working().length} working</span>
-          </Show>
-          <span class="lineage-spacer" />
-          <Show when={agents().length > 0}>
-            <Popover label="Lineage actions" tip="Agents" triggerClass="icon-button lineage-more" placement="bottom-end" trigger={<MoreIcon />}>
-              {(close) => (
-                <>
-                  <button
-                    type="button"
-                    class="menu-item"
-                    role="menuitem"
-                    disabled={working().length === 0}
-                    onClick={() => {
-                      close();
-                      stopAll();
-                    }}
-                  >
-                    <span class="menu-check">
-                      <StopIcon />
-                    </span>
-                    <span class="menu-label">Stop agents at work</span>
-                  </button>
-                  <button
-                    type="button"
-                    class="menu-item"
-                    role="menuitem"
-                    disabled={previous().length === 0}
-                    onClick={() => {
-                      close();
-                      archive();
-                    }}
-                  >
-                    <span class="menu-check">
-                      <Icon name="archive" />
-                    </span>
-                    <span class="menu-label">Archive previous agents</span>
-                  </button>
-                </>
-              )}
-            </Popover>
-          </Show>
-        </header>
-        <Show when={parent()}>
-          {(at) => (
-            <button
-              type="button"
-              class="lineage-parent"
-              disabled={at().session === undefined}
-              data-tip={at().session === undefined ? "The thread that started this agent is gone" : "The thread this agent works for"}
-              onClick={() => openParent()}
-            >
-              <span class="lineage-parent-icon" aria-hidden="true">
-                <Icon name="arrow-left" />
-              </span>
-              <span class="lineage-parent-title">{at().session === undefined ? "Deleted thread" : sessionTitle(at().session)}</span>
-              <span class="lineage-parent-hint">Parent</span>
-            </button>
-          )}
-        </Show>
-        <For each={working()}>
-          {(agent) => (
-            <AgentRow
-              deps={props.deps}
-              session={agent.session}
-              title={sessionTitle(agent.session)}
-              state={agent.state}
-              detail={props.model.detail(agent.session, agent.state)}
-              time={props.model.time(agent.session, agent.state)}
-              stop={agent.state === "waiting" || agent.state === "working" ? () => stop(agent.session.id) : undefined}
-              compact
-            />
-          )}
-        </For>
-        <Show when={previous().length > 0}>
-          <button type="button" class="lineage-fold" aria-expanded={showPrevious()} onClick={() => setShowPrevious((open) => !open)}>
-            <span>Previous agents ({previous().length})</span>
-            <span class="lineage-rule" aria-hidden="true" />
-            <span class="lineage-chevron" aria-hidden="true">
-              <ChevronDownIcon />
-            </span>
-          </button>
-          <Show when={showPrevious()}>
-            <For each={all() ? previous() : previous().slice(0, PREVIOUS_SHOWN)}>
-              {(agent) => (
-                <AgentRow
-                  deps={props.deps}
-                  session={agent.session}
-                  title={sessionTitle(agent.session)}
-                  state={agent.state}
-                  detail={props.model.detail(agent.session, agent.state)}
-                  time={props.model.time(agent.session, agent.state)}
-                  compact
-                />
-              )}
-            </For>
-            <Show when={!all() && previous().length > PREVIOUS_SHOWN}>
-              <button type="button" class="lineage-more-rows" onClick={() => setAll(true)}>
-                Show {previous().length - PREVIOUS_SHOWN} more
-              </button>
-            </Show>
-          </Show>
-        </Show>
-      </section>
-    </Show>
-  );
-}
-
 /** Avatars stacked, at most `STACKED` and then a count. */
 function Stack(props: { seeds: readonly string[]; states: readonly AgentState[] }) {
   return (
@@ -301,7 +163,7 @@ export default defineWebPlugin({
     /** Ticks each second while an agent of the open thread works, for the times that count. */
     const anyWorking = () => childrenOf(threads.list(), threads.activeId()).some((session) => threads.running().includes(session.id));
     const now = createNow(1000, anyWorking);
-    const deps: Deps = { threads, slots, client, now };
+    const deps: Deps = { threads, slots, now };
     const model = agentModel(deps);
 
     /** A delegating call's agent: named by its result, or found by its parent link while the call runs. */
@@ -314,8 +176,10 @@ export default defineWebPlugin({
       const named = typeof call.args?.["title"] === "string" ? (call.args["title"] as string).trim() : "";
       const title = session !== undefined ? sessionTitle(session) : (details.title ?? (named !== "" ? named : firstLine(asked) || "Agent"));
       const waiting = call.state === "running" || call.state === "queued";
+      // How its thread heard it ended, which outlives the agent's thread (one dropped while it waited for a slot).
+      const heard = details.sessionId === undefined ? undefined : model.outcomes().get(details.sessionId);
       // A call stopped or failed with no word of its agent: its turn went with it.
-      const ended = details.ended ?? (call.state === "interrupted" ? "cancelled" : call.state === "error" ? "error" : undefined);
+      const ended = heard?.ended ?? details.ended ?? (call.state === "interrupted" ? "cancelled" : call.state === "error" ? "error" : undefined);
       const current = session === undefined ? undefined : model.state(session, ended === undefined ? undefined : { ended, emptyAt: details.emptyAt });
       // While the call waits, an agent not at work has yet to start: it waits for a slot, or for its prompt.
       const state: AgentState = current === undefined ? (waiting ? "queued" : endedState(ended)) : waiting && !isActive(current) ? "queued" : current;
@@ -323,11 +187,13 @@ export default defineWebPlugin({
         session,
         title,
         state,
+        // Only a background agent waits for a slot in the plugin's own work, where Stop can drop it.
+        stoppable: session !== undefined && (state === "working" || state === "waiting" || (state === "queued" && details.background === true)),
         detail:
           session === undefined
             ? call.state === "error"
               ? plain(call.result?.content.find((part) => part.type === "text")?.text)
-              : undefined
+              : plain(heard?.preview)
             : model.detail(session, state, details.preview),
         time: session === undefined ? undefined : model.time(session, state),
       };
@@ -337,7 +203,10 @@ export default defineWebPlugin({
     function CallDisplay(props: ToolBodyProps) {
       const plugin = usePlugin();
       const agent = createMemo(() => callAgent(props));
-      const stop = plugin.action("stop an agent", (sessionId: string) => client.channel.call(AgentChannels.cancel, { sessionId }));
+      // One waiting for a slot is dropped, and its empty thread goes; one at work has its turn cancelled.
+      const stop = plugin.action("stop an agent", async (sessionId: string) => {
+        if (!(await client.channel.call(DelegateChannels.drop, { sessionId }))) await client.channel.call(AgentChannels.cancel, { sessionId });
+      });
       return (
         <AgentRow
           deps={deps}
@@ -346,7 +215,7 @@ export default defineWebPlugin({
           state={agent().state}
           detail={agent().detail}
           time={agent().time}
-          stop={agent().state === "working" ? () => stop(agent().session!.id) : undefined}
+          stop={agent().stoppable ? () => stop(agent().session!.id) : undefined}
         />
       );
     }
@@ -420,8 +289,6 @@ export default defineWebPlugin({
       displays: CallsDisplay,
     });
     slots.add(ContextViews, { id: SOURCE, component: NoticeView });
-    // At the card's bottom: after where it works and what it costs.
-    slots.add(ThreadCard, { id: "tools.delegate.lineage", order: 200, group: "lineage", component: () => <Lineage deps={deps} model={model} /> });
 
     // Above the composer while the open thread's agents work: who, and for how long; each opens.
     slots.add(ComposerNotices, {

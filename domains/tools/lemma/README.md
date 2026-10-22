@@ -2,15 +2,11 @@
 
 Lemma itself, as tools scripts call: the channels its plugins serve clients
 (the web app, the `lemma` command) become `lemma_*` tools in the `lemma`
-namespace. Adds them to `Tools`, and the namespace to `ToolNamespaces`
-(handing a task to an agent is [`tools.delegate`](../delegate/README.md)'s
-`delegate`, which scripts call too, with the settings `maxDelegations`,
-`maxDepth`, and `confirmDelegation`, now `confirm`, that were this plugin's: a
-row setting them here no longer applies, and the host warns of it); requires `Interaction`, which
-asks the person before a call that changes something. The tools are `nested`:
-while `codemode` is offered, scripts find them (`await searchTools("lemma
-sessions")`, `await describeNamespace("lemma")`) rather than every request
-declaring them.
+namespace. Adds them to `Tools`, and the namespace to `ToolNamespaces`;
+requires `Interaction`, which asks the person before a call that changes
+something. The tools are `nested`: while `codemode` is offered, scripts find
+them (`await searchTools("lemma sessions")`, `await describeNamespace("lemma")`)
+rather than every request declaring them.
 
 ## Channels as tools
 
@@ -76,17 +72,23 @@ starting its sign-in (`mcp.reconnect`, `mcp.sign-in`, which answers with the
 page the person approves in a browser). A declined question, a dismissed one, or nobody to ask
 leaves the channel uncalled, and the call is an error saying which.
 
-Never offered, whatever the config says: a channel that declares `secret`
-(a credential can cross it), and, even when a replacement declares less,
-signing in and out (`llm.login`, `llm.sign-ins`, `llm.answer-sign-in`,
-`llm.logout`, `llm.cancel-login`), the
-provider and server entries that can hold a credential (`llm.add-custom`,
-`llm.remove-custom`, `llm.set-logo`, `mcp.put`), their state as written
-(`mcp.state`, `mcp.changes`, where a credential may be typed in place of a
-`${VAR}`; `mcp.list` reads the servers' states without it), finishing an MCP
-server's sign-in (`mcp.finish-sign-in`, whose address carries a code), and `cli.run`, which runs any `lemma` command, those among them.
-`commands.run` can run a command that logs out of a
-provider; its question shows the command's id.
+Never offered to the agent, whatever the config says: a channel that declares
+`secret` (a credential can cross it), and these, even when a replacement
+declares less:
+
+- signing in to a provider and out (`llm.login`, `llm.sign-ins`,
+  `llm.answer-sign-in`, `llm.logout`, `llm.cancel-login`);
+- finishing an MCP server's sign-in (`mcp.finish-sign-in`), whose address
+  carries the server's authorization code;
+- the provider and server entries that can hold a credential
+  (`llm.add-custom`, `llm.remove-custom`, `llm.set-logo`, `mcp.put`), and
+  their state as written (`mcp.state`, `mcp.changes`, where a credential may
+  be typed in place of a `${VAR}`; `mcp.list` reads the servers' states
+  without it);
+- `cli.run`, which runs any `lemma` command, those among them.
+
+`commands.run` can run a command that logs out of a provider; its question
+shows the command's id.
 
 ## Rationale
 

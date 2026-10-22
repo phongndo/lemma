@@ -1,17 +1,17 @@
 import { stat } from "node:fs/promises";
 import * as path from "node:path";
-import { Clock, Effect, Result, Schedule, Schema, Semaphore } from "effect";
+import { Effect, Result, Schedule, Schema, Semaphore } from "effect";
 import type { Context } from "effect";
 import type { Registries } from "@lemma/core";
-import { HostError, InteractionError, resultOf, withChannel, withdrawnFrom } from "@lemma/contracts";
-import type { ChannelDeclaration, Interaction } from "@lemma/contracts";
+import { callHere, HostError, InteractionError } from "@lemma/contracts";
+import type { Interaction } from "@lemma/contracts";
 import { AgentChannels, ModeChannels, MODES_PLUGIN, offeredFor } from "@lemma/agent";
 import type { ModeInfo, PromptOutcome, TurnOptions, WhenBusy } from "@lemma/agent";
 import { branchOf, SessionChannels } from "@lemma/sessions";
 import type { SessionEvent, SessionInfo } from "@lemma/sessions";
 import { ToolResult } from "@lemma/tools";
 import type { Tool, ToolContext } from "@lemma/tools";
-import { boundOutput } from "@lemma/tools/files";
+import { boundOutput, resolveToCwd } from "@lemma/tools/files";
 import type { Job } from "./jobs.ts";
 import { choiceOf, depthOf, firstLine, forkPoint, lastTurnOptions, noticeIdOf, requestIdOf, SOURCE, summarize, thinkingOf } from "./lineage.ts";
 
@@ -20,12 +20,6 @@ type Asker = Context.Service.Shape<typeof Interaction>;
 
 /** The tool's name, which its web half's view is keyed by. */
 export const DELEGATE = "delegate";
-
-/** A channel's call, made to whatever answers for its id when it runs, as a client's is. */
-export const callValue = <Payload, Success>(registries: Reader, declaration: ChannelDeclaration<"call", Payload, Success>, payload: Payload) =>
-  withChannel(registries, declaration.id, "call", ({ item }, left) =>
-    resultOf(item, payload, { left, withdrawn: withdrawnFrom(declaration.id, "call") }),
-  ) as Effect.Effect<Success, unknown>;
 
 /** Whether a call failed with `code`: as the transport says it (`HostError`), or as a domain does in the host (a reason). */
 export const isCode =
@@ -50,17 +44,22 @@ export const DelegateInput = Schema.Struct({
   prompt: Schema.NonEmptyString.annotate({
     description: "The task, as the agent's first prompt: all a new agent knows of it, so say everything it needs. With sessionId, a message to that agent",
   }),
-  title: Schema.optional(Schema.String.annotate({ description: "The agent's name: its thread's title, in a few words (default: the prompt's first line)" })),
+  title: Schema.optional(
+    Schema.String.annotate({ description: "The agent's name: its thread's title, in a few words (default: the prompt's first line). Not with sessionId" }),
+  ),
   mode: Schema.optional(
     Schema.String.annotate({
-      description: "The agent's mode, one of those offered to agents (listed with the tool's use in your instructions); default: the default mode",
+      description:
+        "The agent's mode, one of those offered to agents (listed with the tool's use in your instructions); default: the default mode. Not with sessionId",
     }),
   ),
-  model: Schema.optional(Schema.String.annotate({ description: "The agent's model, as \"provider/id\" (default: its mode's, else this thread's)" })),
+  model: Schema.optional(
+    Schema.String.annotate({ description: "The agent's model, as \"provider/id\" (default: its mode's, else this thread's). Not with sessionId" }),
+  ),
   context: Schema.optional(
     Schema.Literals(["fresh", "fork"]).annotate({
       description:
-        "fresh (default): the agent sees only the prompt. fork: it starts from this thread's finished turns, in its mode and model, so it knows what was said",
+        "fresh (default): the agent sees only the prompt. fork: it starts from this thread's finished turns, in its mode and model, so it knows what was said. Not with sessionId",
     }),
   ),
   background: Schema.optional(
@@ -69,22 +68,22 @@ export const DelegateInput = Schema.Struct({
     }),
   ),
   sessionId: Schema.optional(
-    Schema.String.annotate({ description: "An agent this thread started (its sessionId): the prompt goes to it, as a follow-up, instead of to a new agent" }),
-  ),
-  cwd: Schema.optional(Schema.String.annotate({ description: "The agent's directory (default: this thread's)" })),
-  timeoutMs: Schema.optional(
-    Schema.Number.check(Schema.isInt(), Schema.isGreaterThan(0)).annotate({
-      description: "How long the agent may take, in milliseconds; past it its turn is cancelled (default: no limit)",
+    Schema.String.annotate({
+      description:
+        "An agent this thread started (its sessionId): the prompt goes to it, as a follow-up, instead of to a new agent. It keeps its own title, mode, model, context, and cwd, so give none of them",
     }),
+  ),
+  cwd: Schema.optional(
+    Schema.String.annotate({ description: "The agent's directory, relative to this thread's (default: this thread's). Not with sessionId" }),
   ),
 });
 export type DelegateInput = typeof DelegateInput.Type;
 
-/**
- * How the agent's turn ended, as its log says: `running` for one working in the background, `timeout` when it was
- * cancelled for taking too long, `handled`/`refused` when a plugin answered the prompt itself.
- */
-export const Ended = Schema.Literals(["done", "error", "cancelled", "max-steps", "timeout", "handled", "refused", "running"]);
+/** The inputs a follow-up (`sessionId`) refuses: the agent it goes to keeps its own. */
+const NEW_AGENT_ONLY = ["title", "mode", "model", "context", "cwd"] as const;
+
+/** How the agent's turn ended, as its log says: `running` for one working in the background, `handled`/`refused` when a plugin answered the prompt itself. */
+export const Ended = Schema.Literals(["done", "error", "cancelled", "max-steps", "handled", "refused", "running"]);
 export type Ended = typeof Ended.Type;
 
 export const DelegateOutput = Schema.Struct({
@@ -152,74 +151,43 @@ export const depthSlots = (maxDelegations: number) => {
 
 const textResult = (text: string, isError = true) => new ToolResult({ content: [{ type: "text", text }], ...(isError ? { isError: true } : {}) });
 
-/** Whether the turn a job's prompt started is still running: placed, and not ended. */
-const stillRuns = (registries: Reader, job: Pick<Job, "child" | "requestId">): Effect.Effect<boolean> =>
-  callValue(registries, SessionChannels.events, { sessionId: job.child }).pipe(
-    Effect.map((events) => {
-      const placed = events.find((event) => event.data.type === "message" && event.data.requestId === job.requestId);
-      const turnId = placed?.data.type === "message" ? placed.data.turnId : undefined;
-      return turnId !== undefined && !events.some((event) => event.data.type === "turn-end" && event.data.turnId === turnId);
-    }),
-    Effect.orElseSucceed(() => false),
-  );
-
 /**
- * Places the prompt, as a job says to, and waits for the turn that places it to end: `timeout` once `deadline` (epoch
- * ms) passes, which cancels the turn. Placing again with the same request id never places it twice, so a job resumed
- * after a restart waits on the turn it started. Interrupted, it cancels the turn when `cancel` says so (a call the
- * person stopped), and otherwise only stops waiting (a plugin reloading).
+ * Places the prompt, as a job says to, and waits for the turn that places it to end. Placing again with the same request
+ * id never places it twice, so a job resumed after a restart waits on the turn it started. Interrupted, it cancels the
+ * turn when `cancelOnInterrupt` says so (a call the person stopped), and otherwise only stops waiting (a plugin
+ * reloading).
  */
 export const place = (
   registries: Reader,
   job: Pick<Job, "child" | "prompt" | "options" | "whenBusy" | "requestId">,
-  deadline: number | undefined,
   cancelOnInterrupt: boolean,
-): Effect.Effect<PromptOutcome | "timeout", unknown> =>
-  Effect.gen(function* () {
-    const cancel = callValue(registries, AgentChannels.cancel, { sessionId: job.child }).pipe(Effect.ignore);
-    const prompting = callValue(registries, AgentChannels.prompt, {
-      sessionId: job.child,
-      content: [{ type: "text", text: job.prompt }],
-      requestId: job.requestId,
-      ...(job.whenBusy === undefined ? {} : { whenBusy: job.whenBusy }),
-      ...(job.options === undefined ? {} : { options: job.options }),
-    }).pipe(Effect.onInterrupt(() => (cancelOnInterrupt ? cancel : Effect.void)));
-    if (deadline === undefined) return yield* prompting;
-    const left = deadline - (yield* Clock.currentTimeMillis);
-    if (left <= 0) {
-      // Past it before this wait began (a background agent that waited for a slot, or one resumed late): nothing is
-      // placed, and the turn its prompt started, if one did and runs, is cancelled; not one a person started in it.
-      if (yield* stillRuns(registries, job)) yield* cancel;
-      return "timeout" as const;
-    }
-    const raced = yield* Effect.raceFirst(prompting, Effect.as(Effect.sleep(left), "timeout" as const));
-    // Cancelled once the prompt's call has stopped, which the race waits for: cancelling first would end the turn, and
-    // with it the prompt's call, before the timer's side won.
-    if (raced === "timeout") yield* cancel;
-    return raced;
-  });
+): Effect.Effect<PromptOutcome, unknown> =>
+  callHere(registries, AgentChannels.prompt, {
+    sessionId: job.child,
+    content: [{ type: "text", text: job.prompt }],
+    requestId: job.requestId,
+    ...(job.whenBusy === undefined ? {} : { whenBusy: job.whenBusy }),
+    ...(job.options === undefined ? {} : { options: job.options }),
+  }).pipe(Effect.onInterrupt(() => (cancelOnInterrupt ? Effect.ignore(callHere(registries, AgentChannels.cancel, { sessionId: job.child })) : Effect.void)));
+
+/** How an agent's turn ended, and its answer: what its call resolves to, and its notice tells. */
+export interface Settled {
+  readonly ended: Ended;
+  readonly answer: string;
+  readonly error?: string;
+}
 
 /** How a placed prompt's turn ended, and its answer, from the agent's log. */
-export const outcomeOf = (registries: Reader, child: string, requestId: string, outcome: PromptOutcome | "timeout", timeoutMs: number | undefined) =>
+export const outcomeOf = (registries: Reader, child: string, requestId: string, outcome: PromptOutcome): Effect.Effect<Settled, unknown> =>
   Effect.gen(function* () {
-    if (outcome !== "timeout" && outcome.kind === "handled") return { ended: "handled" as Ended, answer: outcome.message ?? "" };
-    if (outcome !== "timeout" && outcome.kind === "refused")
-      return { ended: "refused" as Ended, answer: "", error: `${outcome.by} refused the prompt: ${outcome.reason}` };
+    if (outcome.kind === "handled") return { ended: "handled", answer: outcome.message ?? "" };
+    if (outcome.kind === "refused") return { ended: "refused", answer: "", error: `${outcome.by} refused the prompt: ${outcome.reason}` };
     const [info, events] = yield* Effect.all(
-      [callValue(registries, SessionChannels.get, { sessionId: child }), callValue(registries, SessionChannels.events, { sessionId: child })],
+      [callHere(registries, SessionChannels.get, { sessionId: child }), callHere(registries, SessionChannels.events, { sessionId: child })],
       { concurrency: "unbounded" },
     );
     const turn = summarize(info, events, requestId);
-    // Out of time, its turn was cancelled, or never started; one that ended on its own before the cancel says how.
-    const ended: Ended = outcome !== "timeout" ? (turn.reason ?? "error") : turn.reason === undefined || turn.reason === "cancelled" ? "timeout" : turn.reason;
-    const timedOut =
-      ended !== "timeout"
-        ? undefined
-        : turn.reason === undefined
-          ? `It did not start within ${timeoutMs} ms`
-          : `No answer within ${timeoutMs} ms; the turn was cancelled`;
-    const error = turn.error ?? timedOut;
-    return { ended, answer: turn.answer, ...(error === undefined ? {} : { error }) };
+    return { ended: turn.reason ?? "error", answer: turn.answer, ...(turn.error === undefined ? {} : { error: turn.error }) };
   });
 
 /**
@@ -230,10 +198,10 @@ export const discard = (registries: Reader, sessionId: string, emptyAt: number |
   emptyAt === undefined
     ? Effect.succeed(false)
     : Effect.gen(function* () {
-        const info = yield* callValue(registries, SessionChannels.get, { sessionId });
+        const info = yield* callHere(registries, SessionChannels.get, { sessionId });
         if (info.lastSeq !== emptyAt) return false;
         // The agent holds the session a moment longer while it settles a refusal: deleting waits that out.
-        yield* callValue(registries, SessionChannels.delete, { sessionId }).pipe(
+        yield* callHere(registries, SessionChannels.delete, { sessionId }).pipe(
           Effect.retry({ while: isCode("Busy"), schedule: Schedule.spaced("100 millis"), times: 30 }),
         );
         return true;
@@ -241,7 +209,7 @@ export const discard = (registries: Reader, sessionId: string, emptyAt: number |
 
 /** The modes offered to agents in `cwd`, by name; none when the modes plugin is off. */
 const agentModes = (registries: Reader, cwd: string): Effect.Effect<readonly ModeInfo[]> =>
-  callValue(registries, ModeChannels.list, { cwd }).pipe(
+  callHere(registries, ModeChannels.list, { cwd }).pipe(
     Effect.map((answer) => answer.modes.filter((mode) => offeredFor(mode, "agent"))),
     Effect.orElseSucceed(() => [] as readonly ModeInfo[]),
   );
@@ -271,7 +239,7 @@ const permission = (interaction: Asker, title: string, detail: string): Effect.E
  * since its depth would read as the top.
  */
 const callerBranch = (registries: Reader, context: ToolContext): Effect.Effect<readonly SessionEvent[], unknown> =>
-  callValue(registries, SessionChannels.events, { sessionId: context.sessionId }).pipe(
+  callHere(registries, SessionChannels.events, { sessionId: context.sessionId }).pipe(
     Effect.map((events) => branchOf(events, context.leafId ?? events.at(-1)?.id)),
     Effect.catchIf(isCode("NotFound"), () => Effect.succeed([] as readonly SessionEvent[])),
   );
@@ -313,8 +281,7 @@ export const delegateTool = (options: DelegateOptions): Tool<DelegateInput> => {
    */
   const waitOn = (job: Job, base: Omit<DelegateDetails, "ended">, context: ToolContext) =>
     Effect.gen(function* () {
-      const deadline = job.timeoutMs === undefined ? undefined : job.startedAt + job.timeoutMs;
-      const placed = yield* Effect.result(place(registries, job, deadline, true));
+      const placed = yield* Effect.result(place(registries, job, true));
       if (Result.isFailure(placed)) {
         const reason = failure("agent.prompt", placed.failure);
         if (yield* discard(registries, job.child, job.emptyAt)) return textResult(`No agent was started: ${reason}`);
@@ -325,7 +292,7 @@ export const delegateTool = (options: DelegateOptions): Tool<DelegateInput> => {
           true,
         );
       }
-      const settled = yield* outcomeOf(registries, job.child, job.requestId, placed.success, job.timeoutMs);
+      const settled = yield* outcomeOf(registries, job.child, job.requestId, placed.success);
       const result: DelegateOutput = { sessionId: job.child, title: job.title, ...settled };
       const preview = (settled.error ?? settled.answer).trim().slice(0, PREVIEW_CHARS);
       return yield* output(
@@ -339,7 +306,7 @@ export const delegateTool = (options: DelegateOptions): Tool<DelegateInput> => {
   /** A follow-up: the prompt to an agent this thread started, which steers it while it works. */
   const followUp = (sessionId: string, input: DelegateInput, context: ToolContext, depth: number) =>
     Effect.gen(function* () {
-      const info = yield* callValue(registries, SessionChannels.get, { sessionId }).pipe(Effect.orElseSucceed(() => undefined));
+      const info = yield* callHere(registries, SessionChannels.get, { sessionId }).pipe(Effect.orElseSucceed(() => undefined));
       if (info?.parent?.sessionId !== context.sessionId)
         return textResult(`No message was sent: ${sessionId} is not an agent this thread started. Start one by leaving sessionId out.`);
       const title = info.title ?? firstLine(input.prompt);
@@ -352,8 +319,6 @@ export const delegateTool = (options: DelegateOptions): Tool<DelegateInput> => {
         depth,
         noticeId: noticeIdOf(context.toolCallId),
         title,
-        startedAt: yield* Clock.currentTimeMillis,
-        ...(input.timeoutMs === undefined ? {} : { timeoutMs: input.timeoutMs }),
         followUp: true,
       };
       const base = { sessionId, title, followUp: true as const };
@@ -365,7 +330,7 @@ export const delegateTool = (options: DelegateOptions): Tool<DelegateInput> => {
   return {
     name: DELEGATE,
     description:
-      "Hands a task to an agent: a thread of its own, which works on it and answers. Several calls in one response run at once. With background, it answers at once and you are told when the agent finishes. Say everything the agent needs: unless context is fork, it sees only the prompt.",
+      "Hands a task to an agent: a thread of its own, which works on it and answers. Several calls in one response run at once. With background, it answers at once and you are told when the agent finishes. Say everything the agent needs: unless context is fork, it sees only the prompt, and a fork gets this thread's finished turns only, not this turn's work so far.",
     input: DelegateInput,
     output: DelegateOutput,
     // Run again after a restart, it finds the agent it started and waits on the same turn.
@@ -376,20 +341,34 @@ export const delegateTool = (options: DelegateOptions): Tool<DelegateInput> => {
     display: true,
     execute: (input, context) =>
       Effect.gen(function* () {
+        if (input.sessionId !== undefined) {
+          const given = NEW_AGENT_ONLY.filter((key) => input[key] !== undefined);
+          if (given.length > 0) {
+            const named = given.length === 1 ? given[0]! : `${given.slice(0, -1).join(", ")} and ${given.at(-1)!}`;
+            return textResult(
+              `No message was sent: ${named} ${given.length === 1 ? "is" : "are"} for a new agent, and a follow-up (sessionId) goes to one that keeps its own. Leave ${given.length === 1 ? "it" : "them"} out, or leave sessionId out to start a new agent.`,
+            );
+          }
+        }
         const branch = yield* callerBranch(registries, context);
         const depth = depthOf(branch) + 1;
         if (input.sessionId !== undefined) return yield* followUp(input.sessionId, input, context, depth);
+        // Not offered so deep (the `select` hook), but a script may call it all the same.
         if (depth > options.maxDepth) {
-          return textResult(`This thread is an agent ${depth - 1} levels deep, as deep as delegations go (${options.maxDepth}): do the task here.`);
+          return textResult(
+            `This thread is an agent ${depth - 1} ${depth === 2 ? "level" : "levels"} deep, as deep as delegations go (${options.maxDepth}): do the task here.`,
+          );
         }
         const fork = input.context === "fork";
         if (fork && input.mode !== undefined) return textResult("No agent was started: a forked agent keeps this thread's mode, so it takes none of its own.");
+        // Relative to this thread's directory, as its other tools' paths are.
+        const asked = input.cwd === undefined ? undefined : resolveToCwd(input.cwd, context.cwd);
         // A fork is a copy of this thread, so it works where this thread does.
-        if (fork && input.cwd !== undefined && path.resolve(context.cwd, input.cwd) !== path.resolve(context.cwd))
+        if (fork && asked !== undefined && asked !== path.resolve(context.cwd))
           return textResult("No agent was started: a forked agent works in this thread's directory, so it takes no cwd of its own.");
-        const cwd = fork ? context.cwd : (input.cwd ?? context.cwd);
+        const cwd = fork || asked === undefined ? context.cwd : asked;
         // A directory that is not there would give the agent nothing to work in: refused before a session is made.
-        if (input.cwd !== undefined && !fork) {
+        if (asked !== undefined && !fork) {
           const isDirectory = yield* Effect.promise(() =>
             stat(cwd).then(
               (found) => found.isDirectory(),
@@ -411,7 +390,7 @@ export const delegateTool = (options: DelegateOptions): Tool<DelegateInput> => {
         const parent = { sessionId: context.sessionId, toolCallId: context.toolCallId };
         // Run again (a restart cut the call off), the agent this call started is found, and waited on: among those in
         // its directory, where it was made.
-        const existing = (yield* callValue(registries, SessionChannels.list, { cwd }).pipe(Effect.orElseSucceed(() => [] as readonly SessionInfo[]))).find(
+        const existing = (yield* callHere(registries, SessionChannels.list, { cwd }).pipe(Effect.orElseSucceed(() => [] as readonly SessionInfo[]))).find(
           (info) => info.parent?.sessionId === parent.sessionId && info.parent.toolCallId === parent.toolCallId,
         );
         if (existing === undefined && options.confirm) {
@@ -426,9 +405,9 @@ export const delegateTool = (options: DelegateOptions): Tool<DelegateInput> => {
             ? Effect.succeed({ child: existing })
             : Effect.gen(function* () {
                 const made = yield* forkAt === undefined
-                  ? callValue(registries, SessionChannels.create, { cwd, parent })
-                  : callValue(registries, SessionChannels.fork, { sessionId: context.sessionId, eventId: forkAt, parent });
-                const titled = yield* callValue(registries, SessionChannels.setTitle, { sessionId: made.id, title }).pipe(Effect.orElseSucceed(() => made));
+                  ? callHere(registries, SessionChannels.create, { cwd, parent })
+                  : callHere(registries, SessionChannels.fork, { sessionId: context.sessionId, eventId: forkAt, parent });
+                const titled = yield* callHere(registries, SessionChannels.setTitle, { sessionId: made.id, title }).pipe(Effect.orElseSucceed(() => made));
                 return { child: titled, emptyAt: titled.lastSeq };
               });
         const model = input.model ?? chosen?.model ?? inherited.model;
@@ -443,8 +422,9 @@ export const delegateTool = (options: DelegateOptions): Tool<DelegateInput> => {
             ...(forkAt === undefined && input.mode !== undefined ? { [MODES_PLUGIN]: input.mode } : {}),
           },
         };
-        const whenBusy: WhenBusy = "reject";
-        const jobOf = ({ child, emptyAt }: Agent, startedAt: number): Job => ({
+        // Queued behind a turn running in it (a person writing to it while it waited for a slot), so the task still runs.
+        const whenBusy: WhenBusy = "follow-up";
+        const jobOf = ({ child, emptyAt }: Agent): Job => ({
           parent: context.sessionId,
           child: child.id,
           prompt: input.prompt,
@@ -454,8 +434,6 @@ export const delegateTool = (options: DelegateOptions): Tool<DelegateInput> => {
           depth,
           noticeId: noticeIdOf(context.toolCallId),
           title,
-          startedAt,
-          ...(input.timeoutMs === undefined ? {} : { timeoutMs: input.timeoutMs }),
           ...(emptyAt === undefined ? {} : { emptyAt }),
         });
         const base = (child: SessionInfo): Omit<DelegateDetails, "ended"> => ({
@@ -467,7 +445,7 @@ export const delegateTool = (options: DelegateOptions): Tool<DelegateInput> => {
         if (input.background === true) {
           // Made now, so the call names it; its prompt waits for a slot in the plugin's own work.
           const made = yield* agent;
-          yield* options.background.start(jobOf(made, yield* Clock.currentTimeMillis));
+          yield* options.background.start(jobOf(made));
           return yield* output(
             { sessionId: made.child.id, title, ended: "running", answer: "" },
             { ...base(made.child), background: true, ended: "running", ...(made.emptyAt === undefined ? {} : { emptyAt: made.emptyAt }) },
@@ -475,13 +453,12 @@ export const delegateTool = (options: DelegateOptions): Tool<DelegateInput> => {
             false,
           );
         }
-        // Made once a slot is free, so a call stopped while it waits leaves nothing; its time counts from then.
+        // Made once a slot is free, so a call stopped while it waits leaves nothing.
         return yield* options.slotsAt(depth).withPermits(1)(
           Effect.gen(function* () {
             const made = yield* agent;
-            const job = jobOf(made, yield* Clock.currentTimeMillis);
             // Stopped before its prompt was placed: an agent that holds nothing goes.
-            return yield* waitOn(job, base(made.child), context).pipe(Effect.onInterrupt(() => discard(registries, made.child.id, made.emptyAt)));
+            return yield* waitOn(jobOf(made), base(made.child), context).pipe(Effect.onInterrupt(() => discard(registries, made.child.id, made.emptyAt)));
           }),
         );
       }).pipe(

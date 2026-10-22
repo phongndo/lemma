@@ -523,6 +523,12 @@ export const withChannel = <Kind extends ChannelKind, A, E, R>(
   return serve("first");
 };
 
+/** Calls `declaration`'s channel from inside the host, as the transport calls it for a client (`withChannel`). */
+export const callHere = <P, S>(registries: Context.Service.Shape<typeof Registries>, declaration: ChannelDeclaration<"call", P, S>, payload: P) =>
+  withChannel(registries, declaration.id, "call", ({ item }, left) =>
+    resultOf(item, payload, { left, withdrawn: withdrawnFrom(declaration.id, "call") }),
+  ) as Effect.Effect<S, unknown>;
+
 /** A channel as clients list it: `source` is the plugin that added it. */
 export const ChannelInfo = Schema.Struct({
   id: Schema.String,

@@ -26,10 +26,6 @@ export const Job = Schema.Struct({
   /** The notice's id (`noticeIdOf`): the thread is told once per call. */
   noticeId: Schema.String,
   title: Schema.String,
-  /** Epoch ms it was started. */
-  startedAt: Schema.Number,
-  /** How long it may run, in ms, from `startedAt`, before its turn is cancelled. */
-  timeoutMs: Schema.optional(Schema.Number),
   /** A message to an agent already started: it takes no slot, and its thread stays whatever its turn does. */
   followUp: Schema.optional(Schema.Boolean),
   /**

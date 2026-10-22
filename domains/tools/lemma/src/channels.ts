@@ -2,7 +2,7 @@ import { Effect, Schema, SchemaAST, Stream } from "effect";
 import type { Context } from "effect";
 import type { Registries } from "@lemma/core";
 import { elementsOf, HostError, InteractionError, resultOf, wireCodec, withChannel, withdrawnFrom } from "@lemma/contracts";
-import type { Channel, ChannelCall, ChannelDeclaration, ChannelStream, Interaction } from "@lemma/contracts";
+import type { Channel, ChannelCall, ChannelStream, Interaction } from "@lemma/contracts";
 import { ToolResult } from "@lemma/tools";
 import type { Tool, ToolContext } from "@lemma/tools";
 import { boundOutput } from "@lemma/tools/files";
@@ -153,16 +153,6 @@ export const callJson = (registries: Reader, id: string, json: unknown): Effect.
       Effect.flatMap(resultOf(item, payload, { left, withdrawn: withdrawnFrom(id, "call") }), (value) => encodeValue(item, value)),
     ),
   );
-
-/** The call a declaration names, with values, as `callJson` makes it with JSON: for what this plugin itself calls. */
-export const callValue = <Payload, Success>(
-  registries: Reader,
-  declaration: ChannelDeclaration<"call", Payload, Success>,
-  payload: Payload,
-): Effect.Effect<Success, unknown> =>
-  withChannel(registries, declaration.id, "call", ({ item }, left) =>
-    resultOf(item, payload, { left, withdrawn: withdrawnFrom(declaration.id, "call") }),
-  ) as Effect.Effect<Success, unknown>;
 
 /** Reads a stream's elements as JSON until `take` have come, it ends, or `timeoutMs` passes; withdrawn when its plugin leaves. */
 export const collectJson = (

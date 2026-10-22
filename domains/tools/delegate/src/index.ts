@@ -1,15 +1,18 @@
 import * as path from "node:path";
-import { Effect, Exit, Result, Schedule, Schema } from "effect";
+import { Deferred, Effect, Exit, Result, Schedule, Schema } from "effect";
 import { definePlugin, Events, Registries } from "@lemma/core";
-import { Interaction, Paths } from "@lemma/contracts";
+import { callHere, Channels, Interaction, Paths, serveChannel } from "@lemma/contracts";
 import { AgentRequestHook, ModelNotice, PromptSections } from "@lemma/agent";
 import { SessionAppended, SessionChannels, SessionRemoved } from "@lemma/sessions";
 import { Tools } from "@lemma/tools";
-import { callValue, DELEGATE, delegateTool, depthSlots, discard, failure, isCode, modesSection, outcomeOf, place } from "./delegate.ts";
+import { DelegateChannels } from "./channels.ts";
+import { DELEGATE, delegateTool, depthSlots, discard, failure, isCode, modesSection, outcomeOf, place } from "./delegate.ts";
+import type { Settled } from "./delegate.ts";
 import { jobFiles, workingSection } from "./jobs.ts";
 import type { Job } from "./jobs.ts";
-import { bounded, SOURCE } from "./lineage.ts";
+import { bounded, depthOf, SOURCE } from "./lineage.ts";
 
+export { DelegateChannels } from "./channels.ts";
 export { DELEGATE, DelegateInput, DelegateOutput, Ended } from "./delegate.ts";
 export type { DelegateDetails } from "./delegate.ts";
 export { depthOf, firstLine, forkPoint, lastTurnOptions, requestIdOf, summarize } from "./lineage.ts";
@@ -20,10 +23,10 @@ const count = (fallback: number) =>
 export const Config = Schema.Struct({
   maxDelegations: count(4).annotate({
     title: "Agents at once",
-    description: "How many agents work at once at each depth; more wait for one to finish.",
+    description: "How many agents work at once at each depth, across every thread; more wait for one to finish.",
   }),
   maxDepth: Schema.Number.check(Schema.isInt(), Schema.isGreaterThanOrEqualTo(0))
-    .pipe(Schema.withDecodingDefaultType(Effect.sync(() => 2)))
+    .pipe(Schema.withDecodingDefaultType(Effect.sync(() => 1)))
     .annotate({
       title: "Delegation depth",
       description: "How deep delegations go: an agent this many levels down hands no task on. 0 turns delegation off.",
@@ -44,14 +47,13 @@ const SECTION = "tools.delegate.agents";
 /** How often a notice no thread has logged yet is published again: one published while no agent heard it is lost. */
 const RETELL = "15 seconds";
 
+/** How a background agent ended that its thread was deleted under, before how it ended could be read. */
+const GONE: Settled = { ended: "error", answer: "", error: "Its thread was deleted before it finished." };
+
 /** What a finished agent tells the thread that started it, and the line a transcript shows for it. */
-const noticeOf = (job: Job, settled: { readonly ended: string; readonly answer: string; readonly error?: string }, budget: number) => {
+const noticeOf = (job: Job, settled: Settled, budget: number) => {
   const done = settled.ended === "done" || settled.ended === "handled";
-  const display = done
-    ? `${job.title} finished`
-    : settled.ended === "cancelled" || settled.ended === "timeout"
-      ? `${job.title} was stopped`
-      : `${job.title} failed`;
+  const display = done ? `${job.title} finished` : settled.ended === "cancelled" ? `${job.title} was stopped` : `${job.title} failed`;
   const body = [settled.error === undefined ? "" : `Error: ${settled.error}`, bounded(settled.answer, budget, job.child)]
     .filter((part) => part !== "")
     .join("\n\n");
@@ -81,6 +83,8 @@ export default definePlugin({
     /** The background agents this instance waits on, and those whose notice it owes, by thread and notice. */
     const working = new Map<string, Job>();
     const owed = new Map<string, Job>();
+    /** The background agents waiting for a slot, by agent: what drops one before its prompt is placed (`delegate.drop`). */
+    const queued = new Map<string, Deferred.Deferred<void>>();
     const key = (job: Pick<Job, "parent" | "noticeId">) => `${job.parent}\0${job.noticeId}`;
     const requestId = (job: Pick<Job, "noticeId">) => `${SOURCE}:${job.noticeId}`;
 
@@ -93,27 +97,47 @@ export default definePlugin({
 
     /** Whether the thread has the notice already: a restart after it was placed and before its file went. */
     const told = (job: Job) =>
-      callValue(registries, SessionChannels.events, { sessionId: job.parent }).pipe(
+      callHere(registries, SessionChannels.events, { sessionId: job.parent }).pipe(
         Effect.map((log) => log.some((event) => event.data.type === "context" && event.data.requestId === requestId(job))),
       );
+
+    /**
+     * Places a background agent's prompt once it has a slot (a follow-up takes none, so `dropped` is none), unless it is
+     * dropped first: whichever takes it out of `queued` first decides, its slot or `delegate.drop`, so a prompt once
+     * placed is never dropped.
+     */
+    const slotted = (job: Job, dropped: Deferred.Deferred<void> | undefined) =>
+      dropped === undefined
+        ? place(registries, job, false)
+        : Effect.raceFirst(
+            slotsAt(job.depth).withPermits(1)(Effect.suspend(() => (queued.delete(job.child) ? place(registries, job, false) : Effect.never))),
+            Effect.as(Deferred.await(dropped), "dropped" as const),
+          ).pipe(Effect.ensuring(Effect.sync(() => queued.get(job.child) === dropped && queued.delete(job.child))));
 
     /**
      * Waits on a background agent's turn, placing its prompt if it never was, and tells its thread how it ended. A
      * reload interrupts only the waiting: the agent works on, and the next instance waits on it from its file.
      */
-    const wait = (job: Job) =>
+    const wait = (job: Job, dropped: Deferred.Deferred<void> | undefined) =>
       Effect.gen(function* () {
-        const deadline = job.timeoutMs === undefined ? undefined : job.startedAt + job.timeoutMs;
-        const placing = place(registries, job, deadline, false);
-        const placed = yield* Effect.result(job.followUp === true ? placing : slotsAt(job.depth).withPermits(1)(placing));
-        const settled: { readonly ended: string; readonly answer: string; readonly error?: string } = Result.isSuccess(placed)
-          ? yield* outcomeOf(registries, job.child, job.requestId, placed.success, job.timeoutMs)
-          : isCode("NotFound")(placed.failure)
-            ? { ended: "error", answer: "", error: "Its thread was deleted before it finished." }
-            : { ended: "error", answer: "", error: `It could not start: ${failure("agent.prompt", placed.failure)}` };
-        // Refused before its prompt was placed, an agent its call made that holds nothing goes, as a waited-on one does;
-        // one that holds work (a turn ran, or a person wrote to it) stays.
-        if (Result.isFailure(placed) && !isCode("NotFound")(placed.failure)) yield* discard(registries, job.child, job.emptyAt);
+        const placed = yield* Effect.result(slotted(job, dropped));
+        const settled: Settled = Result.isFailure(placed)
+          ? isCode("NotFound")(placed.failure)
+            ? GONE
+            : { ended: "error", answer: "", error: `It could not start: ${failure("agent.prompt", placed.failure)}` }
+          : placed.success === "dropped"
+            ? { ended: "cancelled", answer: "", error: "It was stopped before it started." }
+            : // Its thread deleted as its turn ended, or unreadable, it still ends, and its thread is told.
+              yield* outcomeOf(registries, job.child, job.requestId, placed.success).pipe(
+                Effect.catch((error) =>
+                  Effect.succeed<Settled>(
+                    isCode("NotFound")(error) ? GONE : { ended: "error", answer: "", error: `How it ended could not be read: ${failure("sessions", error)}` },
+                  ),
+                ),
+              );
+        // Refused or dropped before its prompt was placed, an agent its call made that holds nothing goes, as a
+        // waited-on one does; one that holds work (a turn ran, or a person wrote to it) stays.
+        if (Result.isFailure(placed) ? !isCode("NotFound")(placed.failure) : placed.success === "dropped") yield* discard(registries, job.child, job.emptyAt);
         const parent = yield* Effect.exit(told(job));
         // The thread it reports to is gone, or has heard already: nothing is owed.
         if (Exit.isFailure(parent) || parent.value) return yield* forget(job);
@@ -134,9 +158,12 @@ export default definePlugin({
       Effect.gen(function* () {
         if (working.has(key(job)) || owed.has(key(job))) return;
         working.set(key(job), job);
+        // Droppable from the moment the call names it, until its slot comes.
+        const dropped = job.followUp === true ? undefined : yield* Deferred.make<void>();
+        if (dropped !== undefined) queued.set(job.child, dropped);
         yield* owner.background(
           `agent ${job.child}`,
-          wait(job).pipe(Effect.catch((error) => Effect.logWarning(`tools.delegate: waiting on agent ${job.child}: ${String(error)}`))),
+          wait(job, dropped).pipe(Effect.catch((error) => Effect.logWarning(`tools.delegate: waiting on agent ${job.child}: ${String(error)}`))),
         );
       }).pipe(Effect.catch(() => Effect.void));
 
@@ -158,6 +185,18 @@ export default definePlugin({
             ),
         },
       }),
+    );
+
+    yield* owner.add(
+      Channels,
+      serveChannel(DelegateChannels.drop, ({ sessionId }) =>
+        Effect.suspend(() => {
+          const dropped = queued.get(sessionId);
+          if (dropped === undefined) return Effect.succeed(false);
+          queued.delete(sessionId);
+          return Effect.as(Deferred.succeed(dropped, undefined), true);
+        }),
+      ),
     );
 
     // The notice placed: the thread has heard, and the agent's file goes.
@@ -188,12 +227,18 @@ export default definePlugin({
             })
           : undefined,
     });
-    // The section is written for the tools on offer before the request's are chosen: once they are, it goes with the
-    // tool, so a mode without it (an explorer) is told nothing of agents.
+    // An agent as deep as delegations go is not offered the tool, which would only refuse it. The section is written for
+    // the tools on offer before the request's are chosen: once they are, it goes with the tool, so a mode without it (an
+    // explorer) is told nothing of agents.
     yield* owner.on(
       AgentRequestHook,
-      (draft, next) =>
-        Effect.map(next(draft), (plan) => (offers(plan.tools) ? plan : { ...plan, sections: plan.sections.filter((section) => section.id !== SECTION) })),
+      (draft, next) => {
+        const deepest = depthOf(draft.branch) + 1 > config.maxDepth;
+        const offered = deepest ? { ...draft, tools: draft.tools.filter((tool) => tool.spec.name !== DELEGATE) } : draft;
+        return Effect.map(next(offered), (plan) =>
+          offers(plan.tools) ? plan : { ...plan, sections: plan.sections.filter((section) => section.id !== SECTION) },
+        );
+      },
       { phase: "select" },
     );
 
