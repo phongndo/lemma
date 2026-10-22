@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
-import { chmod, cp, mkdir, mkdtemp, readdir, readFile, readlink, rm, writeFile } from "node:fs/promises";
+import { chmod, cp, mkdir, mkdtemp, readdir, readFile, readlink, realpath, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
@@ -69,7 +69,8 @@ const install = async (version: string) => {
 };
 
 beforeAll(async () => {
-  dir = await mkdtemp(join(tmpdir(), "lemma-npm-"));
+  // Resolved, as the paths lemma reports are: on macOS, tmpdir() is under /var, a link to /private/var.
+  dir = await realpath(await mkdtemp(join(tmpdir(), "lemma-npm-")));
   await new Promise<void>((done) => server.listen(0, "127.0.0.1", done));
   for (const version of ["0.2.7", "0.2.8", "0.2.9"]) await publish(version);
 });

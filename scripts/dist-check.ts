@@ -132,7 +132,7 @@ try {
   const viaNpm = JSON.parse(await npmLemma(["version", "--json"])) as Record<string, unknown>;
   assert.deepEqual(
     { installer: viaNpm.installer, channel: viaNpm.channel, link: viaNpm.link, root: viaNpm.root },
-    { installer: "npm", channel: "stable", link: join(npmData, "current/bin/lemma"), root: join(npmData, basename(archive, ".tar.gz")) },
+    { installer: "npm", channel: "stable", link: join(npmData, "current/bin/lemma"), root: await realpath(join(npmData, basename(archive, ".tar.gz"))) },
     "npm's lemma runs the release it fetched, and says npm installed it",
   );
   assert.deepEqual(JSON.parse(await npmLemma(["update", "--check", "--json"])), { version, channel: "stable", newest: version, newer: false });

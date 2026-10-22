@@ -1,4 +1,4 @@
-import { chmod, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
@@ -24,7 +24,8 @@ const server = createServer((request, response) => {
 });
 
 beforeAll(async () => {
-  dir = await mkdtemp(join(tmpdir(), "lemma-installers-"));
+  // Resolved, as the paths lemma reports are: on macOS, tmpdir() is under /var, a link to /private/var.
+  dir = await realpath(await mkdtemp(join(tmpdir(), "lemma-installers-")));
   await new Promise<void>((done) => server.listen(0, "127.0.0.1", done));
 });
 afterAll(async () => {
