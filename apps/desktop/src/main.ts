@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 import { app, BrowserWindow, dialog, ipcMain, Menu, nativeTheme, session, shell, utilityProcess } from "electron";
 import type { UtilityProcess } from "electron";
 import { Effect } from "effect";
-import { appUrl, DEEP_LINK_SCHEME } from "@lemma/contracts";
+import { appUrl } from "@lemma/contracts";
 import { findTarget, readDiscovery } from "@lemma/contracts/discovery";
 import type { Discovery, Target } from "@lemma/contracts/discovery";
 import { DEFAULT_PROFILE, profileHome, profileNameProblem, profileOf } from "@lemma/contracts/profiles";
@@ -15,7 +15,7 @@ import { HOST_FLAGS } from "@lemma/host/launch";
 import { deepLinkTarget, isLoopback, ProfileChannels, profileAddress, profileTitle } from "@lemma/profiles";
 import { readTitle } from "@lemma/profiles/local";
 import { SHUTDOWN_TIMEOUT_MS as HOST_SHUTDOWN_MS } from "@lemma/host/limits";
-import { buildKind, hostFiles, otherHomeProblem, resolvePaths } from "@lemma/host/paths";
+import { buildKind, hostFiles, KINDS, otherHomeProblem, resolvePaths } from "@lemma/host/paths";
 import { browserPartition, hostBrowser } from "./browser.ts";
 
 // The desktop app is the web app in a window: it shows what the host's transport serves, so the two never differ.
@@ -42,6 +42,8 @@ const REMOTE_TIMEOUT_MS = 10_000;
  * (`buildKind`), the orange dev icon, so it is told apart from an installed Lemma.
  */
 const icon = fileURLToPath(new URL(`../../../assets/brand/${buildKind === "release" ? "icon-dark" : "icon-dev"}.png`, import.meta.url));
+/** What it is shown by, and the scheme of the links it opens: its kind's (`KINDS`). */
+const kind = KINDS[buildKind];
 
 /** What the app says of its own running (a host it started that exited, a start that failed): `<root>/logs/desktop.log`. */
 const logLine = (text: string) => {
@@ -54,7 +56,7 @@ const logLine = (text: string) => {
 };
 
 /**
- * `<root>/desktop.json` while the app runs: its process, and the command that reaches it with a `lemma://` link (the
+ * `<root>/desktop.json` while the app runs: its process, and the command that reaches it with a link of its scheme (the
  * app again, which hands the link to this instance), so `lemma open` shows a page here rather than in a browser, in
  * the window of the profile the link names.
  */
@@ -161,7 +163,7 @@ const startHost = async (name: string): Promise<Discovery> => {
     // The host's Node.js flags, which are V8's: Electron's utility process takes them as Chromium's `--js-flags` alone.
     execArgv: ["--conditions=lemma-source", `--js-flags=${HOST_FLAGS.join(" ")}`],
     stdio: "inherit",
-    serviceName: name === DEFAULT_PROFILE ? "lemma host" : `lemma host (${name})`,
+    serviceName: `${kind.name.toLowerCase()} host${name === DEFAULT_PROFILE ? "" : ` (${name})`}`,
   });
   const held = hostOf(name);
   held.child = child;
@@ -360,7 +362,7 @@ const openWindow = (name: string, url: string) => {
     height: 820,
     minWidth: 640,
     minHeight: 480,
-    title: name === DEFAULT_PROFILE ? "lemma" : `lemma · ${name}`,
+    title: name === DEFAULT_PROFILE ? kind.name.toLowerCase() : `${kind.name.toLowerCase()} · ${name}`,
     icon,
     show: false,
     // No native title bar: the controls overlay the page, which reads where (Window Controls Overlay) and makes its
@@ -373,7 +375,7 @@ const openWindow = (name: string, url: string) => {
       sandbox: true,
       nodeIntegration: false,
       preload: fileURLToPath(new URL("preload.cjs", import.meta.url)),
-      additionalArguments: [...(owns(name) ? ["--lemma-owns-host"] : []), `--lemma-browser-partition=${partition}`],
+      additionalArguments: [...(owns(name) ? ["--lemma-owns-host"] : []), `--lemma-browser-partition=${partition}`, `--lemma-deep-link-scheme=${kind.scheme}`],
       // The browser view's pages (`browser.ts`); page fullscreen fills the page's place, not the window.
       webviewTag: true,
       disableHtmlFullscreenWindowResize: true,
@@ -449,25 +451,29 @@ const openLink = (link: { readonly path: string; readonly profile?: string }) =>
   if (name !== DEFAULT_PROFILE && profileNameProblem(name) !== undefined) return;
   openProfile(name, link.path).catch((error: unknown) => {
     logLine(`could not open the profile ${name}: ${failure(error)}`);
-    dialog.showErrorBox(`Lemma could not open the profile ${name}`, failure(error));
+    dialog.showErrorBox(`${kind.name} could not open the profile ${name}`, failure(error));
   });
 };
 const linkIn = (argv: readonly string[]) => argv.map(deepLinkTarget).find((link) => link !== undefined);
 
 const fail = (error: unknown) => {
   logLine(`could not start: ${error instanceof Error ? error.message : String(error)}`);
-  dialog.showErrorBox("Lemma could not start", error instanceof Error ? error.message : String(error));
+  dialog.showErrorBox(`${kind.name} could not start`, error instanceof Error ? error.message : String(error));
   app.exit(1);
 };
 
+// A checkout's app keeps its own data (its lock, and its pages' sign-ins) in a folder of its own name, as a release's
+// keeps its in its own (`Lemma`, its product name), so one never takes the other for a second instance of itself.
+if (buildKind === "checkout") app.setPath("userData", join(app.getPath("appData"), kind.name));
 if (!app.requestSingleInstanceLock()) {
   app.quit();
 } else {
-  app.setName("Lemma");
-  // `lemma://` links open here. Run from source, the app is Electron with this script as its argument, but only Windows
-  // registers those: macOS registers Electron itself, so there a link reaches the app while it runs and not otherwise.
-  if (process.defaultApp) app.setAsDefaultProtocolClient(DEEP_LINK_SCHEME, process.execPath, [resolve(process.argv[1] ?? ".")]);
-  else app.setAsDefaultProtocolClient(DEEP_LINK_SCHEME);
+  app.setName(kind.name);
+  // Its kind's links open here (`lemma://`, a checkout's `lemma-dev://`), so a link for one never opens the other. Run
+  // from source, the app is Electron with this script as its argument, but only Windows registers those: macOS
+  // registers Electron itself, so there a link reaches the app while it runs and not otherwise.
+  if (process.defaultApp) app.setAsDefaultProtocolClient(kind.scheme, process.execPath, [resolve(process.argv[1] ?? ".")]);
+  else app.setAsDefaultProtocolClient(kind.scheme);
   pending = linkIn(process.argv);
   // macOS hands links over as an event (also the one that launched the app); elsewhere they arrive as arguments.
   app.on("open-url", (event, link) => {
@@ -573,7 +579,7 @@ if (!app.requestSingleInstanceLock()) {
           name = wanted;
         } catch (error) {
           logLine(`could not open the profile ${wanted}: ${failure(error)}`);
-          dialog.showErrorBox(`Lemma could not open the profile ${wanted}`, failure(error));
+          dialog.showErrorBox(`${kind.name} could not open the profile ${wanted}`, failure(error));
         }
       }
       // The link's address is its profile's: the first profile's window, opened instead, starts at its own start.
@@ -609,8 +615,8 @@ if (!app.requestSingleInstanceLock()) {
       if (work.length > 0) {
         const { response } = await dialog.showMessageBox({
           type: "warning",
-          message: "Quit Lemma?",
-          detail: `Quitting stops the ${started.length === 1 ? "host" : "hosts"} this app started, which cuts off:\n${work.map((item) => `• ${item}`).join("\n")}\n\nA running turn resumes when Lemma starts again.`,
+          message: `Quit ${kind.name}?`,
+          detail: `Quitting stops the ${started.length === 1 ? "host" : "hosts"} this app started, which cuts off:\n${work.map((item) => `• ${item}`).join("\n")}\n\nA running turn resumes when ${kind.name} starts again.`,
           buttons: ["Quit", "Cancel"],
           defaultId: 1,
           cancelId: 1,

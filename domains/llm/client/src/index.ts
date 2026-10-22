@@ -131,7 +131,7 @@ export default defineWebPlugin({
           setLoggingIn(provider.id);
           try {
             // Where this page's browser is may decide a sign-in's way in; the desktop app's page offers a way back to it.
-            const returnTo = signInReturn("lemmaDesktop" in window);
+            const returnTo = signInReturn((window as Window & { lemmaDesktop?: { readonly deepLinkScheme?: string } }).lemmaDesktop);
             await client.channel.call(LlmChannels.login, {
               provider: provider.id,
               type,

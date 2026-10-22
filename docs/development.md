@@ -90,13 +90,15 @@ What runs from a checkout (`pnpm dev`, `dev:desktop`, `dev:web`, `desktop`,
 the two run side by side and a development build never reaches your sessions
 and settings. Each has its own (`KINDS` in `packages/host/src/paths.ts`):
 
-|                                         | Installed                 | Checkout                            |
-| --------------------------------------- | ------------------------- | ----------------------------------- |
-| Home, unless `LEMMA_HOME` names another | `~/.lemma`                | `~/.lemma-dev`                      |
-| The host's port                         | 7433                      | 7533                                |
-| Its profiles' ports                     | 7434 up                   | 7534 up                             |
-| Its service (systemd, launchd)          | `lemma`, `dev.lemma.host` | `dev-lemma`, `dev.lemma.dev-host`   |
-| Its icon, in a window and a tab         | charcoal                  | [orange](../assets/brand/README.md) |
+|                                           | Installed                 | Checkout                            |
+| ----------------------------------------- | ------------------------- | ----------------------------------- |
+| Home, unless `LEMMA_HOME` names another   | `~/.lemma`                | `~/.lemma-dev`                      |
+| The host's port                           | 7433                      | 7533                                |
+| Its profiles' ports                       | 7434 up                   | 7534 up                             |
+| Its service (systemd, launchd)            | `lemma`, `dev.lemma.host` | `dev-lemma`, `dev.lemma.dev-host`   |
+| Its icon, in a window and a tab           | charcoal                  | [orange](../assets/brand/README.md) |
+| Its name, in a window's and a tab's title | `lemma`                   | `lemma dev`                         |
+| Its desktop app: name, links              | Lemma, `lemma://`         | Lemma Dev, `lemma-dev://`           |
 
 Neither runs a host on the other's home, nor starts, stops, or restarts one
 there: a `LEMMA_HOME` naming it, inherited from the other's host or your shell,

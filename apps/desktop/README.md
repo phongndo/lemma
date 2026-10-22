@@ -95,5 +95,11 @@ it reads beside its sources, as the icon, is in the archive (`scripts/dist.ts`).
   scheme from the app's Info.plist and Linux from the desktop entry the Debian
   package installs; an AppImage has no desktop entry, so only `lemma open`
   reaches it, while it runs.
+- **Run from a checkout, it is Lemma Dev** ([development](../../docs/development.md)):
+  its windows are titled `lemma dev`, with the orange icon, and it opens
+  `lemma-dev://` links, so a link for an installed Lemma's app (its sign-in's
+  "Return to Lemma", say) never opens a checkout's. It keeps its data (the
+  lock that makes it one instance, its pages' sign-ins) in a folder of its
+  own, `Lemma Dev` beside a release's `Lemma`, so the two run at once.
 - The start script clears `ELECTRON_RUN_AS_NODE`, which terminals inside other
   Electron apps can inherit and which would run Electron as plain Node.

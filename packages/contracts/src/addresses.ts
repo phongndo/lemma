@@ -8,6 +8,9 @@
 /** The scheme of desktop deep links: `lemma://threads/<id>` opens that address in the app. */
 export const DEEP_LINK_SCHEME = "lemma";
 
+/** The scheme of a checkout's desktop app (`pnpm dev`, `pnpm desktop`), so a link for one never opens the other. */
+export const DEV_DEEP_LINK_SCHEME = "lemma-dev";
+
 /**
  * The web app at `path` on the host serving it at `base`, with the token the page takes from `?token=` (and then hides).
  * Throws for a `path` that resolves to another origin: the token goes only to the host it belongs to.
@@ -21,9 +24,9 @@ export const appUrl = (base: string, path: string, token?: string): string => {
 
 /**
  * The app's own address in a deep link (`lemma://threads/abc?x=1`, or
- * `lemma:///threads/abc`): `/threads/abc?x=1`. Undefined for anything that
- * is not one, a fragment and `token` dropped: a link names a page, not a
- * credential.
+ * `lemma:///threads/abc`, or a checkout's `lemma-dev://`): `/threads/abc?x=1`.
+ * Undefined for anything that is not one, a fragment and `token` dropped: a
+ * link names a page, not a credential.
  */
 export const deepLinkPath = (link: string): string | undefined => {
   let url: URL;
@@ -32,7 +35,7 @@ export const deepLinkPath = (link: string): string | undefined => {
   } catch {
     return undefined;
   }
-  if (url.protocol !== `${DEEP_LINK_SCHEME}:`) return undefined;
+  if (url.protocol !== `${DEEP_LINK_SCHEME}:` && url.protocol !== `${DEV_DEEP_LINK_SCHEME}:`) return undefined;
   const path = `/${url.host}${url.pathname}`.replace(/\/{2,}/g, "/");
   // A path an http address reads as another host's (`/\evil.com`, where `\` is `/`) is not one of the app's.
   const origin = "http://app.invalid";

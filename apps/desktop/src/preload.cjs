@@ -3,6 +3,8 @@ const { contextBridge, ipcRenderer } = require("electron");
 // A narrow bridge: the page cannot choose a process, command, or IPC channel.
 contextBridge.exposeInMainWorld("lemmaDesktop", {
   ownsHost: process.argv.includes("--lemma-owns-host"),
+  // The scheme of the links that open this app (`lemma`, a checkout's `lemma-dev`), for a page that offers one.
+  deepLinkScheme: process.argv.find((arg) => arg.startsWith("--lemma-deep-link-scheme="))?.slice("--lemma-deep-link-scheme=".length) ?? "lemma",
   reload: () => ipcRenderer.invoke("lemma:reload"),
   // The window's controls on Windows and Linux take the page's colors: its background and muted text, as `#rrggbb`.
   titleBar: {

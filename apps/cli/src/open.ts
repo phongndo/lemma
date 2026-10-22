@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import { appUrl } from "@lemma/contracts";
 import { deepLink } from "@lemma/profiles";
 import { DEFAULT_PROFILE, profileOf } from "@lemma/contracts/profiles";
+import { buildKind, KINDS } from "@lemma/host/paths";
 import type { Io, Target } from "./command.ts";
 import { rootOf } from "./connect.ts";
 
@@ -44,8 +45,8 @@ export const openPage = (io: Io, url: string | undefined, prompt: string | undef
 
 /**
  * The running desktop app's way in (`<root>/desktop.json`, which it writes,
- * one for every profile): the command that hands it a `lemma://` link.
- * Undefined when none runs.
+ * one for every profile): the command that hands it a link of its scheme
+ * (`lemma://`, a checkout's `lemma-dev://`). Undefined when none runs.
  */
 const desktop = (home: string): readonly string[] | undefined => {
   try {
@@ -70,7 +71,7 @@ export const openWebPath = (io: Io, target: Target, path: string): boolean => {
   const sameAsDesktop = target.source === "local" || (target.source === "saved" && target.from.endsWith("environments.json"));
   const app = sameAsDesktop ? desktop(rootOf(io)) : undefined;
   if (app !== undefined) {
-    spawn(app[0]!, [...app.slice(1), deepLink(path, profileOf(io.env) ?? DEFAULT_PROFILE)], { detached: true, stdio: "ignore" })
+    spawn(app[0]!, [...app.slice(1), deepLink(path, profileOf(io.env) ?? DEFAULT_PROFILE, KINDS[buildKind].scheme)], { detached: true, stdio: "ignore" })
       .on("error", () => {})
       .unref();
     return true;

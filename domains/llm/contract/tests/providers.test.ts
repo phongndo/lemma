@@ -112,9 +112,12 @@ describe("a sign-in from this page", () => {
     expect(browserPlace("127.0.0.1")).toBe("here");
     expect(browserPlace("[::1]")).toBe("here");
     expect(browserPlace("devbox.local")).toBe("elsewhere");
-    // A web tab opened from the page has no host token: only the desktop app is offered.
-    expect(signInReturn(false)).toBeUndefined();
-    expect(signInReturn(true)).toBe("lemma://settings/providers");
+    // A web tab opened from the page has no host token: only the desktop app is offered, the one the person came from.
+    expect(signInReturn(undefined)).toBeUndefined();
+    expect(signInReturn({ deepLinkScheme: "lemma" })).toBe("lemma://settings/providers");
+    expect(signInReturn({ deepLinkScheme: "lemma-dev" })).toBe("lemma-dev://settings/providers");
+    // An app from before it said its scheme is an installed Lemma's.
+    expect(signInReturn({})).toBe("lemma://settings/providers");
   });
 
   it("counts a device code down, and says nothing once it has expired", () => {

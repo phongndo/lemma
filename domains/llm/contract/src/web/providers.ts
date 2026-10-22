@@ -1,3 +1,4 @@
+import { DEEP_LINK_SCHEME } from "@lemma/contracts";
 import { usesPlan } from "../llm.ts";
 import type { CustomProviderSpec, ProviderInfo } from "../llm.ts";
 import { matchesQuery } from "@lemma/web/match";
@@ -245,11 +246,13 @@ export const logoSource = (svg: string): string => `data:image/svg+xml;charset=u
 export const browserPlace = (hostname: string): "here" | "elsewhere" => (/^(localhost|127(\.\d+){3}|\[::1\])$/.test(hostname) ? "here" : "elsewhere");
 
 /**
- * Where a sign-in's page in the browser offers to go back to: the desktop app's Providers page (`lemma://`), which opens
- * in its window. A web page offers none: the tab that opens it has no copy of the host's token, which only the page's
- * own tab keeps, so it could not connect; its page says to go back to Lemma instead.
+ * Where a sign-in's page in the browser offers to go back to: the desktop app's Providers page, which opens in its
+ * window, at its bridge's scheme (`lemma://`, a checkout's `lemma-dev://`), so it is the app the person came from. A
+ * web page offers none: the tab that opens it has no copy of the host's token, which only the page's own tab keeps, so
+ * it could not connect; its page says to go back to Lemma instead.
  */
-export const signInReturn = (desktop: boolean): string | undefined => (desktop ? "lemma://settings/providers" : undefined);
+export const signInReturn = (desktop: { readonly deepLinkScheme?: string } | undefined): string | undefined =>
+  desktop === undefined ? undefined : `${desktop.deepLinkScheme ?? DEEP_LINK_SCHEME}://settings/providers`;
 
 /** How long until `at` (epoch ms), as a sign-in's countdown says it: `14:05`; undefined once past. */
 export const timeLeft = (at: number, now: number): string | undefined => {
