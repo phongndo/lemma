@@ -569,10 +569,12 @@ describe("a change a plugin's own call asks for", () => {
   let home: string;
   /**
    * Its own calls change its config, restart it, and reload the host, each answering whether the change was deferred
-   * (`set` with the value it still serves); its streams change its config, or reload the host, and stay open. `edition`
-   * (its version too) tells its file's versions apart, and `activation` counts its starts from one file.
+   * (`set` with the value it still serves); its streams change its config, or write a plugin file and reload the host,
+   * and stay open. `edition` (its version too) tells its file's versions apart, and `activation` counts its starts from
+   * one file.
    */
-  const selfconf = (edition: number) => `import { Effect, Schema, Stream } from "effect";
+  const selfconf = (edition: number) => `import { writeFile } from "node:fs/promises";
+import { Effect, Schema, Stream } from "effect";
 import { definePlugin } from "@lemma/core";
 import { Channels, HostControl, serveChannel } from "@lemma/contracts";
 let activations = 0;
@@ -601,8 +603,8 @@ export default definePlugin({
     yield* owner.add(Channels, serveChannel({ kind: "stream", id: "selfconf.watch", payload: Schema.Number, success: Answer }, (value) =>
       Stream.concat(Stream.fromEffect(Effect.map(host.configure({ selfconf: { config: { value } } }), (report) => answer(report.deferred)).pipe(Effect.orDie)), Stream.never),
     ));
-    yield* owner.add(Channels, serveChannel({ kind: "stream", id: "selfconf.reloading", payload: Schema.Void, success: Answer }, () =>
-      Stream.concat(Stream.fromEffect(Effect.map(host.reload, (report) => answer(report.deferred)).pipe(Effect.orDie)), Stream.never),
+    yield* owner.add(Channels, serveChannel({ kind: "stream", id: "selfconf.reloading", payload: Schema.Struct({ file: Schema.String, text: Schema.String }), success: Answer }, ({ file, text }) =>
+      Stream.concat(Stream.fromEffect(Effect.promise(() => writeFile(file, text)).pipe(Effect.andThen(host.reload), Effect.map((report) => answer(report.deferred)), Effect.orDie)), Stream.never),
     ));
   },
 });
@@ -622,22 +624,24 @@ export default definePlugin({
   },
 });
 `;
-  beforeAll(async () => {
-    lemma = await startLemma("lemma-cli-self-", {
+  const start = () =>
+    startLemma("lemma-cli-self-", {
       prepare: async (home) => {
         await mkdir(join(home, "plugins"));
         await writeFile(join(home, "plugins", "selfconf.ts"), selfconf(1));
         await writeFile(join(home, "plugins", "heard.ts"), heard);
       },
     });
+  beforeAll(async () => {
+    lemma = await start();
     home = lemma.home;
   }, 30_000);
   afterAll(() => lemma?.stop());
   printOnFailure(() => lemma?.output());
 
-  /** Calls one of the plugin file's channels; it fails while the plugin is being replaced. */
-  const call = async (id: string, payload?: unknown) => {
-    const result = await invoke(["channels", "call", id, ...(payload === undefined ? [] : [JSON.stringify(payload)]), "--json"], home);
+  /** Calls one of the plugin file's channels, on this group's host or the one at `at`; it fails while the plugin is being replaced. */
+  const call = async (id: string, payload?: unknown, at = home) => {
+    const result = await invoke(["channels", "call", id, ...(payload === undefined ? [] : [JSON.stringify(payload)]), "--json"], at);
     if (result.code !== ExitCode.ok) throw new Error(result.err);
     return JSON.parse(result.out) as unknown;
   };
@@ -681,29 +685,39 @@ export default definePlugin({
   });
 
   // A stream ends as soon as its plugin leaves, so it holds nothing up: deferred, the change would wait until its client closed it.
-  test("a change a stream asks for applies at once, ending the stream Withdrawn, and clients hear it", async () => {
-    const opened = await invoke(["channels", "open", "selfconf.watch", "9", "--json"], home);
-    expect(opened.code).toBe(ExitCode.failed);
-    expect(JSON.parse(opened.err).error).toMatchObject({ code: "Withdrawn", subject: "selfconf.watch" });
-    expect(
-      await settled(
-        () => call("selfconf.value"),
-        (now) => now === 9,
-      ),
-    ).toBe(9);
+  // Only a change that restarts selfconf ends its stream, so nothing else may apply it first. Each try has a host of its
+  // own: on the group's, a reload the host's file watchers had yet to make for the files the tests above wrote applied
+  // the plugin file this one wrote before its stream could, and the stream stayed open; and a retry would ask for what
+  // the try before it had applied. The stream writes its plugin file itself, then reloads, so no watcher sees it first.
+  test("a change a stream asks for applies at once, ending the stream Withdrawn, and clients hear it", async ({ onTestFailed }) => {
+    const own = await start();
+    onTestFailed(() => console.error(own.output()));
+    try {
+      const opened = await invoke(["channels", "open", "selfconf.watch", "9", "--json"], own.home);
+      expect(opened.code).toBe(ExitCode.failed);
+      expect(JSON.parse(opened.err).error).toMatchObject({ code: "Withdrawn", subject: "selfconf.watch" });
+      expect(
+        await settled(
+          () => call("selfconf.value", undefined, own.home),
+          (now) => now === 9,
+        ),
+      ).toBe(9);
 
-    // Ended midway through the reload it asked for, which still runs to its end and publishes the new plugin list.
-    await writeFile(join(home, "plugins", "selfconf.ts"), selfconf(3));
-    const reloaded = await invoke(["channels", "open", "selfconf.reloading", "--json"], home);
-    expect(reloaded.code).toBe(ExitCode.failed);
-    expect(JSON.parse(reloaded.err).error).toMatchObject({ code: "Withdrawn", subject: "selfconf.reloading" });
-    expect(
-      await settled(
-        () => call("heard.selfconf"),
-        (now) => now === "3",
-      ),
-    ).toBe("3");
-  });
+      // Ended midway through the reload it asked for, which still runs to its end and publishes the new plugin list.
+      const edition = JSON.stringify({ file: join(own.home, "plugins", "selfconf.ts"), text: selfconf(3) });
+      const reloaded = await invoke(["channels", "open", "selfconf.reloading", edition, "--json"], own.home);
+      expect(reloaded.code).toBe(ExitCode.failed);
+      expect(JSON.parse(reloaded.err).error).toMatchObject({ code: "Withdrawn", subject: "selfconf.reloading" });
+      expect(
+        await settled(
+          () => call("heard.selfconf", undefined, own.home),
+          (now) => now === "3",
+        ),
+      ).toBe("3");
+    } finally {
+      await own.stop();
+    }
+  }, 30_000);
 
   // The general rule through a bundled plugin: llm's own call changes llm's config, which restarts llm alone.
   test("llm.add-custom answers at once with the new provider's id, listed once llm has reloaded", async () => {

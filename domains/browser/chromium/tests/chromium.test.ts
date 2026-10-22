@@ -21,8 +21,9 @@ const found = findChromium({
 });
 const missing = "problem" in found;
 /**
- * How long a hook or test that starts a Chromium may take: a cold start on a busy machine (CI runs every package's tests
- * at once) outlasts the defaults. Each group starts its browser in a hook, so its tests meet a warm one.
+ * How long a hook or test that starts or closes a Chromium may take: a cold start on a busy machine (CI runs every
+ * package's tests at once) outlasts the defaults, and so does closing one there (macOS's took more than a hook's 10
+ * seconds). Each group starts its browser in a hook, so its tests meet a warm one.
  */
 const LAUNCH_MS = 60_000;
 
@@ -59,7 +60,7 @@ const refOf = (tree: string, line: RegExp) => {
 describe.skipIf(missing)("Chromium", () => {
   const browser = makeChromium({ idleMs: 0, headless: true });
   const { service } = browser;
-  afterAll(() => browser.close());
+  afterAll(() => browser.close(), LAUNCH_MS);
 
   beforeAll(async () => {
     await run(service.open("a", { url: FORM }));
@@ -203,7 +204,7 @@ describe.skipIf(missing)("Chromium over HTTP", () => {
   afterAll(async () => {
     await browser.close();
     server.close();
-  });
+  }, LAUNCH_MS);
 
   it("says what a failed load was, and loads the next page after it, its error page landing first", async () => {
     await run(service.open("h", { url: `${origin}/two` }));
