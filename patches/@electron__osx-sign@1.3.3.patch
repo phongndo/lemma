@@ -1,0 +1,28 @@
+diff --git a/dist/cjs/util.js b/dist/cjs/util.js
+index 77e64b56872bc65bcb0f60ecfbec84eb3da02c6f..2d0b2c941fec99aececbf4ce2f3735ed7420737f 100644
+--- a/dist/cjs/util.js
++++ b/dist/cjs/util.js
+@@ -153,7 +153,8 @@ async function walkAsync(dirPath) {
+         const children = await fs.readdir(dirPath);
+         return await Promise.all(children.map(async (child) => {
+             const filePath = path.resolve(dirPath, child);
+-            const stat = await fs.stat(filePath);
++            // Lemma's patch: lstat, as osx-sign 2 has it, so a link to a directory is not walked again through it.
++            const stat = await fs.lstat(filePath);
+             if (stat.isFile()) {
+                 switch (path.extname(filePath)) {
+                     case '.cstemp': // Temporary file generated from past codesign
+diff --git a/dist/esm/util.js b/dist/esm/util.js
+index d3f66d54b1a88e7410d78affe17de87302db02a3..3832abca576be7137fef3213c2191cd3b5f73ddf 100644
+--- a/dist/esm/util.js
++++ b/dist/esm/util.js
+@@ -117,7 +117,8 @@ export async function walkAsync(dirPath) {
+         const children = await fs.readdir(dirPath);
+         return await Promise.all(children.map(async (child) => {
+             const filePath = path.resolve(dirPath, child);
+-            const stat = await fs.stat(filePath);
++            // Lemma's patch: lstat, as osx-sign 2 has it, so a link to a directory is not walked again through it.
++            const stat = await fs.lstat(filePath);
+             if (stat.isFile()) {
+                 switch (path.extname(filePath)) {
+                     case '.cstemp': // Temporary file generated from past codesign

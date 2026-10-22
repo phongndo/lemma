@@ -271,6 +271,16 @@ given to the macOS job as electron-builder reads them (`CSC_LINK` and
 the certificate, with the hardened runtime, rather than ad hoc. electron-builder
 notarizes an app it signed when those `APPLE_API_*` variables are set.
 
+Signing walks the app for the files to sign. electron-builder 26 signs with
+`@electron/osx-sign` 1.3.3, whose walk follows links: through pnpm's in the
+archive it reaches the same packages again by every path to them, millions of
+paths for the archive's 22,000 files, and runs out of memory. A patch
+(`patches/@electron__osx-sign@1.3.3.patch`) has it look at a link rather than
+through it, as osx-sign 2 does
+([osx-sign#372](https://github.com/electron/osx-sign/pull/372)); it goes when
+electron-builder signs with osx-sign 2. Only the Nightly workflow builds the
+macOS app.
+
 Every build is a release, and stable is the one marked latest:
 
 - **Nightly** (`.github/workflows/nightly.yml`), daily and by hand, takes the
