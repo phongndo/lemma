@@ -89,7 +89,9 @@ What runs from the checkout (`pnpm dev`, `dev:desktop`, `dev:web`, `desktop`,
 `start`, `lemma`) uses its own home, `~/.lemma-dev`, unless `LEMMA_HOME` names
 another, and `pnpm dev`'s host listens on port 7434: a Lemma you
 [installed](installation.md) runs beside it, on `~/.lemma` and port 7433, its
-sessions and settings out of a development build's reach. `pnpm dev:web` alone
+sessions and settings out of a development build's reach. Its window and tab
+show the orange [dev icon](../assets/brand/README.md), so you can tell the two
+apart. `pnpm dev:web` alone
 proxies to the host running on that home, else to 7434, unless
 `LEMMA_HOST_URL` names another. Log in to a provider
 there once. Every checkout shares `~/.lemma-dev`, which has one host at a

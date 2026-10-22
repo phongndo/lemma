@@ -101,9 +101,10 @@ const platformFlags = (target: Target): string[] => {
 };
 
 try {
-  // The libraries' declarations (an editor's types for a plugin file), and the page the host serves.
+  // The libraries' declarations (an editor's types for a plugin file), and the page the host serves, with the
+  // release's icon rather than a checkout's.
   run("pnpm", ["build"]);
-  run("pnpm", ["--filter", "@lemma/web-app", "build"]);
+  run("pnpm", ["--filter", "@lemma/web-app", "build", "--mode", "release"]);
 
   // Every project's manifest, so the frozen lockfile matches the workspace; the sources of the command's and the desktop
   // app's production closures only, and the builds their packages export.

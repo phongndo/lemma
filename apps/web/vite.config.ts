@@ -132,8 +132,25 @@ function precompress(): Plugin {
   };
 }
 
-export default defineConfig({
-  plugins: [solid(), tailwindcss(), utilityCandidates(), precompress()],
+const FAVICON = 'href="/favicon.svg"';
+
+/**
+ * A checkout's page shows the dev icon (`public/favicon-dev.svg`), so its tab is told apart from an installed Lemma's;
+ * a release's build (`--mode release`, from scripts/dist.ts) keeps the mark.
+ */
+function devIcon(release: boolean): Plugin {
+  return {
+    name: "lemma:dev-icon",
+    transformIndexHtml(html) {
+      if (release) return html;
+      if (!html.includes(FAVICON)) throw new Error(`index.html links no ${FAVICON} for the dev icon to replace`);
+      return html.replace(FAVICON, 'href="/favicon-dev.svg"');
+    },
+  };
+}
+
+export default defineConfig(({ mode }) => ({
+  plugins: [solid(), tailwindcss(), utilityCandidates(), precompress(), devIcon(mode === "release")],
   resolve: { conditions: ["lemma-source"] },
   server: {
     host: process.env.LEMMA_DEV_HOST ?? "127.0.0.1",
@@ -146,4 +163,4 @@ export default defineConfig({
     assetsInlineLimit: (file) => (file.endsWith(".svg") ? false : undefined),
   },
   test: { environment: "node", include: ["tests/**/*.test.ts"] },
-});
+}));
