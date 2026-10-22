@@ -132,25 +132,31 @@ function precompress(): Plugin {
   };
 }
 
-const FAVICON = 'href="/favicon.svg"';
+/** What a checkout's page says in place of a release's: the dev icon (`public/favicon-dev.svg`), and its kind's name. */
+const CHECKOUT_PAGE: readonly (readonly [string, string])[] = [
+  ['href="/favicon.svg"', 'href="/favicon-dev.svg"'],
+  ["<title>lemma</title>", `<title>${KINDS.checkout.name.toLowerCase()}</title>`],
+];
 
 /**
- * A checkout's page shows the dev icon (`public/favicon-dev.svg`), so its tab is told apart from an installed Lemma's;
- * a release's build (`--mode release`, from scripts/dist.ts) keeps the mark.
+ * A checkout's page (`CHECKOUT_PAGE`), so its tab and window are told apart from an installed Lemma's; a release's build
+ * (`--mode release`, from scripts/dist.ts) keeps the mark and the name.
  */
-function devIcon(release: boolean): Plugin {
+function checkoutPage(release: boolean): Plugin {
   return {
-    name: "lemma:dev-icon",
-    transformIndexHtml(html) {
-      if (release) return html;
-      if (!html.includes(FAVICON)) throw new Error(`index.html links no ${FAVICON} for the dev icon to replace`);
-      return html.replace(FAVICON, 'href="/favicon-dev.svg"');
-    },
+    name: "lemma:checkout-page",
+    transformIndexHtml: (html) =>
+      release
+        ? html
+        : CHECKOUT_PAGE.reduce((page, [from, to]) => {
+            if (!page.includes(from)) throw new Error(`index.html has no ${from} for a checkout's page to replace`);
+            return page.replace(from, to);
+          }, html),
   };
 }
 
 export default defineConfig(({ mode }) => ({
-  plugins: [solid(), tailwindcss(), utilityCandidates(), precompress(), devIcon(mode === "release")],
+  plugins: [solid(), tailwindcss(), utilityCandidates(), precompress(), checkoutPage(mode === "release")],
   resolve: { conditions: ["lemma-source"] },
   server: {
     host: process.env.LEMMA_DEV_HOST ?? "127.0.0.1",

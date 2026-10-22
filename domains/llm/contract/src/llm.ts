@@ -385,7 +385,7 @@ export const LoginOptions = Schema.Struct({
    * nothing: a page reached through an SSH port forward looks local too, so such a flow still asks, as it does unsaid.
    */
   browser: Schema.optional(Schema.Literals(["here", "elsewhere"])),
-  /** Where the sign-in's page in the browser offers to go back to: a `lemma://` link to the desktop app, say. */
+  /** Where the sign-in's page in the browser offers to go back to: a `lemma://` (or `lemma-dev://`) link to the desktop app, say. */
   returnTo: Schema.optional(Schema.String),
 });
 export type LoginOptions = typeof LoginOptions.Type;

@@ -3,6 +3,7 @@ import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { Context } from "effect";
+import { DEEP_LINK_SCHEME, DEV_DEEP_LINK_SCHEME } from "@lemma/contracts";
 import type { Paths } from "@lemma/contracts";
 import { profileHome, profileNameProblem, profileOf } from "@lemma/contracts/profiles";
 
@@ -19,11 +20,12 @@ export const buildKind: BuildKind = existsSync(fileURLToPath(new URL("../../../r
 
 /**
  * Each kind's own, so an installed Lemma and a checkout run side by side, neither reaching the other's sessions and
- * settings: its root in the user's home, and its default profile's port, its other profiles' from the next one up.
+ * settings: its root in the user's home, its default profile's port (its other profiles' from the next one up), the
+ * name it is shown by, and its desktop app's link scheme.
  */
-export const KINDS: Readonly<Record<BuildKind, { readonly root: string; readonly port: number }>> = {
-  release: { root: ".lemma", port: 7433 },
-  checkout: { root: ".lemma-dev", port: 7533 },
+export const KINDS: Readonly<Record<BuildKind, { readonly root: string; readonly port: number; readonly name: string; readonly scheme: string }>> = {
+  release: { root: ".lemma", port: 7433, name: "Lemma", scheme: DEEP_LINK_SCHEME },
+  checkout: { root: ".lemma-dev", port: 7533, name: "Lemma Dev", scheme: DEV_DEEP_LINK_SCHEME },
 };
 
 /** The root a kind uses when `LEMMA_HOME` names none: `~/.lemma` for a release, `~/.lemma-dev` for a checkout. */

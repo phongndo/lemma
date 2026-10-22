@@ -1,4 +1,5 @@
 import type { OAuthPage } from "@earendil-works/pi-ai/utils/oauth-page";
+import { deepLinkPath } from "@lemma/contracts";
 
 /**
  * The page a browser is shown when a sign-in sends it back to the host: Lemma's, in place of pi's (through Lemma's
@@ -35,12 +36,12 @@ p{margin:0;color:var(--text-2);overflow-wrap:anywhere}
 p+p{margin-top:8px}
 .back{display:inline-block;margin-top:20px;padding:7px 14px;border-radius:8px;background:var(--button);color:var(--button-text);font-weight:600;text-decoration:none}`;
 
-/** Where a sign-in's page may offer to go back to: the client's own page, or the desktop app (`lemma://`). */
+/** Where a sign-in's page may offer to go back to: the client's own page, or the desktop app (`lemma://`, `lemma-dev://`). */
 export const safeReturn = (returnTo: string | undefined): string | undefined => {
   if (returnTo === undefined) return undefined;
   try {
     const url = new URL(returnTo);
-    return ["http:", "https:", "lemma:"].includes(url.protocol) ? url.href : undefined;
+    return ["http:", "https:"].includes(url.protocol) || deepLinkPath(url.href) !== undefined ? url.href : undefined;
   } catch {
     return undefined;
   }

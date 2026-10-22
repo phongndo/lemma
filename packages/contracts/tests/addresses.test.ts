@@ -20,6 +20,8 @@ describe("addresses", () => {
     expect(deepLinkPath("lemma://settings/plugins?plugin=agent#x")).toBe("/settings/plugins?plugin=agent");
     expect(deepLinkPath("lemma://threads/s1?token=stolen")).toBe("/threads/s1");
     expect(deepLinkPath("lemma://")).toBe("/");
+    // A checkout's desktop app opens its own scheme's.
+    expect(deepLinkPath("lemma-dev://threads/s1?token=stolen")).toBe("/threads/s1");
     expect(deepLinkPath("https://example.com/threads/s1")).toBeUndefined();
     expect(deepLinkPath("not a url")).toBeUndefined();
   });

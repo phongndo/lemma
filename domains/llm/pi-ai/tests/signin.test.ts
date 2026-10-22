@@ -35,6 +35,10 @@ describe("the sign-in page", () => {
     expect(html).toContain("a &quot;quoted&quot; &lt;b&gt;detail&lt;/b&gt;");
     expect(html).not.toContain("Return to Lemma");
     expect(safeReturn("https://lemma.test/settings/providers")).toBe("https://lemma.test/settings/providers");
+    // Back to the desktop app the sign-in came from: an installed Lemma's, or a checkout's.
+    expect(safeReturn("lemma://settings/providers")).toBe("lemma://settings/providers");
+    expect(safeReturn("lemma-dev://settings/providers")).toBe("lemma-dev://settings/providers");
+    expect(safeReturn("lemma:/\\evil.com")).toBeUndefined();
     expect(safeReturn("javascript:alert(1)")).toBeUndefined();
     expect(safeReturn("not a url")).toBeUndefined();
   });

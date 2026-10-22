@@ -31,7 +31,8 @@
  *   main column, the room its rightmost bar leaves at the right.
  * - `window.lemmaDesktop`, in a desktop window, is its app's bridge
  *   (`apps/desktop/src/preload.cjs`): `ownsHost` when the app started the
- *   host, and `reload()` for that case, which restarts it (see the desktop
+ *   host, `deepLinkScheme`, the scheme of the links that open it (`lemma`, a
+ *   checkout's `lemma-dev`), and `reload()` for that case, which restarts it (see the desktop
  *   README). The `reload` plugin uses it; a replacement can too. Its
  *   `openProfile(name)` shows another profile in a window of its own, starting
  *   its host when none runs; the `profiles.switcher` plugin uses it. Its

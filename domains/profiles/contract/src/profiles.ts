@@ -217,11 +217,11 @@ export const profileNameFor = (title: string, taken: Iterable<string>): string =
  */
 export const DEEP_LINK_PROFILE = "profile";
 
-/** A deep link to the web app's `path`, in `profile` when one is named. */
-export const deepLink = (path: string, profile?: string): string => {
+/** A deep link to the web app's `path`, in `profile` when one is named, for the app that opens `scheme`'s links. */
+export const deepLink = (path: string, profile?: string, scheme = DEEP_LINK_SCHEME): string => {
   const url = new URL(path, "http://app.invalid");
   if (profile !== undefined) url.searchParams.set(DEEP_LINK_PROFILE, profile);
-  return `${DEEP_LINK_SCHEME}://${url.pathname.replace(/^\/+/, "")}${url.search}`;
+  return `${scheme}://${url.pathname.replace(/^\/+/, "")}${url.search}`;
 };
 
 /** A deep link's address, as `deepLinkPath` reads it, without the profile it names (`DEEP_LINK_PROFILE`), and that profile. */

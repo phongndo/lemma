@@ -25,6 +25,9 @@ describe("a deep link", () => {
     expect(deepLink("/settings/plugins?plugin=agent", "desk")).toBe("lemma://settings/plugins?plugin=agent&profile=desk");
     expect(deepLinkTarget("lemma://settings/plugins?plugin=agent&profile=desk")).toEqual({ path: "/settings/plugins?plugin=agent", profile: "desk" });
     expect(deepLinkTarget("lemma://threads/s1")).toEqual({ path: "/threads/s1" });
+    // For a checkout's desktop app, in its own scheme.
+    expect(deepLink("/threads/s1", "desk", "lemma-dev")).toBe("lemma-dev://threads/s1?profile=desk");
+    expect(deepLinkTarget("lemma-dev://threads/s1?profile=desk")).toEqual({ path: "/threads/s1", profile: "desk" });
     expect(deepLinkTarget("https://example.com/threads/s1")).toBeUndefined();
   });
 });
