@@ -354,12 +354,9 @@ const MOCK_RELEASE: ReleaseStatus = {
     node: "24.22.0",
   },
   updatable: true,
-  checks: true,
   channel: "nightly",
   newest: "0.2.9",
   newer: true,
-  older: false,
-  checkedAt: 1_792_000_000_000,
 };
 
 const serveCall = <Payload, Success>(
@@ -477,7 +474,7 @@ export const createMockHost = (): Host => {
   const configs: Record<string, Schema.Codec<any, any>> = {
     "release.updates": Schema.Struct({
       check: Schema.Boolean.pipe(Schema.withDecodingDefaultType(Effect.sync(() => true))).annotate({
-        title: "Check for updates",
+        title: "Check automatically",
         description: "Ask every few hours whether a newer release is out on this install's channel, and say so when one is.",
       }),
     }),
@@ -2375,7 +2372,7 @@ export const createMockHost = (): Host => {
     serveCall("devtools.trace", TraceChannels.changes, async () => mockTrace.history.get()),
     serveCall("devtools.host", HostChannels.info, async () => ({ cwd: CWD, home: HOME, composition: compositionInfo(), runtime })),
     serveCall("release.updates", ReleaseChannels.status, async () => MOCK_RELEASE),
-    serveCall("release.updates", ReleaseChannels.check, async () => ({ ...MOCK_RELEASE, checkedAt: Date.now() })),
+    serveCall("release.updates", ReleaseChannels.check, async () => MOCK_RELEASE),
     // A mock cannot restart: it says the release is there already.
     serveCall("release.updates", ReleaseChannels.update, async () => ({ version: MOCK_RELEASE.newest!, updated: false, restarting: false })),
     serveCall("devtools.host", HostChannels.plugins, async ({ ids }) =>

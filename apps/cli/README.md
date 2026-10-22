@@ -23,7 +23,7 @@ plugin could serve:
   `service`, `env`, `token`, `config`, `trust`, `profile`, `doctor`,
   `plugins check`. They need no host running.
 - **This lemma:** `version`, and `update`, which installs another release with
-  the installer the release carries ([versioning](../../docs/versioning.md)).
+  the installer the release carries ([updating](../../docs/installation.md#updating)).
 - **The runtime's:** `status`, `plugins`, `reload`, `kernel`, `inspectors`,
   `channels`, `events`, `questions`, `answer`, `dismiss`, `open`: what the host
   serves itself (`RuntimeRpcs`), whatever plugins run.

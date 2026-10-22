@@ -625,14 +625,8 @@ export const parts = async (): Promise<string> => {
     .waitForFunction((path) => `${location.pathname}${location.search}` === path, thread, { timeout: 5_000 })
     .catch(async () => assert.fail(`closing settings after a reload went to ${await where()}`));
   assert.equal(await page.locator(".thread-inspector").count(), 0, "⌘I over Settings opened the thread's pane");
-  // The sidebar's foot leads to settings (which take the sidebar while open) through its menu, which the mock's release,
-  // with an update out, adds a row to; Escape comes back.
+  // The sidebar's foot leads to settings (which take the sidebar while open); Escape comes back.
   await page.click(".sidebar-foot [aria-label=Settings]");
-  await page
-    .locator(".settings-menu [role=menuitem]", { hasText: "Update to Lemma 0.2.9" })
-    .waitFor({ timeout: 5_000 })
-    .catch(() => assert.fail("the settings button's menu has no update row"));
-  await page.click(".settings-menu .menu-label:text-is('Settings')");
   await page.waitForFunction(() => location.pathname.startsWith("/settings"));
   await page.keyboard.press("Escape");
   await page

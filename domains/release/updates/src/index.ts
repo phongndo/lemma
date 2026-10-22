@@ -3,7 +3,7 @@ import { Effect, Ref, Schedule, Schema } from "effect";
 import { CliChecks } from "@lemma/cli";
 import { Channels, Notice, Paths, serveChannel, shellWord } from "@lemma/contracts";
 import { definePlugin, Events } from "@lemma/core";
-import { Build, ReleaseChannels, ReleaseError } from "@lemma/release";
+import { Build, compareVersions, RELEASE_CONTRACT, ReleaseChannels, ReleaseError } from "@lemma/release";
 import type { ReleaseStatus } from "@lemma/release";
 import { CheckAnswer, restartLater, runLemma, UpdateAnswer } from "./lemma.ts";
 
@@ -13,7 +13,7 @@ const Config = Schema.Struct({
     description: "How to run the lemma command beside this host, as a shell command line: what tells this plugin what Lemma it runs. The host sets it.",
   }),
   check: Schema.Boolean.pipe(Schema.withDecodingDefaultType(Effect.sync(() => true))).annotate({
-    title: "Check for updates",
+    title: "Check automatically",
     description: "Ask every few hours whether a newer release is out on this install's channel, and say so when one is.",
   }),
 });
@@ -25,26 +25,14 @@ const FIRST = "1 minute";
 const ASKING_MS = 60_000;
 const INSTALLING_MS = 15 * 60_000;
 
-/** What the last check found, relative to the release this host runs. */
+/** What the last check found: what the installer's lemma answered, and why the last check failed, if it did. */
 interface Found {
-  readonly newest?: string;
-  readonly newer: boolean;
-  readonly older: boolean;
-  readonly channel?: "stable" | "nightly";
-  readonly checkedAt?: number;
+  readonly answer?: CheckAnswer;
   readonly error?: string;
 }
 
 const installed = (build: Build): build is Build & { readonly link: string } =>
   build.kind === "release" && build.link !== undefined && build.dataDir !== undefined;
-
-const parts = (version: string) => version.split(".", 3).map((part) => Number.parseInt(part, 10) || 0);
-/** Below zero when `a` is the older release, above when the newer. */
-const compareVersions = (a: string, b: string): number => {
-  const [x, y] = [parts(a), parts(b)];
-  for (let i = 0; i < 3; i++) if (x[i] !== y[i]) return (x[i] ?? 0) - (y[i] ?? 0);
-  return 0;
-};
 
 /**
  * What this Lemma is, and updating it (`ReleaseChannels`): what `lemma version` says, a check now and then for a newer
@@ -56,6 +44,7 @@ const compareVersions = (a: string, b: string): number => {
 export default definePlugin({
   id: "release.updates",
   version: "0.1.0",
+  implements: [RELEASE_CONTRACT],
   config: Config,
   requires: { paths: Paths },
   setup: function* ({ paths }, plugin) {
@@ -69,21 +58,25 @@ export default definePlugin({
     const build = Effect.suspend(() =>
       known !== undefined ? Effect.succeed(known) : Effect.tap(runLemma(cli, ["version"], Build, ASKING_MS), (about) => Effect.sync(() => (known = about))),
     );
-    const found = yield* Ref.make<Found>({ newer: false, older: false });
+    const found = yield* Ref.make<Found>({});
     const told = new Set<string>();
+    // One update at a time: from installing until its restart ends.
     let updating = false;
     let restartError: string | undefined;
 
     const status: Effect.Effect<ReleaseStatus, ReleaseError> = Effect.gen(function* () {
       const about = yield* build;
-      const { channel, ...last } = yield* Ref.get(found);
-      const following = channel ?? about.channel;
+      const { answer, error } = yield* Ref.get(found);
+      // Until a check answers, the channel this release was installed from; then the installer's lemma's, none if pinned.
+      const channel = answer === undefined ? about.channel : answer.channel;
+      const newest = answer?.newest;
       return {
         build: about,
         updatable: installed(about),
-        checks: checks && installed(about),
-        ...last,
-        ...(following === undefined ? {} : { channel: following }),
+        newer: newest !== undefined && compareVersions(newest, about.version) > 0,
+        ...(channel === undefined ? {} : { channel }),
+        ...(newest === undefined ? {} : { newest }),
+        ...(error === undefined ? {} : { error }),
         ...(restartError === undefined ? {} : { restartError }),
       };
     });
@@ -95,23 +88,17 @@ export default definePlugin({
       if (!installed(about)) return yield* status;
       const answer = yield* Effect.result(runLemma(shellWord(about.link), ["update", "--check"], CheckAnswer, ASKING_MS));
       if (answer._tag === "Failure") yield* Ref.update(found, (last) => ({ ...last, error: answer.failure.message }));
-      else {
-        const { newest, channel } = answer.success;
-        const order = compareVersions(newest, about.version);
-        yield* Ref.set(found, { newest, newer: order > 0, older: order < 0, channel, checkedAt: Date.now() });
-        if (order !== 0 && !told.has(newest)) {
-          told.add(newest);
-          yield* events.publish(Notice, {
-            level: "info",
-            source: plugin.id,
-            message:
-              order > 0
-                ? `Lemma ${newest} is out on ${channel}, and this is ${about.version}: Settings › About updates to it`
-                : `The ${channel} release went back to Lemma ${newest}, and this is ${about.version}: Settings › About goes back to it`,
-          });
-        }
+      else yield* Ref.set(found, { answer: answer.success });
+      const now = yield* status;
+      if (now.newer && now.newest !== undefined && !told.has(now.newest)) {
+        told.add(now.newest);
+        yield* events.publish(Notice, {
+          level: "info",
+          source: plugin.id,
+          message: `Lemma ${now.newest} is out on ${now.channel}, and this is ${about.version}: Settings › About updates to it`,
+        });
       }
-      return yield* status;
+      return now;
     });
 
     const update = (version: string | undefined) =>
@@ -127,12 +114,18 @@ export default definePlugin({
         if (updating) return yield* new ReleaseError({ reason: "Busy", message: "An update is under way already" });
         updating = true;
         const answer = yield* runLemma(shellWord(about.link), ["update", ...(version === undefined ? [] : [version])], UpdateAnswer, INSTALLING_MS).pipe(
-          Effect.ensuring(Effect.sync(() => (updating = false))),
+          Effect.onError(() => Effect.sync(() => (updating = false))),
         );
         // What this host runs already. One installed already but not running (a terminal's `lemma update`) restarts all the same.
-        if (answer.version === about.version) return { version: answer.version, updated: false, restarting: false };
+        if (answer.version === about.version) {
+          updating = false;
+          return { version: answer.version, updated: false, restarting: false };
+        }
         restartError = undefined;
+        // Still updating until the restart ends: another update now would start a second restart under this one.
         restartLater(about.link, restartLog, (why) => {
+          updating = false;
+          if (why === undefined) return;
           restartError = why;
           Effect.runFork(
             events.publish(Notice, {
@@ -172,15 +165,15 @@ export default definePlugin({
               }
             : now.error !== undefined
               ? { status: "warn" as const, message: `Could not ask whether a newer release is out: ${now.error}` }
-              : now.newer || now.older
-                ? {
-                    status: "warn" as const,
-                    message: now.newer
-                      ? `Lemma ${now.newest} is out, and this is ${now.build.version}`
-                      : `The ${now.channel ?? "stable"} release went back to ${now.newest}, and this is ${now.build.version}`,
-                    fix: "lemma update, then lemma restart",
-                  }
-                : { status: "ok" as const, message: `Lemma ${now.build.version}, the newest on ${now.channel ?? "its channel"}` },
+              : now.channel === undefined
+                ? { status: "ok" as const, message: `Lemma ${now.build.version}, installed by version: it follows no channel` }
+                : now.newer
+                  ? {
+                      status: "warn" as const,
+                      message: `Lemma ${now.newest} is out on ${now.channel}, and this is ${now.build.version}`,
+                      fix: "lemma update, then lemma restart",
+                    }
+                  : { status: "ok" as const, message: `Lemma ${now.build.version}: no newer release is out on ${now.channel}` },
         ),
     });
 

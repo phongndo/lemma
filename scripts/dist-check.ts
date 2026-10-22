@@ -70,6 +70,11 @@ try {
   assert.equal(await realpath(lemma), installed, "a download that fails its checksum leaves the installed release in place");
   badChecksum = false;
 
+  // Installed by version, it is pinned: it follows no channel, so checks none, until one is named.
+  assert.equal((JSON.parse(await command(lemma, ["version", "--json"])) as { channel?: string }).channel, undefined);
+  assert.deepEqual(JSON.parse(await command(lemma, ["update", "--check", "--json"])), { version, newer: false });
+  await command(lemma, ["update"], 2);
+
   // A channel's newest, as the API says, and what lemma version and lemma update make of the install.
   await command("sh", [installer], 0, { LEMMA_VERSION: undefined, LEMMA_CHANNEL: "nightly" });
   const about = JSON.parse(await command(lemma, ["version", "--json"])) as Record<string, unknown>;
@@ -83,7 +88,6 @@ try {
     channel: "nightly",
     newest: version,
     newer: false,
-    older: false,
   });
   const before = await realpath(lemma);
   assert.deepEqual(JSON.parse(await command(lemma, ["update", "--channel", "stable", "--json"])), {

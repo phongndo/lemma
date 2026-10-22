@@ -8,19 +8,37 @@ import { defineChannel, optionalPayload } from "@lemma/contracts";
 
 export { RELEASE_CONTRACT } from "./version.ts";
 
-/** What `lemma version --json` says of the Lemma the host runs: its release, or a checkout. */
+/** The channels an install may follow: stable, the release marked latest, which only a promotion moves; nightly, the newest. */
+export const CHANNELS = ["stable", "nightly"] as const;
+export const Channel = Schema.Literals(CHANNELS);
+export type Channel = typeof Channel.Type;
+
+const parts = (version: string): readonly number[] => version.split(/[.-]/, 3).map((part) => Number.parseInt(part, 10) || 0);
+
+/** Below zero when release `a` is older than `b`, above when newer, zero when the same: by number, not as text. */
+export const compareVersions = (a: string, b: string): number => {
+  const [x, y] = [parts(a), parts(b)];
+  for (let i = 0; i < 3; i++) if (x[i] !== y[i]) return (x[i] ?? 0) - (y[i] ?? 0);
+  return 0;
+};
+
+/** What `lemma version --json` says of a Lemma: its release, or a checkout. */
 export const Build = Schema.Struct({
+  /** What `lemma --version` prints. */
   version: Schema.String,
   /** `release`: an archive of a release; `checkout`: a clone of the repository, as developers run Lemma. */
   kind: Schema.Literals(["release", "checkout"]),
-  /** Where its files are. */
+  /** Where its files are: the release's directory, or the checkout. */
   root: Schema.String,
-  /** The commit it was built from. */
+  /** The commit it was built from; a checkout's, when git says. */
   commit: Schema.optional(Schema.String),
   /** When the release was built, in ISO 8601. */
   built: Schema.optional(Schema.String),
-  /** What the installer recorded: the channel updates come from, the `lemma` command it links, and where it keeps releases. */
-  channel: Schema.optional(Schema.Literals(["stable", "nightly"])),
+  /**
+   * What the installer recorded: the channel updates come from (none for a release installed by version, which is
+   * pinned), the `lemma` command it links, and where it keeps releases.
+   */
+  channel: Schema.optional(Channel),
   link: Schema.optional(Schema.String),
   dataDir: Schema.optional(Schema.String),
   /** The Node.js it runs on. */
@@ -33,20 +51,15 @@ export const ReleaseStatus = Schema.Struct({
   build: Build,
   /** Whether `release.update` can replace it: a release the installer installed, not a checkout. */
   updatable: Schema.Boolean,
-  /** Whether it asks by itself, now and then, whether a newer release is out (its plugin's config). */
-  checks: Schema.Boolean,
   /**
    * The channel updates come from: what the installer recorded with the release installed last, which `lemma update
-   * --channel` may have switched since this host started.
+   * --channel` may have switched since this host started. None for a pinned release, which checks for nothing.
    */
-  channel: Schema.optional(Schema.Literals(["stable", "nightly"])),
-  /** The channel's newest release, as the last check found it. */
+  channel: Schema.optional(Channel),
+  /** The channel's newest release, as the last check found it, and whether it is newer than this. */
   newest: Schema.optional(Schema.String),
-  /** Whether `newest` is newer than this, or older: the channel went back to it (a stable release rolled back). */
   newer: Schema.Boolean,
-  older: Schema.Boolean,
-  /** When the last check answered (epoch ms), and why the last one failed, if it did. */
-  checkedAt: Schema.optional(Schema.Number),
+  /** Why the last check failed, if it did. */
   error: Schema.optional(Schema.String),
   /** Why the restart `release.update` asked for failed, leaving this host running; absent when none did. */
   restartError: Schema.optional(Schema.String),
@@ -97,8 +110,9 @@ export const ReleaseChannels = {
     repeatable: true,
   }),
   /**
-   * Installs the channel's newest release, or `version`, as `lemma update` does, then restarts the host on it, as
-   * `lemma restart --force` does, once it has answered: what was running is cut off, and turns resume.
+   * Installs the channel's newest release when it is newer, or `version`, as `lemma update` does, then restarts the
+   * host on it, as `lemma restart --force` does, once it has answered: what was running is cut off, and turns resume.
+   * One update at a time: another, until the restart has stopped the host or failed, is `Busy`.
    */
   update: defineChannel({
     kind: "call",

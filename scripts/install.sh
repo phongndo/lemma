@@ -1,8 +1,8 @@
 #!/bin/sh
-# Installs a Lemma release (docs/installation.md): curl -fsSL https://raw.githubusercontent.com/phongndo/lemma/main/scripts/install.sh | sh
+# Installs a Lemma release (docs/installation.md): curl -fsSL https://github.com/phongndo/lemma/releases/latest/download/install.sh | sh
 set -eu
 
-channel=${LEMMA_CHANNEL:-stable}
+channel=${LEMMA_CHANNEL:-}
 version=${LEMMA_VERSION:-}
 api_url=${LEMMA_RELEASE_API_URL:-https://api.github.com/repos/phongndo/lemma}
 install_dir=${LEMMA_INSTALL_DIR:-"$HOME/.local/bin"}
@@ -52,9 +52,11 @@ if [ -e "$destination" ] || [ -L "$destination" ]; then
 fi
 
 # Every build is a release: stable is the one marked latest, which only a promotion moves; nightly is the newest. The
-# channel is recorded with the release, for `lemma update` to follow, whichever release LEMMA_VERSION picks.
+# channel is recorded with the release, for `lemma update` to follow. A version given with no channel is pinned: it
+# follows none.
+[ -n "$version" ] || channel=${channel:-stable}
 case "$channel" in
-  stable | nightly) ;;
+  stable | nightly | "") ;;
   *) fail "LEMMA_CHANNEL must be stable or nightly" ;;
 esac
 if [ -z "$version" ]; then
@@ -68,7 +70,15 @@ if [ -z "$version" ]; then
       none="no release is published yet"
       ;;
   esac
-  metadata=$(curl -fsSL "$api") || fail "$none"
+  # A 404 for stable means it has none yet; any other failure (the network, a rate limit) is said as it is.
+  response=$(curl -sSL -w '\n%{http_code}' "$api") || fail "could not reach $api"
+  status=$(printf '%s\n' "$response" | tail -n 1)
+  metadata=$(printf '%s\n' "$response" | sed '$d')
+  if [ "$status" = 404 ] && [ "$channel" = stable ]; then fail "$none"; fi
+  if [ "$status" != 200 ]; then
+    said=$(printf '%s\n' "$metadata" | sed -n 's/.*"message"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1)
+    fail "$api answered $status${said:+: $said}"
+  fi
   version=$(printf '%s\n' "$metadata" | sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1)
   [ -n "$version" ] || fail "$none"
 fi
@@ -80,13 +90,27 @@ asset="$package.tar.gz"
 base_url=${LEMMA_RELEASE_BASE_URL:-"https://github.com/phongndo/lemma/releases/download/$tag"}
 temporary=$(mktemp -d)
 pending=""
+locked=""
 cleanup() {
   rm -rf "$temporary"
   if [ -n "$pending" ]; then rm -rf "$pending"; fi
+  if [ -n "$locked" ]; then rm -rf "$locked"; fi
 }
 trap cleanup EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
+
+# One install at a time, as another would prune the release this one is putting together, or switch the command under
+# it: a directory as the lock, since mkdir is atomic, naming the installer that holds it.
+mkdir -p "$data_dir/releases" "$install_dir"
+lock="$data_dir/install.lock"
+if ! mkdir "$lock" 2>/dev/null; then
+  holder=$(cat "$lock/pid" 2>/dev/null || true)
+  if [ -n "$holder" ] && kill -0 "$holder" 2>/dev/null; then fail "another install (pid $holder) is under way"; fi
+  fail "another install is under way, or one that stopped left $lock: if none is running, remove it and install again"
+fi
+locked=$lock
+printf '%s\n' "$$" >"$lock/pid"
 
 printf 'Installing Lemma %s for %s-%s\n' "$tag" "$platform" "$arch"
 curl -fSL --retry 3 "$base_url/$asset" -o "$temporary/$asset" || fail "could not download $asset"
@@ -96,42 +120,52 @@ expected=$(awk -v name="$asset" 'NF == 2 && $2 == name && length($1) == 64 && $1
 tar -xzf "$temporary/$asset" -C "$temporary"
 [ -x "$temporary/$package/bin/lemma" ] && [ -x "$temporary/$package/runtime/bin/node" ] || fail "$asset holds no Lemma and runtime"
 
-# Each install gets a directory of its own, so a host still running from the one before keeps its files.
-mkdir -p "$data_dir/releases" "$install_dir"
-pending=$(mktemp -d "$data_dir/releases/$package.XXXXXX")
-cp -R "$temporary/$package/." "$pending/"
+# Put together inside the lock, where no pruning looks, then moved into a directory of its own under releases/, so a
+# host still running from the one before keeps its files.
+staged="$lock/$package"
+cp -R "$temporary/$package" "$staged"
 # How it was installed, which `lemma version` shows and `lemma update` installs the next release by.
 json_string() { printf '"%s"' "$(printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g')"; }
-printf '{\n  "channel": %s,\n  "link": %s,\n  "dataDir": %s\n}\n' \
-  "$(json_string "$channel")" "$(json_string "$destination")" "$(json_string "$data_dir")" >"$pending/install.json"
+{
+  printf '{\n'
+  if [ -n "$channel" ]; then printf '  "channel": %s,\n' "$(json_string "$channel")"; fi
+  printf '  "link": %s,\n  "dataDir": %s\n}\n' "$(json_string "$destination")" "$(json_string "$data_dir")"
+} >"$staged/install.json"
 # Before switching the command: fails if this machine cannot run the release's runtime.
-if ! "$pending/bin/lemma" --version --text >/dev/null; then
+if ! "$staged/bin/lemma" --version --text >/dev/null; then
   [ ! -e /etc/NIXOS ] || fail "this machine cannot run $package: on NixOS, its Node.js needs nix-ld (programs.nix-ld.enable)"
   fail "this machine cannot run $package"
 fi
-ln -s "$pending/bin/lemma" "$temporary/lemma"
+# A name no release has, from mktemp; the lock keeps another install from taking it between rmdir and mv.
+installed=$(mktemp -d "$data_dir/releases/$package.XXXXXX")
+pending=$installed
+rmdir "$installed"
+mv "$staged" "$installed"
+ln -s "$installed/bin/lemma" "$temporary/lemma"
 mv -f "$temporary/lemma" "$destination"
-installed=$pending
 pending=""
 
 # Keep the release before this one, and any a process still runs from (a host not yet restarted, however many updates
-# ago it started), by the paths in its command line; remove the rest.
-running=$(ps -A -o args= 2>/dev/null || true)
-for release in "$data_dir"/releases/*/; do
-  release=${release%/}
-  case "$release" in
-    "$installed" | "${previous%/bin/lemma}") continue ;;
-  esac
-  physical=$(CDPATH='' cd -- "$release" 2>/dev/null && pwd -P) || physical=$release
-  case "$running" in
-    *"$release/"* | *"$physical/"*) continue ;;
-  esac
-  rm -rf "$release"
-done
+# ago it started), by the paths in its command line; remove the rest. Without ps to say which those are, keep them all.
+if running=$(ps -A -o args= 2>/dev/null); then
+  for release in "$data_dir"/releases/*/; do
+    release=${release%/}
+    case "$release" in
+      "$installed" | "${previous%/bin/lemma}") continue ;;
+    esac
+    physical=$(CDPATH='' cd -- "$release" 2>/dev/null && pwd -P) || physical=$release
+    case "$running" in
+      *"$release/"* | *"$physical/"*) continue ;;
+    esac
+    rm -rf "$release"
+  done
+else
+  printf 'lemma install: kept the releases before this one, as ps could not say which a running host uses\n' >&2
+fi
 
 printf '\nInstalled Lemma %s: %s\nIn a project, run: lemma serve\n' "$tag" "$destination"
 case ":$PATH:" in
   *":$install_dir:"*) ;;
   *) printf '\nAdd %s to your PATH, as in: export PATH="%s:$PATH"\n' "$install_dir" "$install_dir" ;;
 esac
-if [ -n "$previous" ]; then printf 'Restart a running host to use this version: lemma stop, then lemma serve.\n'; fi
+if [ -n "$previous" ]; then printf 'Restart a running host to use this version: lemma restart\n'; fi

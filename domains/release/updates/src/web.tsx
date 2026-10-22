@@ -1,10 +1,10 @@
 import { For, Show, createSignal } from "solid-js";
 import { CliChannels } from "@lemma/cli";
 import { Layers } from "@lemma/frame";
-import { Dialog, QuestionIcon, RefreshIcon, SettingRow, Spinner, Toggle } from "@lemma/look";
+import { Dialog, QuestionIcon, SettingRow, Spinner, Toggle } from "@lemma/look";
 import { ReleaseChannels } from "@lemma/release";
-import type { ReleaseStatus } from "@lemma/release";
-import { SettingsGroups, SettingsMenu, SettingsSections, configSetting } from "@lemma/settings";
+import type { Channel, ReleaseStatus } from "@lemma/release";
+import { SettingsGroups, SettingsSections, configSetting } from "@lemma/settings";
 import { Client, HostPlugins, Notify, Slots, defineWebPlugin } from "@lemma/web";
 
 const SECTION = "about";
@@ -21,6 +21,13 @@ const commitUrl = (commit: string) => `https://github.com/phongndo/lemma/commit/
 
 const when = (iso: string | undefined) => (iso === undefined ? undefined : new Date(iso).toLocaleString());
 
+/** What following each channel brings, or none. */
+const CHANNEL_MEANS: Record<Channel | "none", string> = {
+  stable: "Releases that held up as nightlies, then were promoted.",
+  nightly: "Each night's build of main.",
+  none: "Installed by version, it stays on that version.",
+};
+
 /** Where updating is: asked, under way on the host, or waiting for the host to come back on the new release. */
 type Updating =
   | { readonly step: "confirm"; readonly cutOff: readonly string[] }
@@ -29,8 +36,7 @@ type Updating =
 
 /**
  * The web half of `release.updates`: Settings › About, what this Lemma is and whether a newer release is out, with a
- * badge when one is, its Update button, and its check's switch; and a row of the settings button's menu that checks
- * now, or offers the update once one is out.
+ * badge when one is, its Update button, and its check's switch.
  */
 export default defineWebPlugin({
   id: "release.updates",
@@ -48,15 +54,13 @@ export default defineWebPlugin({
     plugin.onCleanup(client.onConnect(plugin.action("load the release's status", load)));
     plugin.every(REFRESH_MS, load);
 
-    /** Asks now whether a newer release is out; false when the check failed, which it reports. */
+    /** Asks now whether a newer release is out; a failure it reports. */
     const checkNow = async () => {
       setChecking(true);
       try {
         setStatus(await client.channel.call(ReleaseChannels.check, undefined));
-        return true;
       } catch (error) {
         notify.report(error, "Could not check for updates");
-        return false;
       } finally {
         setChecking(false);
       }
@@ -129,7 +133,7 @@ export default defineWebPlugin({
     /** While updating: what it cuts off, asked first; then what it is doing, until the page reloads on the new release. */
     const UpdateDialog = (props: { readonly step: Updating }) => (
       <Dialog
-        title={`${status()?.older ? "Go back to" : "Update to"} Lemma ${status()?.newest ?? ""}`}
+        title={`Update to Lemma ${status()?.newest ?? ""}`}
         closeOnBackdrop={false}
         onClose={props.step.step === "confirm" ? () => setUpdating(undefined) : undefined}
         footer={
@@ -166,53 +170,15 @@ export default defineWebPlugin({
       </Dialog>
     );
 
-    // Over whatever shows: Settings › About and the settings button's menu both start it.
+    // Over whatever shows, so it stays while the host restarts under the page.
     slots.add(Layers, { id: "release.update", order: 40, component: () => <Show when={updating()}>{(step) => <UpdateDialog step={step()} />}</Show> });
-
-    /**
-     * Its row of the settings button's menu, while this Lemma can update: a check now, which keeps the menu open and
-     * says what it found, or once a release is out, the update to it, asked first as the About page's button does.
-     */
-    function MenuRow(props: { close: () => void }) {
-      const [checked, setChecked] = createSignal(false);
-      const offered = () => (status()?.newer || status()?.older ? status()?.newest : undefined);
-      const check = plugin.action("check for updates", async () => setChecked(await checkNow()));
-      return (
-        <button
-          class="menu-item"
-          role="menuitem"
-          aria-disabled={checking()}
-          onClick={() => {
-            if (checking()) return;
-            if (offered() === undefined) return check();
-            props.close();
-            plugin.action("ask what updating cuts off", ask)();
-          }}
-        >
-          <Show when={checking()} fallback={<RefreshIcon />}>
-            <Spinner />
-          </Show>
-          <span class="menu-label">
-            {checking()
-              ? "Checking for updates…"
-              : offered() !== undefined
-                ? `${status()?.newer ? "Update to" : "Go back to"} Lemma ${offered()}`
-                : checked()
-                  ? "Lemma is up to date"
-                  : "Check for updates"}
-          </span>
-          <span class="menu-hint">{status()?.build.version}</span>
-        </button>
-      );
-    }
-    slots.add(SettingsMenu, { id: "release.updates", order: 100, when: () => status()?.updatable === true, component: MenuRow });
 
     slots.add(SettingsSections, {
       id: SECTION,
       order: 95,
       title: "About",
       icon: QuestionIcon,
-      badge: () => (status()?.newer || status()?.older ? "Update" : undefined),
+      badge: () => (status()?.newer ? "Update" : undefined),
     });
 
     const row = (text: string, title: string, value: () => string | undefined, description?: () => string | undefined) => ({
@@ -243,26 +209,26 @@ export default defineWebPlugin({
                     ? "A checkout, as developers run Lemma: it updates with git."
                     : !now.updatable
                       ? "Not installed by the installer, so it cannot replace it."
-                      : now.newer
-                        ? `Lemma ${now.newest} is out on ${now.channel ?? "its channel"}.`
-                        : now.older
-                          ? `The ${now.channel ?? "stable"} release went back to ${now.newest}.`
+                      : now.channel === undefined
+                        ? "Installed by version: it follows no channel."
+                        : now.newer
+                          ? `Lemma ${now.newest} is out on the ${now.channel} channel.`
                           : now.newest === undefined
-                            ? `On the ${now.channel ?? "stable"} channel.`
-                            : `The newest on ${now.channel ?? "its channel"}.`
+                            ? `On the ${now.channel} channel.`
+                            : `No newer release is out on the ${now.channel} channel.`
                 }
               >
                 <Show when={now.updatable}>
                   <Show
-                    when={now.newer || now.older}
+                    when={now.newer}
                     fallback={
                       <button type="button" class="button small" disabled={checking()} onClick={plugin.action("check for updates", checkNow)}>
-                        {checking() ? "Checking…" : "Check now"}
+                        {checking() ? "Checking for updates…" : "Check for updates"}
                       </button>
                     }
                   >
                     <button type="button" class="button small button-primary" onClick={plugin.action("ask what updating cuts off", ask)}>
-                      {now.newer ? "Update to" : "Go back to"} {now.newest}
+                      Update to Lemma {now.newest}
                     </button>
                   </Show>
                 </Show>
@@ -287,7 +253,7 @@ export default defineWebPlugin({
             "installed where path root link",
             build.kind === "checkout" ? "Checkout" : "Installed",
             () => build.root,
-            () => build.link && `As ${build.link}`,
+            () => build.link && `Linked from ${build.link}`,
           ),
           row("node.js runtime", "Node.js", () => build.node),
         ];
@@ -306,18 +272,18 @@ export default defineWebPlugin({
             text: "Check for updates automatically newer release notice",
             view: () => (
               <SettingRow
-                title="Check for updates"
-                description={`Ask every few hours whether a newer release is out on the ${now.channel ?? "stable"} channel.${now.error === undefined ? "" : ` The last check failed: ${now.error}`}`}
+                title="Check automatically"
+                description={`Ask every few hours whether a newer release is out${now.channel === undefined ? "" : ` on the ${now.channel} channel`}.${now.error === undefined ? "" : ` The last check failed: ${now.error}`}`}
               >
-                <Toggle label="Check for updates" checked={checks.value() ?? true} onChange={(on) => checks.set(on)} />
+                <Toggle label="Check for updates automatically" checked={checks.value() ?? true} onChange={(on) => checks.set(on)} />
               </SettingRow>
             ),
           },
           row(
-            "channel stable nightly switch",
+            "channel stable nightly pinned switch",
             "Channel",
-            () => now.channel ?? "stable",
-            () => `lemma update --channel ${now.channel === "nightly" ? "stable" : "nightly"} switches to the other.`,
+            () => now.channel ?? "None",
+            () => `${CHANNEL_MEANS[now.channel ?? "none"]} Updating from a terminal can switch it.`,
           ),
         ];
       },

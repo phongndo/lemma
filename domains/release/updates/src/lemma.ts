@@ -3,21 +3,19 @@ import { closeSync, mkdirSync, openSync, readFileSync } from "node:fs";
 import { dirname } from "node:path";
 import { Effect, Schema } from "effect";
 import { shellWord } from "@lemma/contracts";
-import { ReleaseError } from "@lemma/release";
+import { Channel, ReleaseError } from "@lemma/release";
 
 /*
  * The `lemma` command beside the host, which knows what this Lemma is and how to replace it (`lemma version`,
  * `lemma update`, `lemma restart`): this plugin asks it rather than knowing any of that itself.
  */
 
-/** What `lemma update --check --json` answers. */
-export const CheckAnswer = Schema.Struct({
-  version: Schema.String,
-  channel: Schema.Literals(["stable", "nightly"]),
-  newest: Schema.String,
-  newer: Schema.Boolean,
-  older: Schema.Boolean,
-});
+/**
+ * What this plugin reads of `lemma update --check --json`: the channel the installer's lemma follows and its newest
+ * release, neither for a pinned release. It compares them with what the host runs, which may not be that lemma.
+ */
+export const CheckAnswer = Schema.Struct({ channel: Schema.optional(Channel), newest: Schema.optional(Schema.String) });
+export type CheckAnswer = typeof CheckAnswer.Type;
 
 /** What `lemma update --json` answers: the release installed, and whether that took installing. */
 export const UpdateAnswer = Schema.Struct({ updated: Schema.Boolean, version: Schema.String });
@@ -79,17 +77,17 @@ export const runLemma = <A>(cli: string, args: readonly string[], schema: Schema
 /**
  * Has the `lemma` at `link` restart this host once it has answered: it stops it, saying first what that cuts off, and
  * starts it again on the release installed last (`lemma restart --force`). Started apart from the host, so it outlives
- * it; the second's wait lets the answer leave first. What it prints goes to `log`. A restart that fails before stopping
- * the host leaves it running, which hears so: `failed` gets why, from what it printed.
+ * it; the second's wait lets the answer leave first. What it prints goes to `log`. `ended` hears when it ends while
+ * the host still runs: with nothing, or, when the restart failed before stopping the host, with why, from what it printed.
  */
-export const restartLater = (link: string, log: string, failed: (why: string) => void): void => {
+export const restartLater = (link: string, log: string, ended: (why?: string) => void): void => {
   mkdirSync(dirname(log), { recursive: true });
   const out = openSync(log, "w");
   const child = spawn("sh", ["-c", 'sleep 1; exec "$0" restart --force', link], { detached: true, stdio: ["ignore", out, out] });
   closeSync(out);
-  child.once("error", (error) => failed(`Could not run lemma restart: ${error.message}`));
+  child.once("error", (error) => ended(`Could not run lemma restart: ${error.message}`));
   child.once("exit", (code, signal) => {
-    if (code === 0) return;
+    if (code === 0) return ended();
     const printed = (() => {
       try {
         return readFileSync(log, "utf8");
@@ -97,7 +95,7 @@ export const restartLater = (link: string, log: string, failed: (why: string) =>
         return "";
       }
     })();
-    failed(`lemma restart failed (${signal ?? `exit ${code}`}): ${said(printed, code).message} (${log})`);
+    ended(`lemma restart failed (${signal ?? `exit ${code}`}): ${said(printed, code).message} (${log})`);
   });
   child.unref();
 };

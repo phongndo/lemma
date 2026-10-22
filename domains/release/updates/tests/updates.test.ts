@@ -59,7 +59,7 @@ const release = (fields: Record<string, unknown> = {}) => ({
 });
 
 /** What the installer's `lemma update --check` answers: its own version, the channel it follows, and that channel's newest. */
-const checked = (newest: string, channel = "nightly") => ({ version: newest, channel, newest, newer: false, older: false });
+const checked = (newest: string, channel = "nightly") => ({ version: newest, channel, newest, newer: false });
 
 /** Runs the plugin over the stand-ins, handing `body` its channels, its doctor check, and the notices it publishes. */
 const withPlugin = <A>(
@@ -105,7 +105,7 @@ describe("release.updates", () => {
         return (yield* resultOf(channels.status, undefined)) as ReleaseStatus;
       }),
     );
-    expect(status).toEqual({ build: release(), updatable: true, checks: false, channel: "nightly", newer: false, older: false });
+    expect(status).toEqual({ build: release(), updatable: true, channel: "nightly", newer: false });
     expect(await asked()).toEqual(["lemma version --json"]);
   });
 
@@ -135,13 +135,13 @@ describe("release.updates", () => {
         return { status, outcome, notices };
       }),
     );
-    expect(status).toMatchObject({ channel: "stable", newest: "0.2.9", newer: true, older: false, checkedAt: expect.any(Number) });
-    expect(outcome).toEqual({ status: "warn", message: "Lemma 0.2.9 is out, and this is 0.2.7", fix: "lemma update, then lemma restart" });
+    expect(status).toMatchObject({ channel: "stable", newest: "0.2.9", newer: true });
+    expect(outcome).toEqual({ status: "warn", message: "Lemma 0.2.9 is out on stable, and this is 0.2.7", fix: "lemma update, then lemma restart" });
     expect(notices.map((notice) => notice.message)).toEqual(["Lemma 0.2.9 is out on stable, and this is 0.2.7: Settings › About updates to it"]);
     expect(await asked()).toContain("link update --check --json");
   });
 
-  it("says when the channel went back to an older release, as a rolled-back stable one does", async () => {
+  it("offers nothing when the channel went back to an older release: going back is lemma update <version>'s", async () => {
     await write("version.json", release({ channel: "stable" }));
     await write("check.json", checked("0.2.5", "stable"));
     const { status, outcome, notices } = await withPlugin(({ channels, doctor, notices }) =>
@@ -152,11 +152,22 @@ describe("release.updates", () => {
         return { status, outcome, notices };
       }),
     );
-    expect(status).toMatchObject({ newest: "0.2.5", newer: false, older: true });
-    expect(outcome).toMatchObject({ status: "warn", message: "The stable release went back to 0.2.5, and this is 0.2.7" });
-    expect(notices.map((notice) => notice.message)).toEqual([
-      "The stable release went back to Lemma 0.2.5, and this is 0.2.7: Settings › About goes back to it",
-    ]);
+    expect(status).toMatchObject({ newest: "0.2.5", newer: false });
+    expect(outcome).toEqual({ status: "ok", message: "Lemma 0.2.7: no newer release is out on stable" });
+    expect(notices).toEqual([]);
+  });
+
+  it("follows no channel once the installer's lemma is pinned, installed by version", async () => {
+    await write("version.json", release());
+    await write("check.json", { version: "0.2.7", newer: false });
+    const { status, outcome } = await withPlugin(({ channels, doctor }) =>
+      Effect.gen(function* () {
+        const status = (yield* resultOf(channels.check, undefined)) as ReleaseStatus;
+        return { status, outcome: yield* doctor };
+      }),
+    );
+    expect(status).toEqual({ build: release(), updatable: true, newer: false });
+    expect(outcome).toEqual({ status: "ok", message: "Lemma 0.2.7, installed by version: it follows no channel" });
   });
 
   it("keeps what it found when a check fails, saying why", async () => {
@@ -181,6 +192,21 @@ describe("release.updates", () => {
     // A second after answering, apart from the host.
     const restarted = await settled(() => readFile(join(dir, "restarted"), "utf8"), undefined, 10_000);
     expect(restarted?.trim()).toBe("restart --force");
+  });
+
+  it("starts no second update while the first one's restart is still to come", async () => {
+    await write("version.json", release());
+    await write("update.json", { updated: true, version: "0.2.9", from: "0.2.7" });
+    const second = await withPlugin(({ channels }) =>
+      Effect.gen(function* () {
+        yield* resultOf(channels.update, {});
+        // Answered, and the restart a second away.
+        return yield* Effect.flip(resultOf(channels.update, {}));
+      }),
+    );
+    expect(second).toMatchObject({ reason: "Busy" });
+    await settled(() => readFile(join(dir, "restarted"), "utf8"), undefined, 10_000);
+    expect((await asked()).filter((line) => line.startsWith("link "))).toEqual(["link update --json", "link restart --force"]);
   });
 
   it("restarts on a release a terminal installed already, and not on the one it runs", async () => {
@@ -229,7 +255,7 @@ describe("release.updates", () => {
         return { status, update, outcome };
       }),
     );
-    expect(status).toMatchObject({ updatable: false, checks: false, newer: false });
+    expect(status).toMatchObject({ updatable: false, newer: false });
     expect(update).toMatchObject({ reason: "Checkout" });
     expect(outcome).toEqual({ status: "ok", message: "A checkout, at 0.2.0: it updates with git" });
     expect(await asked()).toEqual(["lemma version --json"]);
