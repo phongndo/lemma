@@ -18,6 +18,8 @@
     "lemma:build": "pnpm --filter @lemma/cli-app build",
     "dist": "node scripts/dist.ts",
     "dist:check": "node scripts/dist-check.ts",
+    "dist:desktop": "node scripts/dist-desktop.ts",
+    "dist:desktop:check": "node scripts/dist-desktop-check.ts",
     "dev": "LEMMA_HOME=${LEMMA_HOME:-$HOME/.lemma-dev} node --conditions=lemma-source packages/host/scripts/dev.ts",
     "dev:desktop": "LEMMA_HOME=${LEMMA_HOME:-$HOME/.lemma-dev} pnpm --filter @lemma/desktop dev",
     "dev:web": "LEMMA_HOME=${LEMMA_HOME:-$HOME/.lemma-dev} pnpm --filter @lemma/web-app dev",
@@ -40,6 +42,7 @@
   },
   "devDependencies": {
     "@types/node": "24.19.2",
+    "electron-builder": "26.17.0",
     "esbuild": "0.28.2",
     "oxfmt": "0.74.0",
     "oxlint": "1.89.0",

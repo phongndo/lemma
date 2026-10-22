@@ -2,8 +2,9 @@ name: Nightly
 
 # Publishes the newest commit on main that passed Check as the next release in its line (docs/development.md#releases):
 # `v0.2.7` after `v0.2.6`, a GitHub prerelease, which the installer's nightly channel installs. Every platform's
-# archive is built on one runner, then installed and run on its own platform (scripts/dist-check.ts). The Promote
-# workflow makes a nightly the stable release. Daily, and by hand; a day with nothing new on main publishes nothing.
+# archive is built on one runner, and the desktop app made from each (macOS's on macOS), then installed and run on its
+# own platform (scripts/dist-check.ts, dist-desktop-check.ts). The Promote workflow makes a nightly the stable
+# release. Daily, and by hand; a day with nothing new on main publishes nothing.
 on:
   schedule:
     - cron: "41 5 * * *"
@@ -55,30 +56,48 @@ jobs:
           { echo "sha=$sha"; echo "version=$version"; echo "previous=$previous"; } >> "$GITHUB_OUTPUT"
           echo "::notice::Nightly $version from $sha"
 
-  # Every target's archive, in the development shell as Check builds its own.
+  # Every target's archive, and the desktop app made from each Linux one, in the development shells as Check builds
+  # its own; each target's files an artifact of their own, so a job downloads only those it runs.
   build:
     needs: resolve
     if: needs.resolve.outputs.version != ''
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.resolve.outputs.sha }}
           persist-credentials: false
       - uses: ./.github/actions/dev-shell
+        with:
+          shell: desktop
       - run: nix develop -c node scripts/dist.ts --version "$VERSION" --target all
+        env:
+          VERSION: ${{ needs.resolve.outputs.version }}
+      - run: nix develop .#desktop -c node scripts/dist-desktop.ts "dist/lemma-v$VERSION-linux-x64.tar.gz" "dist/lemma-v$VERSION-linux-arm64.tar.gz"
         env:
           VERSION: ${{ needs.resolve.outputs.version }}
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: lemma-archives
-          path: dist/
+          name: lemma-darwin-arm64
+          path: dist/*-darwin-arm64.*
+          if-no-files-found: error
+          retention-days: 7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: lemma-linux-arm64
+          path: dist/*-linux-arm64.*
+          if-no-files-found: error
+          retention-days: 7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: lemma-linux-x64
+          path: dist/*-linux-x64.*
           if-no-files-found: error
           retention-days: 7
 
-  # Each archive installed and run on its platform, on plain Node.js (which runs the check, not Lemma): a user's machine
-  # has neither Nix nor the dev shell, and the archive brings its own Node.js.
+  # Each Linux archive installed and run on its platform, and its desktop app opened, on plain Node.js (which runs the
+  # checks, not Lemma): a user's machine has neither Nix nor the dev shell, and the archive brings its own Node.js.
   verify:
     name: verify (${{ matrix.target }})
     needs: [resolve, build]
@@ -86,14 +105,12 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - target: darwin-arm64
-            os: macos-latest
           - target: linux-arm64
             os: ubuntu-24.04-arm
           - target: linux-x64
             os: ubuntu-latest
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 15
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -104,18 +121,68 @@ jobs:
           node-version: 24
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
-          name: lemma-archives
+          name: lemma-${{ matrix.target }}
           path: dist
       - run: node scripts/dist-check.ts "dist/lemma-v$VERSION-$TARGET.tar.gz"
         env:
           VERSION: ${{ needs.resolve.outputs.version }}
           TARGET: ${{ matrix.target }}
+      # What a Linux desktop has that a runner may not: a display, and FUSE, which an AppImage mounts itself with. The
+      # Debian package installed as a user installs it, with what it depends on. Both opened as on Ubuntu's desktop,
+      # which keeps an app from the user namespaces Electron's sandbox uses unless an AppArmor profile lets it: the
+      # package installs one, and the AppImage starts without the sandbox (docs/installation.md#the-desktop-app).
+      - run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends xvfb fuse3 "./dist/lemma-desktop-v$VERSION-$TARGET.deb"
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=1
+          xvfb-run -a node scripts/dist-desktop-check.ts --installed "dist/lemma-desktop-v$VERSION-$TARGET.deb"
+          xvfb-run -a node scripts/dist-desktop-check.ts "dist/lemma-desktop-v$VERSION-$TARGET.AppImage"
+        env:
+          VERSION: ${{ needs.resolve.outputs.version }}
+          TARGET: ${{ matrix.target }}
 
-  # Each archive's build provenance, signed for this workflow (`gh attestation verify`, docs/installation.md); then a
+  # macOS's archive, checked as verify checks Linux's; then the desktop app made from it, on macOS as its disk image is,
+  # signed ad hoc (scripts/dist-desktop.ts), and opened.
+  macos:
+    name: verify (darwin-arm64)
+    needs: [resolve, build]
+    runs-on: macos-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.resolve.outputs.sha }}
+          persist-credentials: false
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: lemma-darwin-arm64
+          path: dist
+      - run: node scripts/dist-check.ts "dist/lemma-v$VERSION-darwin-arm64.tar.gz"
+        env:
+          VERSION: ${{ needs.resolve.outputs.version }}
+      - run: pnpm install --frozen-lockfile
+      - run: node scripts/dist-desktop.ts "dist/lemma-v$VERSION-darwin-arm64.tar.gz"
+        env:
+          VERSION: ${{ needs.resolve.outputs.version }}
+      - run: node scripts/dist-desktop-check.ts "dist/lemma-desktop-v$VERSION-darwin-arm64.dmg"
+        env:
+          VERSION: ${{ needs.resolve.outputs.version }}
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: lemma-desktop-darwin-arm64
+          path: dist/lemma-desktop-*
+          if-no-files-found: error
+          retention-days: 7
+
+  # Each file's build provenance, signed for this workflow (`gh attestation verify`, docs/installation.md); then a
   # draft, published once its files are all there, so the channel never offers a release without them. Then nightlies
   # older than a month that were not promoted go.
   publish:
-    needs: [resolve, verify]
+    needs: [resolve, verify, macos]
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
@@ -130,11 +197,16 @@ jobs:
           persist-credentials: false
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
-          name: lemma-archives
+          pattern: lemma-*
+          merge-multiple: true
           path: dist
       - uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
         with:
-          subject-path: dist/*.tar.gz
+          subject-path: |
+            dist/*.tar.gz
+            dist/*.dmg
+            dist/*.AppImage
+            dist/*.deb
       - shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
@@ -151,7 +223,7 @@ jobs:
           notes=(--generate-notes)
           if [[ -n "$PREVIOUS" ]]; then notes+=(--notes-start-tag "$PREVIOUS"); fi
           gh release create "$TAG" --draft --prerelease --target "$SHA" --title "Lemma $TAG" "${notes[@]}"
-          gh release upload "$TAG" dist/*.tar.gz dist/*.sha256 scripts/install.sh
+          gh release upload "$TAG" dist/*.tar.gz dist/*.dmg dist/*.AppImage dist/*.deb dist/*.sha256 scripts/install.sh
           gh release edit "$TAG" --draft=false
 
           cutoff=$(date -u -d '30 days ago' +%s)

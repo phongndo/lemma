@@ -194,13 +194,37 @@ dependency that must would fail that platform's check. `scripts/dist-config.ts`
 pins the Node.js an archive carries, by version and checksum; update them
 together.
 
+`nix develop .#desktop -c pnpm dist:desktop` builds this platform's desktop
+app from its archive in `dist/` (`scripts/dist-desktop.ts` says what it holds):
+a disk image on macOS, and an AppImage and a Debian package on Linux, which
+builds either architecture's. `nix develop .#desktop -c pnpm dist:desktop:check`
+opens one as a user would, outside the checkout, and runs it: its window, the
+host it starts on Electron, what that host does as the archive's does, and
+quitting (`scripts/dist-desktop-check.ts`; on Linux in a virtual display,
+`xvfb-run -a` before `pnpm`). With `--installed`, it opens the Debian package
+apt installed. The `desktop` shell brings what Linux needs for both: nixpkgs'
+fpm for the Debian package, and on NixOS the libraries Electron loads through
+nix-ld. CI's `dist` job installs and opens Linux x64's, as the Nightly workflow
+does each platform's.
+
+The macOS app is signed ad hoc, which Apple silicon requires of every app, and
+not with a Developer ID, so Gatekeeper asks before it opens. Opening it without
+asking takes an Apple Developer Program membership: its Developer ID
+certificate and an App Store Connect API key as the Nightly workflow's secrets,
+given to the macOS job as electron-builder reads them (`CSC_LINK` and
+`CSC_KEY_PASSWORD`; `APPLE_API_KEY`, the key file's path, with
+`APPLE_API_KEY_ID` and `APPLE_API_ISSUER`), and `dist-desktop.ts` signing with
+the certificate, with the hardened runtime, rather than ad hoc. electron-builder
+notarizes an app it signed when those `APPLE_API_*` variables are set.
+
 Every build is a release, and stable is the one marked latest:
 
 - **Nightly** (`.github/workflows/nightly.yml`), daily and by hand, takes the
   newest commit on `main` whose Check run passed, unless the last release has
   it already. It numbers it the next patch in the line `apps/cli/package.json`
   names (`0.2.0` is the line `0.2`: `v0.2.0`, `v0.2.1`, …), builds every
-  platform's archive on one runner, installs and runs each on its platform,
+  platform's archive on one runner and the desktop app made from each (macOS's
+  on a macOS runner), installs and runs each on its platform,
   and publishes them as a GitHub prerelease with the installer, its notes
   listing the pull requests since the release before. Nightlies a month old
   that were not promoted are deleted, with their tags.
@@ -220,7 +244,7 @@ again. A published release's files are never changed; a fix is the next
 nightly. When a stable release turns out bad and the fix is not ready, put the
 one before back: `gh workflow run promote.yml -f version=0.2.5 -f rollback=true`.
 
-The Nightly workflow attests each archive's build provenance before
+The Nightly workflow attests each file's build provenance before
 publishing it (`actions/attest`): a signed statement, kept by GitHub, that the
-archive was built by that workflow, in this repository, from the commit it
+file was built by that workflow, in this repository, from the commit it
 names ([verifying](installation.md#verifying-a-release)).

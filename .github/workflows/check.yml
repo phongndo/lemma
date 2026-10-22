@@ -109,16 +109,27 @@ jobs:
           path: /tmp/lemma-test-evidence
           if-no-files-found: ignore
 
-  # The release archive for Linux on x64, installed and run outside the checkout (scripts/dist-check.ts), so a change
-  # that breaks a release fails here rather than in the nightly; the archive is kept a week, to try a change with.
+  # The release archive for Linux on x64, installed and run outside the checkout (scripts/dist-check.ts), and the desktop
+  # app made from it, installed and opened as a user would (scripts/dist-desktop-check.ts), as the Nightly workflow's
+  # verify does, so a change that breaks a release fails here rather than in the nightly; they are kept a week, to try
+  # a change with.
   dist:
     runs-on: ubuntu-latest
-    timeout-minutes: 8
+    timeout-minutes: 12
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: ./.github/actions/dev-shell
+        with:
+          shell: desktop
       - run: nix develop -c pnpm dist
       - run: nix develop -c pnpm dist:check
+      - run: nix develop .#desktop -c pnpm dist:desktop
+      - run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends fuse3 ./dist/lemma-desktop-*.deb
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=1
+      - run: nix develop .#desktop -c xvfb-run -a pnpm dist:desktop:check --installed dist/lemma-desktop-*.deb
+      - run: nix develop .#desktop -c xvfb-run -a pnpm dist:desktop:check dist/lemma-desktop-*.AppImage
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: lemma-linux-x64
