@@ -714,8 +714,14 @@ export const parts = async (): Promise<string> => {
       },
     )
     .catch(async () => assert.fail(`an unarchived thread is not on top: ${(await listed()).join(", ")}`));
-  // The fold closed again, while it is there (nothing archived, it goes).
-  if ((await page.locator(".archived-head[aria-expanded=true]").count()) > 0) await page.click(".archived-head");
+  // Nothing archived, the open fold stays and says so; closed again, it stays too.
+  await page
+    .waitForSelector(".archived-panel.open .archived-panel-empty", { timeout: 5_000 })
+    .catch(() => assert.fail("with nothing archived, the open archived fold is gone or does not say so"));
+  await page.click(".archived-head");
+  await page
+    .waitForSelector(".archived-head[aria-expanded=false]", { timeout: 5_000 })
+    .catch(() => assert.fail("with nothing archived, the closed archived fold is gone"));
   await page.click(`.thread-list a[href="${thread}"]`);
   await page.waitForFunction((path) => `${location.pathname}${location.search}` === path, thread, { timeout: 5_000 });
   // A new thread is a session at once, not listed until it has a prompt; asked for again while it shows, it is the same

@@ -507,6 +507,14 @@
   overflow-y: auto;
 }
 
+/* The open panel with none archived. */
+.archived-panel-empty {
+  margin: 0;
+  padding: 9px 10px;
+  color: var(--text-3);
+  font-size: calc(12px * var(--text-scale));
+}
+
 /* Its top edge, dragged (or ↑ and ↓ while focused) to resize it; a double-click puts it back. */
 .archived-edge {
   position: absolute;
