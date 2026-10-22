@@ -1,10 +1,5 @@
 import { For, Match, Show, Switch, createEffect, createMemo, createSignal, on, onCleanup, untrack } from "solid-js";
-import type { JSX } from "solid-js";
-import { DragDropProvider, PointerSensor, useDroppable } from "@dnd-kit/solid";
-import { useSortable } from "@dnd-kit/solid/sortable";
-import { Accessibility, AutoScroller, Feedback, PointerActivationConstraints } from "@dnd-kit/dom";
-import { RestrictToVerticalAxis } from "@dnd-kit/abstract/modifiers";
-import { RestrictToElement } from "@dnd-kit/dom/modifiers";
+import { useDroppable } from "@dnd-kit/solid";
 import type { SessionInfo, SessionMarks } from "@lemma/sessions";
 import { formatKeys, withKeys } from "@lemma/web/keys";
 import { loadJson, recordOf, save } from "@lemma/web/storage";
@@ -12,13 +7,10 @@ import { dragEdge } from "@lemma/web/drag";
 import { ActionIds, Actions, shownKeysOf } from "@lemma/actions";
 import { sessionTitle, ThreadActions, Threads, ThreadWaits, SidebarRowPart, SidebarRow, waitingOn } from "@lemma/threads";
 import { ActionMenu, Layout, SidebarActions, SidebarFooter, SidebarRegion } from "@lemma/frame";
-import type { LayoutService } from "@lemma/frame";
 import { Workspace } from "@lemma/workspace/web";
-import type { WorkspaceService } from "@lemma/workspace/web";
 import { Interactions, Slots, WebPlugins, defineWebPlugin, Each, usePlugin } from "@lemma/web";
 import type { Action } from "@lemma/actions";
-import type { SidebarRowProps, ThreadDraft, ThreadsService } from "@lemma/threads";
-import type { SlotsService, WebPluginsService } from "@lemma/web";
+import type { SidebarRowProps, ThreadDraft } from "@lemma/threads";
 import {
   ArchiveIcon,
   Avatar,
@@ -38,25 +30,11 @@ import {
   WorktreeIcon,
   XIcon,
 } from "@lemma/look";
-import {
-  Heads,
-  afterArchiving,
-  dragItems,
-  dragTo,
-  draftRows,
-  dropVerb,
-  dropped,
-  flagsOf,
-  nestedAgents,
-  nextNeeding,
-  runTime,
-  sectionIn,
-  sections,
-  shortAge,
-  stepFrom,
-  transitioned,
-} from "./list.ts";
-import type { DropVerb, Flags, Marks, NestedAgent, Section } from "./list.ts";
+import { Heads, afterArchiving, draftRows, flagsOf, nestedAgents, nextNeeding, runTime, sections, shortAge, stepFrom, transitioned } from "./list.ts";
+import type { Flags, Marks } from "./list.ts";
+import type { Deps } from "./deps.ts";
+import { SortableItem, SortableThreads, createArrangement, verbs } from "./sortable.tsx";
+import { ThreadDetails, createDetails } from "./details.tsx";
 import styles from "./sidebar.css?inline";
 
 // Under the plugin's former id (`frame.sidebar`), so what a browser kept carries over.
@@ -68,13 +46,6 @@ const ARCHIVED_HEIGHT = 220;
 const ARCHIVED_MIN = 96;
 const ARCHIVED_STEP = 24;
 const LIST_MIN = 120;
-/** How long the pointer rests on a row before its details show, and how soon after one closes the next opens at once. */
-const CARD_DELAY = 150;
-const CARD_CHAIN = 400;
-
-/** When a row's details last closed, so pointing at the next one shows its own at once. */
-let cardClosedAt = 0;
-
 /**
  * Its state where the time goes, as T3 Code shows it, the most pressing first: what it waits on the person for, a
  * running turn and its time, a finished one not yet seen; else how long ago it was used.
@@ -118,12 +89,10 @@ const DISCARD_ROOM = 76;
  * right-click opens its menu; a double-click renames it.
  */
 function ThreadRow(props: SidebarRowProps) {
-  const plugin = usePlugin();
   const [editing, setEditing] = createSignal(false);
-  const [details, setDetails] = createSignal<DOMRect>();
+  const { at: details, point: pointAt, leave } = createDetails();
   let row!: HTMLDivElement;
   let openMenu: (() => void) | undefined;
-  let waiting: (() => void) | undefined;
   const archived = () => props.session.archived === true;
   /** What its age counts from: its archiving once archived, else its last use. */
   const since = () => (archived() ? (props.archivedAt ?? props.session.updatedAt) : props.session.updatedAt);
@@ -131,19 +100,7 @@ function ThreadRow(props: SidebarRowProps) {
     setEditing(false);
     if (value.trim() !== "" && value.trim() !== props.session.title) props.rename(value);
   };
-  const point = () => {
-    waiting?.();
-    const show = () => setDetails(row.getBoundingClientRect());
-    if (Date.now() - cardClosedAt < CARD_CHAIN) show();
-    else waiting = plugin.after(CARD_DELAY, show);
-  };
-  const leave = () => {
-    waiting?.();
-    waiting = undefined;
-    if (details() !== undefined) cardClosedAt = Date.now();
-    setDetails(undefined);
-  };
-  onCleanup(leave);
+  const point = () => pointAt(row);
   const title = () => sessionTitle(props.session);
   const pinned = () => props.session.pinned === true && !archived();
   /** What the buttons under the pointer take: pinning or unpinning, then archiving or unarchiving. */
@@ -263,35 +220,21 @@ function ThreadRow(props: SidebarRowProps) {
           </span>
           <Show when={details()}>
             {(at) => (
-              <div
-                class="thread-details"
-                // Level with the row; near the window's foot it grows upward from the row's bottom instead.
-                style={
-                  at().top + 200 > window.innerHeight
-                    ? { left: `${at().right + 6}px`, bottom: `${window.innerHeight - at().bottom}px` }
-                    : { left: `${at().right + 6}px`, top: `${at().top}px` }
-                }
-                aria-hidden="true"
-              >
-                <div class="thread-details-title">{title()}</div>
-                <div class="thread-details-line">{props.project}</div>
-                <Show when={props.branch}>
-                  {(branch) => (
-                    <div class="thread-details-line">
-                      <Show when={props.worktree} fallback={<GitBranchIcon />}>
-                        <WorktreeIcon />
-                      </Show>
-                      {branch()}
-                    </div>
-                  )}
-                </Show>
-                <Show when={props.waiting}>{(label) => <div class="thread-details-line waiting">{label()}</div>}</Show>
-                <div class="thread-details-line muted">
-                  {props.running ? "Working" : archived() ? "Archived" : props.unread ? "Finished, not yet seen" : "Last used"}
-                  {props.running && props.runningSince !== undefined ? ` for ${runTime(props.runningSince, props.now)}` : ""}
-                  {props.running ? "" : ` ${shortAge(since(), props.now) === "now" ? "just now" : `${shortAge(since(), props.now)} ago`}`}
-                </div>
-              </div>
+              <ThreadDetails
+                at={at()}
+                side="beside"
+                title={title()}
+                project={props.project}
+                branch={props.branch}
+                worktree={props.worktree}
+                waiting={props.waiting}
+                running={props.running}
+                runningSince={props.runningSince}
+                unread={props.unread}
+                archived={archived()}
+                since={since()}
+                now={props.now}
+              />
             )}
           </Show>
           {/* Opened by a right-click; the trigger itself stays out of sight. */}
@@ -335,33 +278,6 @@ function ThreadRow(props: SidebarRowProps) {
   );
 }
 
-interface Deps {
-  readonly threads: ThreadsService;
-  readonly slots: SlotsService;
-  readonly webPlugins: WebPluginsService;
-  readonly layout: LayoutService;
-  readonly workspace: WorkspaceService;
-  readonly now: () => number;
-  readonly lists: () => ReturnType<typeof sections>;
-  /** Each thread's agents, and theirs, listed under it (`nestedAgents`). */
-  readonly agents: () => ReadonlyMap<string, readonly NestedAgent[]>;
-  readonly unread: () => ReadonlySet<string>;
-  readonly runningSince: (id: string) => number | undefined;
-  /** What the folder `cwd` has checked out, once asked. */
-  readonly place: (cwd: string) => { readonly branch?: string | undefined; readonly project: string; readonly worktree: boolean };
-  readonly archive: (session: SessionInfo) => void;
-  readonly unarchive: (session: SessionInfo) => void;
-  readonly pin: (session: SessionInfo, pinned: boolean) => void;
-  readonly archivedAt: (id: string) => number | undefined;
-  /** The new threads left mid-prompt, shown above the rest. */
-  readonly drafts: () => readonly SessionInfo[];
-  /** A drop's new order, and the change to the thread dropped (`dropped`). */
-  readonly drop: (session: SessionInfo, marks: Marks, change: SessionMarks | undefined) => Promise<void>;
-  readonly marks: () => Marks;
-  /** The keys that go to a thread, while all but their last are held down (`Action.onHold`). */
-  readonly shortcut: (id: string) => string | undefined;
-}
-
 /** A thread's row, as the `sidebar.row` part draws it: it follows the thread as it changes. */
 const rowOf = (deps: Deps, onPick: () => void) => {
   const { threads, slots } = deps;
@@ -397,34 +313,6 @@ const rowOf = (deps: Deps, onPick: () => void) => {
       />
     );
   };
-};
-
-/** The words a dragged thread shows for what dropping it where it is would do. */
-const verbs: Readonly<Record<DropVerb, () => JSX.Element>> = {
-  pin: () => (
-    <>
-      <PinIcon />
-      Pin
-    </>
-  ),
-  unpin: () => (
-    <>
-      <PinOffIcon />
-      Unpin
-    </>
-  ),
-  archive: () => (
-    <>
-      <ArchiveIcon />
-      Archive
-    </>
-  ),
-  unarchive: () => (
-    <>
-      <RedoIcon />
-      Unarchive
-    </>
-  ),
 };
 
 /**
@@ -503,26 +391,6 @@ function NestedAgents(props: { deps: Deps; parent: SessionInfo; onPick: () => vo
   );
 }
 
-/** An item of the list drag and drop arranges: a thread, which drags, or a section's head, which stays. */
-function SortableItem(props: { id: string; index: number; section: Section | undefined; head?: boolean; class?: string; children: JSX.Element }) {
-  const sortable = useSortable({
-    get id() {
-      return props.id;
-    },
-    get index() {
-      return props.index;
-    },
-    get disabled() {
-      return props.head === true ? { draggable: true, droppable: false } : false;
-    },
-  });
-  return (
-    <li ref={sortable.ref} class={props.class} classList={{ "drag-source": sortable.isDragSource() }} data-section={props.section}>
-      {props.children}
-    </li>
-  );
-}
-
 /** A new thread left mid-prompt: the prompt's first line and its project; under the pointer, Discard deletes it. */
 function DraftRow(props: {
   session: SessionInfo;
@@ -587,75 +455,6 @@ const rowKeys = (event: KeyboardEvent): void => {
   rows[Math.max(0, Math.min(rows.length - 1, index + step))]?.focus();
 };
 
-/**
- * The list's drag and drop: a thread follows the pointer up and down the list, the others make room, and where it is
- * when dropped says what the drop does (`dropped`). `over` hears each item it is dragged onto, and the list moves it
- * (`dragTo`) rather than the sortable moving rows itself. Only the pointer moves it: an item it is over goes past it
- * only while the pointer heads that way (`above` says which way the item is), so rows the sections' names push under a
- * still pointer do not move it.
- */
-function SortableThreads(props: {
-  list: () => HTMLElement | undefined;
-  start: (id: string) => void;
-  above: (id: string) => boolean | undefined;
-  /** What it is dragged onto: an item, itself again, or nothing (`undefined`). */
-  over: (id: string | undefined) => void;
-  end: (canceled: boolean) => void;
-  children: JSX.Element;
-}) {
-  let y: number | undefined;
-  let up: boolean | undefined;
-  /** The item it is over, until the pointer heads its way. */
-  let waiting: string | undefined;
-  const settle = () => {
-    if (waiting === undefined || up === undefined) return;
-    const above = props.above(waiting);
-    if (above !== undefined && above !== up) return;
-    props.over(waiting);
-    waiting = undefined;
-  };
-  return (
-    <DragDropProvider
-      sensors={[
-        PointerSensor.configure({
-          activationConstraints: (event) => [new PointerActivationConstraints.Distance({ value: event.pointerType === "touch" ? 10 : 6 })],
-          // Its buttons and the title being renamed keep their own pointer.
-          preventActivation: (event) => event.target instanceof Element && event.target.closest("button, input") !== null,
-        }),
-      ]}
-      modifiers={[RestrictToVerticalAxis, RestrictToElement.configure({ element: () => props.list() ?? null })]}
-      plugins={(defaults) => [
-        ...defaults.filter((plugin) => plugin !== Accessibility),
-        AutoScroller.configure({ acceleration: 8, threshold: { x: 0, y: 0.1 } }),
-        Feedback.configure({ dropAnimation: null }),
-      ]}
-      onDragStart={(event) => {
-        y = undefined;
-        up = undefined;
-        waiting = undefined;
-        const source = event.operation.source;
-        if (source !== null) props.start(source.id.toString());
-      }}
-      onDragMove={(event) => {
-        const next = event.operation.position.current.y;
-        if (y !== undefined && next !== y) up = next < y;
-        y = next;
-        settle();
-      }}
-      onDragOver={(event) => {
-        // The list moves the thread itself.
-        event.preventDefault();
-        waiting = event.operation.target?.id.toString();
-        if (waiting === undefined) props.over(undefined);
-        else settle();
-      }}
-      onDragEnd={(event) => props.end(event.canceled)}
-    >
-      {props.children}
-    </DragDropProvider>
-  );
-}
-
 function Sidebar(props: { deps: Deps; onPick: () => void }) {
   const { threads, slots, webPlugins, layout } = props.deps;
   const keysOf = (id: string) => shownKeysOf(slots, webPlugins.list(), id);
@@ -671,34 +470,8 @@ function Sidebar(props: { deps: Deps; onPick: () => void }) {
     return archivedOpen() ? all : all.filter((session) => session.id === threads.activeId());
   });
 
-  // Dragging: the list is held as dragged (`arranged`) from the drag's start to its drop's change landing, so it does
-  // not move under the pointer, nor jump back while the change is on its way.
-  const byId = createMemo(() => new Map(threads.list().map((session) => [session.id, session])));
-  // The archived are not among the items dragged: they are in their own panel, which as a whole is a place to drop one.
-  const listed = createMemo(() => dragItems(props.deps.lists().pinned, props.deps.lists().active, []));
-  const [arranged, setArranged] = createSignal<readonly string[]>();
-  const [drag, setDrag] = createSignal<{ readonly id: string; readonly initial: readonly string[] }>();
-  /** The dragged thread is over the archived panel: dropping it archives it. */
-  const [toArchive, setToArchive] = createSignal(false);
-  /**
-   * The sections' names show a frame after a drag starts: the dragged row is placed under the pointer first, so the
-   * rows they push down move under it rather than taking it with them.
-   */
-  const [heads, setHeads] = createSignal(false);
-  const items = () => arranged() ?? listed();
-  /** The section the dragged thread is in now, where dropping it puts it: its name takes the accent. */
-  const target = (): Section | undefined => {
-    const current = drag();
-    if (current === undefined) return undefined;
-    return toArchive() ? "archived" : sectionIn(items(), current.id);
-  };
-  /** What dropping the dragged thread where it is now would do. */
-  const verb = () => {
-    const current = drag();
-    return current === undefined ? undefined : dropVerb(sectionIn(current.initial, current.id), target());
-  };
-  /** The items with the dragged thread among the archived (after their head, last): what dropping on the panel does. */
-  const archivedWith = (id: string) => [...items().filter((item) => item !== id), id];
+  // Dragging: the arrangement holds the list as dragged until the drop lands.
+  const arrangement = createArrangement(props.deps);
 
   // The archived panel's height, as its top edge was dragged to, kept; within what leaves the list above room.
   const [archivedHeight, setArchivedHeight] = createSignal(
@@ -730,7 +503,7 @@ function Sidebar(props: { deps: Deps; onPick: () => void }) {
       <section
         ref={zone.ref}
         class="archived-panel"
-        classList={{ open: archivedOpen(), target: toArchive() }}
+        classList={{ open: archivedOpen(), target: arrangement.toArchive() }}
         aria-label="Archived threads"
         // As kept: the stylesheet caps it, so the list above keeps room in a shorter window.
         style={archivedOpen() ? { height: `${Math.max(ARCHIVED_MIN, archivedHeight())}px` } : undefined}
@@ -754,36 +527,24 @@ function Sidebar(props: { deps: Deps; onPick: () => void }) {
           />
         </Show>
         <button class="archived-head" aria-expanded={archivedOpen()} onClick={toggleArchived}>
-          <span>{archivedOpen() || heads() || count() === 0 ? "Archived" : `Archived (${count()})`}</span>
+          <span>{archivedOpen() || arrangement.heads() || count() === 0 ? "Archived" : `Archived (${count()})`}</span>
           <span class="archived-rule" />
           <ChevronDownIcon />
         </button>
-        <Show when={heads() && (!archivedOpen() || count() === 0)}>
+        <Show when={arrangement.heads() && (!archivedOpen() || count() === 0)}>
           <span class="thread-head-slot">Drop here to archive</span>
         </Show>
-        <Show when={archivedOpen() && count() === 0 && !heads()}>
+        <Show when={archivedOpen() && count() === 0 && !arrangement.heads()}>
           <p class="archived-panel-empty">No archived threads</p>
         </Show>
         <ul class="thread-section archived-rows">
           <For each={archivedRows().map((session) => session.id)}>
-            {(id) => <Show when={sessionOf(id)}>{(session) => <li data-section="archived">{row(session)}</li>}</Show>}
+            {(id) => <Show when={arrangement.sessionOf(id)}>{(session) => <li data-section="archived">{row(session)}</li>}</Show>}
           </For>
         </ul>
       </section>
     );
   };
-  const sessionOf = (id: string) => byId().get(id);
-  /** Each item's section, where it is now (`data-section` on its row). */
-  const sectionsOf = createMemo(() => {
-    const of = new Map<string, Section>();
-    let section: Section = "pinned";
-    for (const id of items()) {
-      if (id === Heads.active) section = "active";
-      else if (id === Heads.archived) section = "archived";
-      of.set(id, section);
-    }
-    return of;
-  });
   return (
     <nav class="sidebar" aria-label="Threads">
       <div class="sidebar-head">
@@ -800,37 +561,8 @@ function Sidebar(props: { deps: Deps; onPick: () => void }) {
           <Each slot={SidebarActions} props={{ onPick: props.onPick }} />
         </div>
       </div>
-      <div class="thread-list" classList={{ dragging: drag() !== undefined }} onKeyDown={rowKeys} ref={area}>
-        <SortableThreads
-          list={() => area}
-          start={(id) => {
-            setToArchive(false);
-            setDrag({ id, initial: items() });
-            requestAnimationFrame(() => setHeads(drag()?.id === id));
-          }}
-          above={(over) => {
-            const current = drag();
-            if (current === undefined || over === current.id) return undefined;
-            return items().indexOf(over) < items().indexOf(current.id);
-          }}
-          over={(over) => {
-            const current = drag();
-            if (current === undefined) return;
-            setToArchive(over === Heads.archived);
-            if (over !== undefined && over !== Heads.archived) setArranged(dragTo(items(), current.initial, current.id, over));
-          }}
-          end={(canceled) => {
-            const current = drag();
-            const at = toArchive() && current !== undefined ? archivedWith(current.id) : arranged();
-            setDrag(undefined);
-            setHeads(false);
-            setToArchive(false);
-            const session = current === undefined ? undefined : sessionOf(current.id);
-            if (canceled || current === undefined || at === undefined || session === undefined) return void setArranged(undefined);
-            const drop = dropped(props.deps.marks(), current.initial, at, current.id, session.pinned === true);
-            void props.deps.drop(session, drop.marks, drop.change).finally(() => setArranged(undefined));
-          }}
-        >
+      <div class="thread-list" classList={{ dragging: arrangement.dragging() !== undefined }} onKeyDown={rowKeys} ref={area}>
+        <SortableThreads axis="y" list={() => area} arrangement={arrangement}>
           <div class="thread-main">
             <Show when={props.deps.drafts().length > 0}>
               <ul class="thread-section drafts" aria-label="Unsent prompts">
@@ -859,25 +591,27 @@ function Sidebar(props: { deps: Deps; onPick: () => void }) {
               <div class="drafts-rule" aria-hidden="true" />
             </Show>
             <ul class="thread-section sorted">
-              <For each={items().filter((id) => id !== Heads.archived)}>
+              <For each={arrangement.items().filter((id) => id !== Heads.archived)}>
                 {(id, index) => (
                   <Show
                     when={id === Heads.pinned || id === Heads.active}
                     fallback={
-                      <Show when={sessionOf(id)}>
+                      <Show when={arrangement.sessionOf(id)}>
                         {(session) => (
-                          <SortableItem id={id} index={index()} section={sectionsOf().get(id)}>
+                          <SortableItem id={id} index={index()} section={arrangement.sectionOf(id)}>
                             {row(session)}
                             <NestedAgents deps={props.deps} parent={session()} onPick={props.onPick} />
-                            <Show when={drag()?.id === id ? verb() : undefined}>{(word) => <span class="drop-verb">{verbs[word()]()}</span>}</Show>
+                            <Show when={arrangement.dragging() === id ? arrangement.verb() : undefined}>
+                              {(word) => <span class="drop-verb">{verbs[word()]()}</span>}
+                            </Show>
                           </SortableItem>
                         )}
                       </Show>
                     }
                   >
-                    <SortableItem id={id} index={index()} section={sectionsOf().get(id)} head class={`thread-head ${id.slice("head:".length)}`}>
-                      <Show when={heads()}>
-                        <span class="thread-head-label" classList={{ target: target() === sectionsOf().get(id) }}>
+                    <SortableItem id={id} index={index()} section={arrangement.sectionOf(id)} head class={`thread-head ${id.slice("head:".length)}`}>
+                      <Show when={arrangement.heads()}>
+                        <span class="thread-head-label" classList={{ target: arrangement.target() === arrangement.sectionOf(id) }}>
                           {id === Heads.pinned ? "Pinned" : "Active"}
                         </span>
                       </Show>
