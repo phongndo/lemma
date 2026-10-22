@@ -4,6 +4,7 @@ import { pages } from "./check-ui/pages.ts";
 import { parts } from "./check-ui/parts.ts";
 import { rail } from "./check-ui/rail.ts";
 import { separate } from "./check-ui/separate.ts";
+import { tabs } from "./check-ui/tabs.ts";
 import { toggling } from "./check-ui/toggling.ts";
 
 /**
@@ -63,6 +64,10 @@ import { toggling } from "./check-ui/toggling.ts";
  *    script's and the model's own) show after the turn's work and above its
  *    answer, once each, in a sandbox that keeps them out of the app, sized to
  *    their content, and following the app's look without loading again.
+ * 13. The threads go across the top as tabs, from Settings, and back down the
+ *    side: one list either way, archived with a tab's × and unarchived from
+ *    Archived, pinned and archived by dragging a tab, showing their keys while
+ *    mod is held, and their details and agents.
  *
  * Run it in the browser shell: `nix develop .#browser -c pnpm --filter @lemma/web-app ui:check`.
  * `--shard=i/n` runs a share of it, as CI does on two runners: of the lanes the
@@ -91,7 +96,7 @@ const DEADLINE_MINUTES = 4;
 let deadline: NodeJS.Timeout | undefined;
 try {
   // In this order, every other lane makes two shares that take about as long.
-  const lanes = [toggling, parts, rail, devtools, separate, pages].filter((_, at) => at % shards === shard - 1);
+  const lanes = [toggling, parts, rail, devtools, separate, pages, tabs].filter((_, at) => at % shards === shard - 1);
   const running = new Set(lanes.map((lane) => lane.name));
   const overdue = new Promise<never>((_, reject) => {
     deadline = setTimeout(
