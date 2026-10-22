@@ -211,6 +211,9 @@ importers:
       '@lemma/profiles':
         specifier: workspace:*
         version: link:../../domains/profiles/contract
+      '@lemma/release':
+        specifier: workspace:*
+        version: link:../../domains/release/contract
       effect:
         specifier: 4.0.5
         version: 4.0.5

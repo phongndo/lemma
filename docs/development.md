@@ -193,11 +193,26 @@ platform's into `dist/` at the checkout's version (`scripts/dist.ts`;
 the checkout and with a `node` on PATH that fails, and runs it: the host and
 its plugins, the web app, a TypeScript plugin file, the file search, the CLI
 the agent is told of, and a turn on the scripted provider. CI's `dist` job
-runs both for Linux on x64.
+runs both for Linux on x64. For tests, the installer and `lemma update` take
+two variables, which `dist:check` points at a server of its own:
+`LEMMA_RELEASE_BASE_URL`, a directory holding the release's archive and its
+`.sha256` (the release on GitHub by default), and `LEMMA_RELEASE_API_URL`,
+where they ask which release is a channel's newest (GitHub's API for this
+repository by default).
+
+Each Check run keeps the Linux x64 archive it built, and the desktop app made
+from it, for a week, as its `lemma-linux-x64` artifact, so a pull request can
+be tried before it is merged:
+
+```sh
+gh run download <run-id> --repo phongndo/lemma --name lemma-linux-x64 --dir /tmp/lemma-preview
+(cd /tmp/lemma-preview && sha256sum -c ./*.sha256 && tar -xzf ./*.tar.gz)
+LEMMA_HOME=/tmp/lemma-preview/home /tmp/lemma-preview/lemma-v*/bin/lemma serve      # in your project
+```
 
 An archive says what it is in `release.json` (its version, the commit it was
 built from, and when), and carries the installer, which `lemma update` runs
-([versioning](versioning.md)). The archive keeps the workspace's layout, as
+([updating](installation.md#updating)). The archive keeps the workspace's layout, as
 Lemma runs its TypeScript sources: Node.js strips types only outside `node_modules`, and the host finds
 the web app and each bundled plugin by its path in the workspace. One machine
 builds every platform's, as pnpm installs another platform's prebuilt packages
@@ -233,11 +248,11 @@ Every build is a release, and stable is the one marked latest:
 
 - **Nightly** (`.github/workflows/nightly.yml`), daily and by hand, takes the
   newest commit on `main` whose Check run passed, unless the last release has
-  it already. It numbers it the next patch in the line `apps/cli/package.json`
-  names (`0.2.0` is the line `0.2`: `v0.2.0`, `v0.2.1`, …), builds every
+  it already. It numbers it the next patch in the minor version
+  `apps/cli/package.json` names (`0.2.0` is `0.2`: `v0.2.0`, `v0.2.1`, …), builds every
   platform's archive on one runner and the desktop app made from each (macOS's
   on a macOS runner), installs and runs each on its platform,
-  and publishes them as a GitHub prerelease with the installer, its notes
+  and publishes them as a GitHub prerelease with its installer, its notes
   listing the pull requests since the release before. Nightlies a month old
   that were not promoted are deleted, with their tags.
 - **Promote** (`.github/workflows/promote.yml`), by hand, makes a nightly (the
@@ -245,18 +260,18 @@ Every build is a release, and stable is the one marked latest:
   not a prerelease, and rewrites its notes to cover everything since the last
   stable release. Nothing is rebuilt. It refuses a release older than the
   stable one unless asked to roll back: then that release is the stable one
-  again, and `lemma update` and Settings › About take stable users back to it.
+  again, for new installs; a stable user already on the newer one stays there
+  until they go back by version (`lemma update 0.2.5`) or a newer release is
+  promoted.
 
 To ship a change: merge it, let a nightly carry it (or run the Nightly
 workflow), use that nightly yourself, then promote it:
-`gh workflow run promote.yml -f version=0.2.7`. To start a new line, set
+`gh workflow run promote.yml -f version=0.2.7`. To start a new minor version, set
 `apps/cli/package.json`'s version (`0.3.0`) in a pull request; the next
 nightly is `v0.3.0`. A run that fails publishes nothing and is safe to run
 again. A published release's files are never changed; a fix is the next
 nightly. When a stable release turns out bad and the fix is not ready, put the
 one before back: `gh workflow run promote.yml -f version=0.2.5 -f rollback=true`.
 
-The Nightly workflow attests each file's build provenance before
-publishing it (`actions/attest`): a signed statement, kept by GitHub, that the
-file was built by that workflow, in this repository, from the commit it
-names ([verifying](installation.md#verifying-a-release)).
+The Nightly workflow attests each file's build provenance before publishing
+it ([verifying a release](installation.md#verifying-a-release)).

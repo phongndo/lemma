@@ -4,11 +4,12 @@ What this Lemma is, and replacing it with another release: its version and
 build, whether a newer release is out on its channel, and installing one
 ([versioning](../../docs/versioning.md), [installation](../../docs/installation.md#updating)).
 Its contract is [`@lemma/release`](contract/src/index.ts): the channels
-`ReleaseChannels`, and what they answer.
+`ReleaseChannels`, and what they answer, with what a release is (`Build`,
+`Channel`) and `compareVersions`, which the `lemma` command shares.
 
-| Plugin                        | Halves     | What it does                                                                                                                                   |
-| ----------------------------- | ---------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
-| [`release.updates`](updates/) | host + web | Serves `ReleaseChannels` by asking the `lemma` command; Settings › About, its check, and its Update button, also in the settings button's menu |
+| Plugin                        | Halves     | What it does                                                                                               |
+| ----------------------------- | ---------- | ---------------------------------------------------------------------------------------------------------- |
+| [`release.updates`](updates/) | host + web | Serves `ReleaseChannels` by asking the `lemma` command; Settings › About, its check, and its Update button |
 
 ## Extending it
 

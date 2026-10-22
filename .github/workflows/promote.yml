@@ -3,7 +3,8 @@ name: Promote
 # Makes a nightly the stable release (docs/development.md#releases): the release the installer's default channel
 # installs, as GitHub's latest. Nothing is built: stable users get the files nightly users ran. Its notes are rewritten
 # to cover everything since the stable release before it. With rollback, an older release becomes the stable one again,
-# its notes as they were: `lemma update` takes stable users back to it.
+# its notes as they were: new installs get it, and stable users already past it go back only by version
+# (`lemma update 0.2.5`).
 on:
   workflow_dispatch:
     inputs:

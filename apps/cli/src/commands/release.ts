@@ -3,11 +3,12 @@ import { realpathSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { Effect } from "effect";
 import { readDiscovery } from "@lemma/contracts/discovery";
+import { CHANNELS, compareVersions } from "@lemma/release";
+import type { Build, Channel } from "@lemma/release";
 import { CliError, defineBuiltin, ExitCode, usage } from "../command.ts";
 import type { Builtin, Io } from "../command.ts";
 import { homeOf } from "../connect.ts";
-import { compareVersions, isReleaseVersion, newestRelease, readBuild, releasesApi } from "../release.ts";
-import type { Build, Channel } from "../release.ts";
+import { isReleaseVersion, newestRelease, readBuild, releasesApi } from "../release.ts";
 
 /*
  * This `lemma` itself: what it is, and replacing it with another release (docs/installation.md#updating). The
@@ -19,7 +20,8 @@ const UPDATES = "Version and updates";
 const INSTALL = "curl -fsSL https://raw.githubusercontent.com/phongndo/lemma/main/scripts/install.sh | sh";
 
 const describeBuild = (build: Build): string => {
-  const lines = [`Lemma ${build.version}${build.kind === "checkout" ? ", a checkout" : build.channel === undefined ? "" : ` (${build.channel})`}`];
+  const following = build.channel ?? (build.link === undefined ? undefined : "pinned");
+  const lines = [`Lemma ${build.version}${build.kind === "checkout" ? ", a checkout" : following === undefined ? "" : ` (${following})`}`];
   const row = (label: string, value: string) => lines.push(`${label.padEnd(10)} ${value}`);
   if (build.kind === "checkout") row("checkout", `${build.root}${build.commit === undefined ? "" : `, commit ${build.commit.slice(0, 12)}`}`);
   else {
@@ -36,7 +38,7 @@ const version = defineBuiltin({
   group: UPDATES,
   summary: "What this lemma is: its version, what it was built from, the channel it follows, and where it is installed",
   description:
-    "lemma --version prints the version alone. A release says the commit it was built from and when, and, installed by the installer, the channel lemma update follows and the lemma it links; a checkout, its commit. lemma update --check says whether a newer release is out.",
+    "lemma --version prints the version alone. A release says the commit it was built from and when, and, installed by the installer, the channel lemma update follows (pinned: none, installed by version) and the lemma it links; a checkout, its commit. lemma update --check says whether a newer release is out.",
   run: () =>
     Effect.sync(() => {
       const build = readBuild();
@@ -44,8 +46,11 @@ const version = defineBuiltin({
     }),
 });
 
-/** Runs the installer `build` carries, its output on stderr; fails with what it said, when it fails. */
-const runInstaller = (io: Io, build: Build & { readonly link: string; readonly dataDir: string }, channel: Channel, release: string) =>
+/**
+ * Runs the installer `build` carries, its output on stderr; fails with what it said, when it fails. With no channel,
+ * the release installed is pinned, as `LEMMA_VERSION` alone installs one.
+ */
+const runInstaller = (io: Io, build: Build & { readonly link: string; readonly dataDir: string }, channel: Channel | undefined, release: string) =>
   Effect.callback<void, CliError>((resume) => {
     const child = spawn("sh", [join(build.root, "scripts/install.sh")], {
       env: {
@@ -85,12 +90,12 @@ const update = defineBuiltin({
   group: UPDATES,
   summary: "Install the newest release on this lemma's channel, or another channel's, or a version given",
   description:
-    "It installs as the installer does, the one this release carries: the release in a directory of its own, the lemma command switched to it once it runs, the one before kept. --channel nightly follows the nightly channel from then on (the installer records it); a version installs that release, an older one rolling back. A running host keeps the release it started with until lemma restart. A checkout updates with git.",
+    "It installs as the installer does, the one this release carries: the release in a directory of its own, the lemma command switched to it once it runs, the one before kept. With no version it installs the channel's newest only when it is newer; --channel nightly follows the nightly channel from then on (the installer records it), installing its newest; a version installs that release, an older one rolling back. A lemma installed by version (pinned) follows no channel until --channel names one. A running host keeps the release it started with until lemma restart. A checkout updates with git.",
   args: [{ name: "version", description: "The release to install, as 0.2.7, rather than the channel's newest" }],
   flags: {
     channel: {
       type: "string",
-      values: ["stable", "nightly"],
+      values: CHANNELS,
       description: "Follow this channel from now on, rather than the one this lemma was installed from",
     },
     check: { type: "boolean", description: "Say whether a newer release is out on the channel, and install nothing" },
@@ -112,22 +117,28 @@ const update = defineBuiltin({
           exit: ExitCode.failed,
         });
       const installed = { ...build, link: build.link, dataDir: build.dataDir };
-      const channel: Channel = (flags.channel as Channel | undefined) ?? build.channel ?? "stable";
+      // None for a pinned lemma, installed by version: it stays pinned until --channel names one.
+      const channel: Channel | undefined = flags.channel ?? build.channel;
       const asked = args.version === undefined ? undefined : String(args.version).replace(/^v/, "");
       if (asked !== undefined && !isReleaseVersion(asked)) return yield* usage(`"${String(args.version)}" is not a release's version, such as 0.2.7`);
       if (asked !== undefined && flags.check) return yield* usage("--check compares with the channel's newest release: give no version with it");
+      const pinned = `Lemma ${build.version} was installed by version, so it follows no channel`;
+      if (channel === undefined && flags.check)
+        return { json: { version: build.version, newer: false }, text: `${pinned}: lemma update --channel stable follows one, and installs its newest` };
       const api = releasesApi(io.env);
       const target =
         asked ??
-        (yield* Effect.tryPromise({
-          try: (signal) => newestRelease(api, channel, signal),
-          catch: (error) =>
-            new CliError({
-              code: "Unreachable",
-              message: `Could not ask ${api} which release is newest: ${error instanceof Error ? error.message : String(error)}`,
-              exit: ExitCode.unavailable,
-            }),
-        }));
+        (channel === undefined
+          ? yield* usage(`${pinned}: give a version to install, or --channel stable or nightly to follow one`)
+          : yield* Effect.tryPromise({
+              try: (signal) => newestRelease(api, channel, signal),
+              catch: (error) =>
+                new CliError({
+                  code: "Unreachable",
+                  message: `Could not ask ${api} which release is newest: ${error instanceof Error ? error.message : String(error)}`,
+                  exit: ExitCode.unavailable,
+                }),
+            }));
       if (target === undefined)
         return yield* new CliError({
           code: "NoRelease",
@@ -137,26 +148,30 @@ const update = defineBuiltin({
               : "No release is published yet",
           exit: ExitCode.failed,
         });
-      if (flags.check) {
-        // Older: the channel went back to it (a stable release rolled back), and lemma update follows it there.
-        const order = compareVersions(target, build.version);
+      const order = compareVersions(target, build.version);
+      if (flags.check)
         return {
-          json: { version: build.version, channel, newest: target, newer: order > 0, older: order < 0 },
+          json: { version: build.version, channel, newest: target, newer: order > 0 },
           text:
             order > 0
               ? `Lemma ${target} is out on ${channel}, and this is ${build.version}: lemma update installs it`
-              : order < 0
-                ? `The ${channel} release is ${target}, older than this ${build.version}: lemma update goes back to it`
-                : `Lemma ${build.version} is the newest on ${channel}`,
+              : `Lemma ${build.version}: no newer release is out on ${channel}`,
         };
-      }
-      if (target === build.version && channel === build.channel)
-        return { json: { updated: false, version: build.version, channel }, text: `Lemma ${build.version} is installed already, the newest on ${channel}` };
+      // Going back is asked for by version: a channel whose newest is older (a stable release rolled back) leaves this
+      // as it is, unless it is the channel to switch to.
+      if (channel === build.channel && (asked === undefined ? order <= 0 : order === 0))
+        return {
+          json: { updated: false, version: build.version, channel },
+          text:
+            order === 0
+              ? `Lemma ${build.version} is installed already`
+              : `Lemma ${build.version}: no newer release is out on ${channel}, whose newest is ${target}`,
+        };
 
       yield* runInstaller(io, installed, channel, target);
       const now = readBuild(dirname(dirname(realpathSync(build.link))));
       const running = yield* readDiscovery(homeOf(io));
-      const lines = [`Installed Lemma ${now.version} (${channel}) as ${build.link}, in place of ${build.version}.`];
+      const lines = [`Installed Lemma ${now.version} (${channel ?? "pinned"}) as ${build.link}, in place of ${build.version}.`];
       if (running !== undefined) lines.push(`The host (pid ${running.pid}) runs the release it started with until it restarts: lemma restart`);
       return {
         json: {

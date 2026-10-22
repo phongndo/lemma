@@ -18,6 +18,7 @@
     "@lemma/contracts": "workspace:*",
     "@lemma/host": "workspace:*",
     "@lemma/profiles": "workspace:*",
+    "@lemma/release": "workspace:*",
     "effect": "4.0.5",
     "jsonc-parser": "3.3.1"
   },

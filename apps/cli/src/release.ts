@@ -2,6 +2,9 @@ import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { Schema } from "effect";
+import { Channel } from "@lemma/release";
+import type { Build } from "@lemma/release";
 
 /*
  * What this `lemma` is, and which release is newest: what `lemma version` shows, and what `lemma update` and
@@ -9,30 +12,6 @@ import { fileURLToPath } from "node:url";
  * scripts/dist.ts), and the installer what installed it (`install.json`, from scripts/install.sh); a checkout says
  * neither.
  */
-
-export const CHANNELS = ["stable", "nightly"] as const;
-export type Channel = (typeof CHANNELS)[number];
-
-export const isChannel = (value: unknown): value is Channel => typeof value === "string" && (CHANNELS as readonly string[]).includes(value);
-
-export interface Build {
-  /** What `lemma --version` prints. */
-  readonly version: string;
-  /** `release`: an archive of a release; `checkout`: a clone of the repository, as developers run Lemma. */
-  readonly kind: "release" | "checkout";
-  /** Where its files are: the release's directory, or the checkout. */
-  readonly root: string;
-  /** The commit it was built from; a checkout's, when git says. */
-  readonly commit?: string;
-  /** When the release was built, in ISO 8601. */
-  readonly built?: string;
-  /** What the installer recorded: the channel `lemma update` follows, the `lemma` it links, and where it keeps releases. */
-  readonly channel?: Channel;
-  readonly link?: string;
-  readonly dataDir?: string;
-  /** The Node.js it runs on. */
-  readonly node: string;
-}
 
 const lemmaRoot = resolve(fileURLToPath(new URL("../../..", import.meta.url)));
 
@@ -58,7 +37,7 @@ export const readBuild = (root = lemmaRoot): Build => {
     const fields = {
       commit: text(release?.commit),
       built: text(release?.built),
-      channel: isChannel(channel) ? channel : undefined,
+      channel: Schema.is(Channel)(channel) ? channel : undefined,
       link: text(install?.link),
       dataDir: text(install?.dataDir),
     };
@@ -88,15 +67,6 @@ export const newestRelease = async (api: string, channel: Channel, signal?: Abor
   const release: unknown = Array.isArray(body) ? body[0] : body;
   const tag = typeof release === "object" && release !== null ? (release as { tag_name?: unknown }).tag_name : undefined;
   return typeof tag === "string" ? tag.replace(/^v/, "") : undefined;
-};
-
-const parts = (version: string): readonly number[] => version.split(/[.-]/, 3).map((part) => Number.parseInt(part, 10) || 0);
-
-/** Below zero when `a` is the older release, above when the newer, zero when the same. */
-export const compareVersions = (a: string, b: string): number => {
-  const [x, y] = [parts(a), parts(b)];
-  for (let i = 0; i < 3; i++) if (x[i] !== y[i]) return (x[i] ?? 0) - (y[i] ?? 0);
-  return 0;
 };
 
 export const isReleaseVersion = (value: string): boolean => /^\d+\.\d+\.\d+$/.test(value);

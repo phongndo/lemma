@@ -7,8 +7,8 @@ research, or anything a mode of yours describes.
 The plugins are written against a runtime the host and the web app provide, so
 a plugin of yours stands where a bundled one does.
 
-Lemma is under active development: while its version is 0.x, a release may
-change what plugins are written against.
+Lemma is under active development: [versioning](docs/versioning.md) says what
+a release may change.
 
 ## Install
 
@@ -21,10 +21,10 @@ lemma serve
 ```
 
 `lemma serve` starts the host and opens the web app, where you log in to a
-provider. That installs the stable release; `… | LEMMA_CHANNEL=nightly sh`
-installs the newest build of `main`. [Installation](docs/installation.md)
-covers channels, updating, and removing a release;
-[Development](docs/development.md) running Lemma from a checkout.
+provider. That installs the stable release; [Installation](docs/installation.md)
+covers the nightly channel (the newest build of `main`), updating, and
+removing a release; [Development](docs/development.md) running Lemma from a
+checkout.
 
 ## Principles
 

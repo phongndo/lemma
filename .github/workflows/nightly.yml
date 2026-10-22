@@ -1,10 +1,10 @@
 name: Nightly
 
-# Publishes the newest commit on main that passed Check as the next release in its line (docs/development.md#releases):
-# `v0.2.7` after `v0.2.6`, a GitHub prerelease, which the installer's nightly channel installs. Every platform's
-# archive is built on one runner, and the desktop app made from each (macOS's on macOS), then installed and run on its
-# own platform (scripts/dist-check.ts, dist-desktop-check.ts). The Promote workflow makes a nightly the stable
-# release. Daily, and by hand; a day with nothing new on main publishes nothing.
+# Publishes the newest commit on main that passed Check as the next release in its minor version
+# (docs/development.md#releases): `v0.2.7` after `v0.2.6`, a GitHub prerelease, which the installer's nightly channel
+# installs. Every platform's archive is built on one runner, and the desktop app made from each (macOS's on macOS),
+# then installed and run on its own platform (scripts/dist-check.ts, dist-desktop-check.ts). The Promote workflow
+# makes a nightly the stable release. Daily, and by hand; a day with nothing new on main publishes nothing.
 on:
   schedule:
     - cron: "41 5 * * *"

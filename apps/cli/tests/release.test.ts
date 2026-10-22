@@ -5,9 +5,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
+import { compareVersions } from "@lemma/release";
 import packageJson from "../package.json" with { type: "json" };
 import { ExitCode } from "../src/cli.ts";
-import { compareVersions, newestRelease, readBuild } from "../src/release.ts";
+import { newestRelease, readBuild } from "../src/release.ts";
 import { invoke } from "./invoke.ts";
 
 const checkout = fileURLToPath(new URL("../../..", import.meta.url)).replace(/\/$/, "");
@@ -43,8 +44,11 @@ describe("what this lemma is", () => {
       JSON.stringify({ channel: "nightly", link: "/home/me/.local/bin/lemma", dataDir: "/home/me/.local/share/lemma" }),
     );
     expect(readBuild(root)).toMatchObject({ channel: "nightly", link: "/home/me/.local/bin/lemma", dataDir: "/home/me/.local/share/lemma" });
-    // A channel it does not know is none.
+    // A channel it does not know is none, as is a release installed by version, which is pinned.
     await writeFile(join(root, "install.json"), JSON.stringify({ channel: "beta", link: "/l", dataDir: "/d" }));
+    expect(readBuild(root).channel).toBeUndefined();
+    await writeFile(join(root, "install.json"), JSON.stringify({ link: "/l", dataDir: "/d" }));
+    expect(readBuild(root)).toMatchObject({ link: "/l", dataDir: "/d" });
     expect(readBuild(root).channel).toBeUndefined();
   });
 
