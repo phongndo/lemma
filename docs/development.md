@@ -93,6 +93,14 @@ many times at once:
 nix develop -c pnpm stress apps/cli/tests/turns.test.ts --runs 30 --jobs 8
 ```
 
+A flake the runners' slower cores and disks bring out may never show on a fast
+machine: the Stress workflow (`.github/workflows/stress.yml`) runs the same on
+a Linux or macOS runner, as Check runs there:
+
+```sh
+gh workflow run stress.yml --ref <branch> -f target=domains/workspace/tidy/tests/tidy.test.ts -f os=macos
+```
+
 Keep `pnpm dev` running while you work: it starts the host, the web app's dev
 server, and the desktop window on them. The host restarts when its code changes
 and the web app hot-reloads. Quitting the window leaves the rest running;
