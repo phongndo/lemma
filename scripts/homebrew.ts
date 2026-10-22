@@ -71,7 +71,8 @@ export const formula = (version: string, sha256: Readonly<Record<Target, string>
     # On macOS, Homebrew gives each library in a keg its own path as its ID, which a
     # prebuilt one with no room in its header for a longer ID refuses (fff's file
     # search): the libraries go in after it has, in its post-install steps.
-    libraries = OS.mac? ? libexec.glob("**/*.dylib").select { |library| library.realpath == library } : []
+    # (find, not glob: they are under node_modules/.pnpm, which a glob skips.)
+    libraries = OS.mac? ? libexec.find.select { |path| path.extname == ".dylib" && path.file? && !path.symlink? } : []
     unless libraries.empty?
       relative = libraries.map { |library| library.relative_path_from(libexec) }
       system "tar", "-cf", libexec/"libraries.tar", "-C", libexec, *relative
