@@ -22,7 +22,12 @@ what happens to a plugin that cannot run. A host runs for one profile
 is the profile's (`Paths.home`, under `Paths.root`), the port its
 `profile.json` keeps goes beneath the transport's row, and its tools'
 `LEMMA_HOME` and `LEMMA_PROFILE` name it, so a `lemma` an agent runs reaches
-this host. What runs is planned by
+this host. Whether it runs from a release or a checkout (`buildKind`) chooses
+its root and port (`KINDS`), and it refuses the other kind's root
+(`otherHomeProblem`), so an installed Lemma and a checkout run side by side
+([development](../../docs/development.md)); its tools are told nothing of its
+own kind's root and default profile (`homeForTools`), which a `lemma` of its
+kind finds by itself. What runs is planned by
 [`@lemma/composition`](../composition/README.md), which the web app plans with
 too. The modules' doc comments give their contracts: `loadComposition` never
 fails and reports bad files as diagnostics; `patchConfig` and `updateConfig`

@@ -1,5 +1,5 @@
 import { execFile, spawnSync } from "node:child_process";
-import { readdirSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { mkdir, mkdtemp, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -166,5 +166,17 @@ describe("the host's Node.js flags", () => {
     expect(after.pid).toBe(ran.pid);
     expect(after.execArgv).toEqual(expect.arrayContaining([...HOST_FLAGS]));
     expect(after.argv).toEqual(["kept"]);
+  });
+});
+
+describe("the other kind's home", () => {
+  test("a checkout's host refuses an installed Lemma's home before it writes anything there", async () => {
+    const user = await scratch("lemma-other-home-");
+    const env = { PATH: process.env.PATH, HOME: user, LEMMA_HOME: join(user, ".lemma") };
+    const start = join(host, "src/start.mjs");
+    const refused = spawnSync(process.execPath, ["--conditions=lemma-source", start, "--no-open"], { cwd: host, env, encoding: "utf8", timeout: 30_000 });
+    expect(refused.status, refused.stderr).toBe(1);
+    expect(refused.stderr).toContain(`${join(user, ".lemma")} is an installed Lemma's home; a checkout keeps to its own, ${join(user, ".lemma-dev")}.`);
+    expect(existsSync(join(user, ".lemma"))).toBe(false);
   });
 });

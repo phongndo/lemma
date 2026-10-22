@@ -44,6 +44,7 @@ import workspaceCommands from "@lemma/workspace-commands";
 import workspaceLocal from "@lemma/workspace-local";
 import workspaceSearchFff from "@lemma/workspace-search-fff";
 import workspaceTidy from "@lemma/workspace-tidy";
+import { buildKind, KINDS } from "./paths.ts";
 
 /**
  * Bundled plugins that start off, each until a row turns it on: what changes behavior not yet measured to help
@@ -196,9 +197,11 @@ export const bundledWeb: readonly string[] = [
  * transport's port does not also unset the web app.
  */
 export const appDefaults: Readonly<Record<string, Readonly<Record<string, unknown>>>> = {
-  "transport.server": { staticDir: webDist },
+  // On its kind's port (`KINDS`), so an installed Lemma's host and a checkout's listen side by side.
+  "transport.server": { staticDir: webDist, port: KINDS[buildKind].port },
   "agent.loop": { cli: cliCommand },
-  // How it starts another profile's host: this checkout's `lemma serve --detach`.
-  "profiles.switcher": { cli: cliCommand },
+  // How it starts another profile's host: this checkout's `lemma serve --detach`; and the profiles it makes, on ports
+  // from the one above its kind's.
+  "profiles.switcher": { cli: cliCommand, firstPort: KINDS[buildKind].port + 1 },
   "release.updates": { cli: cliCommand },
 };

@@ -85,20 +85,28 @@ nix develop -c pnpm dev:desktop    # the window again, while `pnpm dev` runs
 nix develop -c pnpm lemma status   # the CLI from the checkout, on the host `pnpm dev` runs
 ```
 
-What runs from the checkout (`pnpm dev`, `dev:desktop`, `dev:web`, `desktop`,
-`start`, `lemma`) uses its own home, `~/.lemma-dev`, unless `LEMMA_HOME` names
-another, and `pnpm dev`'s host listens on port 7434: a Lemma you
-[installed](installation.md) runs beside it, on `~/.lemma` and port 7433, its
-sessions and settings out of a development build's reach. Its window and tab
-show the orange [dev icon](../assets/brand/README.md), so you can tell the two
-apart. `pnpm dev:web` alone
-proxies to the host running on that home, else to 7434, unless
-`LEMMA_HOST_URL` names another. Log in to a provider
-there once. Every checkout shares `~/.lemma-dev`, which has one host at a
-time; another host from the checkout (`pnpm desktop`, `pnpm lemma serve`)
-beside an installed one needs a port of its own, which
-`~/.lemma-dev/config.jsonc` can give every one:
-`{ "plugins": { "transport.server": { "config": { "port": 7434 } } } }`.
+What runs from a checkout (`pnpm dev`, `dev:desktop`, `dev:web`, `desktop`,
+`start`, `lemma`) keeps apart from a Lemma you [installed](installation.md), so
+the two run side by side and a development build never reaches your sessions
+and settings. Each has its own (`KINDS` in `packages/host/src/paths.ts`):
+
+|                                         | Installed                 | Checkout                            |
+| --------------------------------------- | ------------------------- | ----------------------------------- |
+| Home, unless `LEMMA_HOME` names another | `~/.lemma`                | `~/.lemma-dev`                      |
+| The host's port                         | 7433                      | 7533                                |
+| Its profiles' ports                     | 7434 up                   | 7534 up                             |
+| Its service (systemd, launchd)          | `lemma`, `dev.lemma.host` | `dev-lemma`, `dev.lemma.dev-host`   |
+| Its icon, in a window and a tab         | charcoal                  | [orange](../assets/brand/README.md) |
+
+Neither runs a host on the other's home, nor starts, stops, or restarts one
+there: a `LEMMA_HOME` naming it, inherited from the other's host or your shell,
+is refused unless `LEMMA_ALLOW_OTHER_HOME=1`. A host names its home to the
+tools it runs only when it is not its kind's own (a profile's, or another
+`LEMMA_HOME`), so `pnpm dev` run by an installed Lemma's agent uses
+`~/.lemma-dev`. `pnpm dev:web` alone proxies to the host running on the
+checkout's home, else to 7533, unless `LEMMA_HOST_URL` names another. Log in to
+a provider there once. Every checkout shares `~/.lemma-dev`, which has one host
+at a time.
 
 Browser checks (the web app's `ui:check`, the core's `browser:check`) run in
 the `browser` shell, which supplies pinned Chromium on Linux. On macOS, install

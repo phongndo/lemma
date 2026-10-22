@@ -23,7 +23,7 @@ without one.
 To use it:
 
 ```sh
-ln -s "$PWD/examples/budget" ~/.lemma/plugins/budget   # or copy the folder
+ln -s "$PWD/examples/budget" ~/.lemma-dev/plugins/budget   # or copy the folder, into ~/.lemma/plugins for an installed Lemma
 ```
 
 `nix develop -c pnpm --filter @lemma/example-budget test` runs it in real

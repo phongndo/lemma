@@ -64,7 +64,10 @@ export const portOf = (entry: ProfileEntry): number | undefined => {
   return entry.port;
 };
 
-/** The port profiles start from; the transport's default (7433) stays the default profile's. */
+/**
+ * The port an installed Lemma's profiles start from; the transport's default (7433) stays the default profile's. A
+ * checkout's start from one above its own (`firstPort`), so neither's profiles take the other's ports.
+ */
 export const FIRST_PROFILE_PORT = 7434;
 
 /** Whether nothing listens on `port` on loopback now. */
@@ -75,11 +78,11 @@ const isFree = (port: number): Promise<boolean> =>
     server.listen(port, "127.0.0.1", () => server.close(() => resolve(true)));
   });
 
-/** The lowest port from `FIRST_PROFILE_PORT` that no profile under `root` keeps, and nothing listens on now. */
-export const freeProfilePort = (root: string): Effect.Effect<number> =>
+/** The lowest port from `first` that no profile under `root` keeps, and nothing listens on now. */
+export const freeProfilePort = (root: string, first = FIRST_PROFILE_PORT): Effect.Effect<number> =>
   Effect.gen(function* () {
     const taken = new Set((yield* listProfiles(root)).flatMap((entry) => [entry.port, portOf(entry)].filter((port) => port !== undefined)));
-    for (let port = FIRST_PROFILE_PORT; port < 65_536; port++) {
+    for (let port = first; port < 65_536; port++) {
       if (!taken.has(port) && (yield* Effect.promise(() => isFree(port)))) return port;
     }
     return 0;
@@ -104,18 +107,18 @@ const ownNameProblem = (root: string, name: string) =>
   name === DEFAULT_PROFILE ? `"${DEFAULT_PROFILE}" is the profile ${root} itself` : profileNameProblem(name);
 
 /**
- * Makes the profile `name` under `root`: its home, empty but for a `profile.json` naming a port of its own
- * (`freeProfilePort`), and the name it is shown by when it is given `title`. Everything else it gets as a fresh home
- * does, from its first host.
+ * Makes the profile `name` under `root`: its home, empty but for a `profile.json` naming a port of its own, from
+ * `firstPort` up (`freeProfilePort`), and the name it is shown by when it is given `title`. Everything else it gets as
+ * a fresh home does, from its first host.
  */
-export const createProfile = (root: string, name: string, title?: string): Effect.Effect<ProfileEntry, ProfileError> =>
+export const createProfile = (root: string, name: string, title?: string, firstPort = FIRST_PROFILE_PORT): Effect.Effect<ProfileEntry, ProfileError> =>
   Effect.gen(function* () {
     const problem = ownNameProblem(root, name);
     if (problem !== undefined) return yield* new ProfileError({ reason: "Name", message: problem });
     const wrong = title === undefined ? undefined : titleProblem(title);
     if (wrong !== undefined) return yield* new ProfileError({ reason: "Title", message: wrong });
     const home = profileHome(root, name);
-    const port = yield* freeProfilePort(root);
+    const port = yield* freeProfilePort(root, firstPort);
     yield* Effect.tryPromise({
       try: async () => {
         await mkdir(profilesDir(root), { recursive: true, mode: 0o700 });

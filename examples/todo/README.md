@@ -22,7 +22,7 @@ list it had there, and a restart loses nothing.
 To use it:
 
 ```sh
-ln -s "$PWD/examples/todo" ~/.lemma/plugins/todo   # or copy the folder: the host loads it, and open web apps follow
+ln -s "$PWD/examples/todo" ~/.lemma-dev/plugins/todo   # or copy the folder, into ~/.lemma/plugins for an installed Lemma: the host loads it, and open web apps follow
 ```
 
 `nix develop -c pnpm --filter @lemma/example-todo test` checks the list and

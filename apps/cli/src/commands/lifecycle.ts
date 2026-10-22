@@ -11,7 +11,7 @@ import { CliChannels } from "@lemma/cli";
 import { callChannel } from "@lemma/client";
 import { missingHostFlags } from "@lemma/host/launch";
 import { SHUTDOWN_TIMEOUT_MS } from "@lemma/host/limits";
-import { hostFiles } from "@lemma/host/paths";
+import { buildKind, hostFiles, otherHomeProblem } from "@lemma/host/paths";
 import { CliError, defineBuiltin, ExitCode, usage } from "../command.ts";
 import type { Builtin, Globals, Io } from "../command.ts";
 import { connect, homeOf, otherProtocol, rootOf, toCliError } from "../connect.ts";
@@ -34,6 +34,15 @@ const localOnly = (globals: Globals, what: string): CliError | undefined =>
   globals.env !== undefined && globals.env !== "local"
     ? usage(`${what} acts on this machine's host; run it on the machine --env ${globals.env} names`)
     : undefined;
+
+/**
+ * Refused on the other kind's root (`otherHomeProblem`): a checkout's `lemma` starts, stops, and restarts no installed
+ * Lemma's host, nor puts a service on its home, and an installed Lemma's none of a checkout's.
+ */
+const otherHome = (io: Io): CliError | undefined => {
+  const problem = otherHomeProblem(rootOf(io), io.env);
+  return problem === undefined ? undefined : new CliError({ code: "OtherHome", message: problem, exit: ExitCode.failed });
+};
 
 const isAlive = (pid: number): boolean => {
   try {
@@ -127,7 +136,7 @@ const serve = defineBuiltin({
   group: RUN,
   summary: "Run the host for this machine's home: here in the terminal, or in the background with --detach",
   description:
-    "The host every client attaches to: the web app, the desktop app, and this command. There is one per home ($LEMMA_HOME, default ~/.lemma) and profile (--profile, see lemma profile): another start says which runs. --port and --host apply to this run only, over the config files; to keep a host running across reboots and crashes, see lemma service. Its output goes to the terminal and to its log (lemma logs).",
+    "The host every client attaches to: the web app, the desktop app, and this command. There is one per home ($LEMMA_HOME, default ~/.lemma, or ~/.lemma-dev from a checkout) and profile (--profile, see lemma profile): another start says which runs. --port and --host apply to this run only, over the config files; to keep a host running across reboots and crashes, see lemma service. Its output goes to the terminal and to its log (lemma logs).",
   flags: {
     detach: { type: "boolean", short: "d", description: "Start it in the background and return once it listens; lemma stop stops it" },
     port: { type: "number", description: "Listen on this port, this run only (0: any free one)" },
@@ -141,7 +150,7 @@ const serve = defineBuiltin({
   examples: ["lemma serve", "lemma serve --detach", "lemma serve --port 8080 --no-open"],
   run: ({ io, globals, flags }) =>
     Effect.gen(function* () {
-      const wrong = localOnly(globals, "serve");
+      const wrong = localOnly(globals, "serve") ?? otherHome(io);
       if (wrong !== undefined) return yield* wrong;
       const home = homeOf(io);
       const profile = profileOf(io.env);
@@ -270,7 +279,7 @@ const stop = defineBuiltin({
   flags: { force: { type: "boolean", description: "Stop it whatever it is doing, and whoever started it" } },
   run: ({ io, globals, flags }) =>
     Effect.gen(function* () {
-      const wrong = localOnly(globals, "stop");
+      const wrong = localOnly(globals, "stop") ?? otherHome(io);
       if (wrong !== undefined) return yield* wrong;
       const home = homeOf(io);
       const running = yield* readDiscovery(home);
@@ -303,7 +312,7 @@ const restart = defineBuiltin({
   examples: ["lemma restart", "lemma update && lemma restart"],
   run: ({ io, globals, flags }) =>
     Effect.gen(function* () {
-      const wrong = localOnly(globals, "restart");
+      const wrong = localOnly(globals, "restart") ?? otherHome(io);
       if (wrong !== undefined) return yield* wrong;
       const home = homeOf(io);
       const running = yield* readDiscovery(home);
@@ -415,11 +424,15 @@ interface ServiceManager {
   readonly status: () => { readonly installed: boolean; readonly enabled: boolean; readonly active: boolean };
 }
 
-const LABEL = "dev.lemma.host";
-
-/** The service's name: one per profile, the default's `lemma` (`dev.lemma.host`), another's `lemma-<profile>`. */
-const unitOf = (profile: string | undefined) => (profile === undefined ? "lemma.service" : `lemma-${profile}.service`);
-const labelOf = (profile: string | undefined) => (profile === undefined ? LABEL : `${LABEL}.${profile}`);
+/**
+ * The service's names, one per profile and kind, so an installed Lemma's and a checkout's never replace or stop each
+ * other: a release's default is `lemma` (launchd's `dev.lemma.host`), another profile's `lemma-<profile>`
+ * (`dev.lemma.host.<profile>`); a checkout's `dev-lemma` (`dev.lemma.dev-host`) and `dev-lemma-<profile>`, which no
+ * release's name can be.
+ */
+const NAMES = { release: { unit: "lemma", label: "dev.lemma.host" }, checkout: { unit: "dev-lemma", label: "dev.lemma.dev-host" } }[buildKind];
+const unitOf = (profile: string | undefined) => `${profile === undefined ? NAMES.unit : `${NAMES.unit}-${profile}`}.service`;
+const labelOf = (profile: string | undefined) => (profile === undefined ? NAMES.label : `${NAMES.label}.${profile}`);
 
 const run = (command: string, args: readonly string[]) => spawnSync(command, args, { encoding: "utf8" });
 
@@ -440,7 +453,7 @@ const serviceManager = (profile?: string): ServiceManager | undefined => {
       render: (command, env) =>
         [
           "[Unit]",
-          profile === undefined ? "Description=Lemma host" : `Description=Lemma host (profile ${profile})`,
+          `Description=Lemma host${buildKind === "checkout" ? " from a checkout" : ""}${profile === undefined ? "" : ` (profile ${profile})`}`,
           "",
           "[Service]",
           "WorkingDirectory=%h",
@@ -574,6 +587,8 @@ const serviceInstall = defineBuiltin({
   },
   run: ({ io, flags }) =>
     Effect.gen(function* () {
+      const wrong = otherHome(io);
+      if (wrong !== undefined) return yield* wrong;
       const manager = serviceManager(profileOf(io.env));
       if (manager === undefined) return yield* noManager();
       const named = serviceCommand(io);

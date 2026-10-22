@@ -2,10 +2,10 @@
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { readFile, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
-import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { promisify } from "node:util";
 import { brotliCompress, constants as zlib, gzip } from "node:zlib";
+import { defaultRoot, KINDS } from "@lemma/host/paths";
 import { Scanner } from "@tailwindcss/oxide";
 import tailwindcss from "@tailwindcss/vite";
 import { compile } from "tailwindcss";
@@ -18,20 +18,20 @@ import solid from "vite-plugin-solid";
 // and `LEMMA_HOST_TOKEN`, when set, is sent on every proxied request, so the page works without `?token=`:
 // anyone who can reach the dev server can then use the host.
 /**
- * Without `LEMMA_HOST_URL`, the host running on the checkout's home (`LEMMA_HOME`, which the root scripts default to
- * `~/.lemma-dev`), else `pnpm dev`'s port: never an installed Lemma's, on `~/.lemma` and 7433, whose sessions and
+ * Without `LEMMA_HOST_URL`, the host running on the checkout's home (`LEMMA_HOME`, else `~/.lemma-dev`), else on a
+ * checkout's port (`KINDS`), as `pnpm dev`'s is: never an installed Lemma's, on `~/.lemma` and 7433, whose sessions and
  * settings a development build leaves alone.
  */
 const checkoutHost = (): string | undefined => {
   try {
-    const entry: unknown = JSON.parse(readFileSync(join(process.env.LEMMA_HOME?.trim() || join(homedir(), ".lemma-dev"), "transport.json"), "utf8"));
+    const entry: unknown = JSON.parse(readFileSync(join(process.env.LEMMA_HOME?.trim() || defaultRoot(process.env, "checkout"), "transport.json"), "utf8"));
     const url = typeof entry === "object" && entry !== null ? (entry as { url?: unknown }).url : undefined;
     return typeof url === "string" ? url : undefined;
   } catch {
     return undefined;
   }
 };
-const hostUrl = process.env.LEMMA_HOST_URL ?? checkoutHost() ?? "http://127.0.0.1:7434";
+const hostUrl = process.env.LEMMA_HOST_URL ?? checkoutHost() ?? `http://127.0.0.1:${KINDS.checkout.port}`;
 const token = process.env.LEMMA_HOST_TOKEN;
 const auth = token === undefined ? {} : { headers: { authorization: `Bearer ${token}` } };
 

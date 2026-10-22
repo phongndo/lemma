@@ -18,7 +18,7 @@ that caused it. A path
 counts as outside when it leads there through a link, too. To use it:
 
 ```sh
-ln -s "$PWD/examples/approvals/approvals.ts" ~/.lemma/plugins/approvals.ts   # or copy it: the host loads it
+ln -s "$PWD/examples/approvals/approvals.ts" ~/.lemma-dev/plugins/approvals.ts   # or copy it, into ~/.lemma/plugins for an installed Lemma: the host loads it
 ```
 
 As a plugin file it is required: if it cannot load or start, the host does

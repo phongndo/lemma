@@ -6,17 +6,20 @@ import type { PluginStatus } from "./status.ts";
 
 /**
  * Locations the host resolves once: Lemma's home, the config files, and the
- * working directory. Defaults: `~/.lemma` for user data; `<cwd>/.lemma` for
- * project data. A plugin keeps its own files in `home`, under a name of its
+ * working directory. Defaults: `~/.lemma` for user data (`~/.lemma-dev` run
+ * from a checkout); `<cwd>/.lemma` for project data. A plugin keeps its own files in `home`, under a name of its
  * own that its README gives. A host runs for one profile
  * (`@lemma/contracts/profiles`), whose home is `home`.
  */
 export class Paths extends Context.Service<
   Paths,
   {
-    /** The profile's home: `~/.lemma` (or `$LEMMA_HOME`) for the default, else `<root>/profiles/<profile>`. */
+    /** The profile's home: the root for the default, else `<root>/profiles/<profile>`. */
     readonly home: string;
-    /** `~/.lemma` (or `$LEMMA_HOME`): the default profile's home, which every other profile's is under. */
+    /**
+     * `~/.lemma`, `~/.lemma-dev` run from a checkout, or `$LEMMA_HOME`: the default profile's home, which every other
+     * profile's is under.
+     */
     readonly root: string;
     /** The profile the host runs for (`LEMMA_PROFILE`); undefined for the default. */
     readonly profile?: string;
