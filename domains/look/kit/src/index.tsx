@@ -5,6 +5,7 @@ import { Dialog } from "./components/dialog.tsx";
 import { PlainFileIcon } from "./components/file-icon.tsx";
 import { DefaultIcon } from "./components/icons.tsx";
 import { Markdown } from "./components/markdown.tsx";
+import { ConfirmDelete, MenuItem } from "./components/menu.tsx";
 import { Picture, SvgDrop } from "./components/picture.tsx";
 import { Popover } from "./components/popover.tsx";
 import { ProviderLogo } from "./components/provider-logo.tsx";
@@ -15,11 +16,13 @@ import { ProviderLogoPart } from "@lemma/llm/web";
 import {
   AvatarPart,
   ConfigFormPart,
+  ConfirmDeletePart,
   CopyButtonPart,
   DialogPart,
   FileIconPart,
   IconPart,
   MarkdownPart,
+  MenuItemPart,
   PicturePart,
   PopoverPart,
   SearchFieldPart,
@@ -58,6 +61,8 @@ export default defineWebPlugin({
     add(ProviderLogoPart, ProviderLogo);
     add(PicturePart, Picture);
     add(SvgDropPart, SvgDrop);
+    add(MenuItemPart, MenuItem);
+    add(ConfirmDeletePart, ConfirmDelete);
     add(IconPart, DefaultIcon);
     add(FileIconPart, PlainFileIcon);
     add(AvatarPart, IdenticonAvatar);

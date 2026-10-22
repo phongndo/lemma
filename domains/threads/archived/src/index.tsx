@@ -7,7 +7,7 @@ import { createNow } from "@lemma/web/now";
 import { Actions } from "@lemma/actions";
 import { Dialogs, Layers } from "@lemma/frame";
 import { Settings, SettingsSections } from "@lemma/settings";
-import { DeleteThreadsDialog, sessionTitle, Threads, ThreadWaits, waitingOn } from "@lemma/threads";
+import { DeleteThreadsDialog, sessionTitle, threadCount, Threads, ThreadWaits, waitingOn } from "@lemma/threads";
 import type { ThreadsService } from "@lemma/threads";
 import { Workspace } from "@lemma/workspace/web";
 import type { WorkspaceService } from "@lemma/workspace/web";
@@ -28,13 +28,11 @@ import {
   WorktreeIcon,
   XIcon,
 } from "@lemma/look";
-import { archivedOf, dayLabel, extendSelection, filterArchived, groupBy, notArchived, selectionOf, threadCount, withSelection } from "./archived.ts";
+import { archivedOf, dayLabel, extendSelection, filterArchived, groupBy, selectionOf, unarchived, withSelection } from "./archived.ts";
 import styles from "./archived-page.css?inline";
 
 const SECTION = "archived";
 const DELETE_DIALOG = "archived-page.delete";
-/** No project (`projectOf`'s `""`) in the page's address, where an empty value would drop the filter; a project is a path. */
-const NO_PROJECT = "none";
 
 interface Deps {
   /** This plugin's handle: the page is drawn by the settings page, so its rows take it from here. */
@@ -275,13 +273,10 @@ function ProjectFilter(props: { deps: Deps; projects: readonly string[] }) {
     <Popover
       label={deps.project() === undefined ? "Filter by project" : `Only ${deps.projectName(deps.project()!)}`}
       trigger={
-        <Show when={deps.project()} fallback={<FilterIcon />}>
-          {(chosen) => (
-            <>
-              <FilterIcon />
-              <span class="archived-filter-label">{deps.projectName(chosen())}</span>
-            </>
-          )}
+        <Show when={deps.project() !== undefined} fallback={<FilterIcon />}>
+          <FilterIcon />
+          {/* No project is `""`, a project too. */}
+          <span class="archived-filter-label">{deps.projectName(deps.project()!)}</span>
         </Show>
       }
       triggerClass={deps.project() === undefined ? "icon-button archived-filter" : "icon-button archived-filter active"}
@@ -513,20 +508,23 @@ export default defineWebPlugin({
         { defer: true },
       ),
     );
-    // It holds archived threads only: one unarchived (here or elsewhere) or deleted leaves it, so archiving it again
-    // does not bring it back selected, into a bulk delete; one whose unarchiving failed stays, to try again.
+    // It holds archived threads only: one unarchived (here or elsewhere) leaves it, so archiving it again does not bring
+    // it back selected, into a bulk delete; one whose unarchiving failed stays, to try again. One the list does not hold
+    // (deleted, or the list not loaded yet, as while reconnecting) stays, and counts nowhere it is read.
     createEffect(() => {
-      const gone = notArchived(selection.selected(), threads.list());
+      const gone = unarchived(selection.selected(), threads.list());
       if (gone.length > 0) selection.drop(gone);
     });
     const query = () => here().q ?? "";
-    const project = () => {
-      const value = here().project;
-      return value === NO_PROJECT ? "" : value;
-    };
+    const project = () => here().project;
     const shown = createMemo(() => filterArchived(threads.list(), { query: query(), project: project() }, projectOf, text));
     /** The threads the delete dialog asks about, still archived: one deleted or unarchived meanwhile drops out. */
-    const asked = () => deleting().flatMap((id) => threads.list().find((session) => session.id === id && session.archived === true) ?? []);
+    const listed = createMemo(() => new Map(threads.list().map((session) => [session.id, session])));
+    const asked = () =>
+      deleting().flatMap((id) => {
+        const session = listed().get(id);
+        return session?.archived === true ? [session] : [];
+      });
     // The selection outlives the search, so some may be out of sight: the dialog says so, as the toolbar does, before they go.
     const hiddenAsked = () => {
       const seen = new Set(shown().map((session) => session.id));
@@ -542,9 +540,10 @@ export default defineWebPlugin({
       projectName,
       text,
       query,
-      setQuery: (next) => settings.setParams({ q: next }),
+      setQuery: (next) => settings.setParams({ q: next === "" ? undefined : next }),
       project,
-      setProject: (next) => settings.setParams({ project: next === "" ? NO_PROJECT : next }),
+      // No project is `""`, which the address keeps (`?project=`); none chosen is no key.
+      setProject: (next) => settings.setParams({ project: next }),
       shown,
       selection,
       askDelete,

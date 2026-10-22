@@ -5,7 +5,8 @@ import { usePlugin } from "@lemma/web";
 import { sessionTitle } from "./list.ts";
 import type { ThreadsService } from "./threads.ts";
 
-const threadCount = (count: number) => `${count} ${count === 1 ? "thread" : "threads"}`;
+/** How many threads, as words: `1 thread`, `3 threads`. */
+export const threadCount = (count: number): string => `${count} ${count === 1 ? "thread" : "threads"}`;
 
 /**
  * Asks before deleting threads for good, saying what goes and what stays: everything said and done in them goes, a
@@ -45,10 +46,8 @@ export function DeleteThreadsDialog(props: {
         </>
       }
     >
-      <Show when={one() === undefined && (props.hidden ?? 0) > 0}>
-        <p>
-          {props.hidden} of them {props.hidden === 1 ? "is" : "are"} hidden by the search.
-        </p>
+      <Show when={(props.hidden ?? 0) > 0}>
+        <p>{one() !== undefined ? "It is hidden by the search." : `${props.hidden} of them ${props.hidden === 1 ? "is" : "are"} hidden by the search.`}</p>
       </Show>
       <p>
         {one() === undefined ? "This permanently deletes them" : "This permanently deletes it"}, with everything said and done in{" "}

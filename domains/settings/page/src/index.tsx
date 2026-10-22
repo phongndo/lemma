@@ -143,7 +143,7 @@ export default defineWebPlugin({
       if (open === undefined) return;
       const next: Record<string, string> = { ...params() };
       for (const [key, value] of Object.entries(patch)) {
-        if (value === undefined || value === "") delete next[key];
+        if (value === undefined) delete next[key];
         else next[key] = value;
       }
       router.navigate(SettingsRoute, { section: open }, { search: next, replace: true });

@@ -853,7 +853,7 @@ export default defineWebPlugin({
     const setTab = (next: Tab) => settings.setParams({ tab: next === DEFAULT_TAB ? undefined : next });
     // A memo: a change of selection or tab in the address is no change of filter.
     const filter = createMemo(() => params().filter ?? "");
-    const setFilter = (next: string) => settings.setParams({ filter: next });
+    const setFilter = (next: string) => settings.setParams({ filter: next === "" ? undefined : next });
     const [confirming, setConfirming] = createSignal<Confirmation>();
     const [busy, setBusy] = createSignal<string>();
     const services: Readonly<Record<PluginKind, PluginsService>> = { host, web: webPlugins };

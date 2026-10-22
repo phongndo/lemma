@@ -11,3 +11,4 @@ export { Segmented, SettingRow } from "./components/setting-row.tsx";
 export { SearchField } from "./components/search-field.tsx";
 export { Toggle } from "./components/toggle.tsx";
 export { Picture, SvgDrop } from "./components/picture.tsx";
+export { ConfirmDelete, MenuItem } from "./components/menu.tsx";

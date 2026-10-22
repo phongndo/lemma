@@ -270,6 +270,40 @@ export interface SvgDropProps {
 /** A button that takes an SVG file of the person's own, picked with a click or dropped on it; `data-over` while a file is dragged over it. */
 export const SvgDropPart = definePart<SvgDropProps>("svg-drop");
 
+export interface MenuItemProps {
+  readonly label: string;
+  /** Closes the menu it is in. */
+  readonly close: () => void;
+  readonly run: () => void;
+  /** Drawn in the error color: it destroys something. */
+  readonly danger?: boolean;
+}
+
+/** A row of a popover's menu (`Popover`): picking it closes the menu, then runs. */
+export const MenuItemPart = definePart<MenuItemProps>("menu-item");
+
+/** What deleting one thing in place says once it asks: one wording wherever it does (a row, a header, a thread's menu). */
+export const CONFIRM_DELETE = "Confirm delete";
+
+export interface ConfirmDeleteProps {
+  /** Its accessible name, naming what it deletes: `Delete Fix the flaky test`. */
+  readonly label: string;
+  /** Its tooltip at rest; `Delete` when absent. */
+  readonly tip?: string;
+  /** Why it cannot delete now (a turn runs in the thread): said in its tooltip, and it does not arm. */
+  readonly blocked?: string | undefined;
+  /** Told as it arms and disarms, so a row keeps it shown while it asks. */
+  readonly onArmed?: (armed: boolean) => void;
+  readonly onConfirm: () => void;
+}
+
+/**
+ * Deletes one thing after asking in place: a button whose first press arms it (`CONFIRM_DELETE` its tooltip) and whose
+ * second runs `onConfirm`; leaving it, or Escape, disarms it. Many things at once, or one whose loss takes more with it
+ * (a profile, with all its data), ask in a dialog instead, which says what goes and what stays.
+ */
+export const ConfirmDeletePart = definePart<ConfirmDeleteProps>("confirm-delete");
+
 export const Markdown = partView(MarkdownPart);
 
 export const Dialog = partView(DialogPart);
@@ -287,6 +321,10 @@ export const SettingRow = partView(SettingRowPart);
 export const Picture = partView(PicturePart);
 
 export const SvgDrop = partView(SvgDropPart);
+
+export const MenuItem = partView(MenuItemPart);
+
+export const ConfirmDelete = partView(ConfirmDeletePart);
 
 /** Typed by its options' values; the part itself takes strings. */
 export const Segmented = partView(SegmentedPart) as unknown as <T extends string>(props: {

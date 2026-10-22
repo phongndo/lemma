@@ -50,10 +50,14 @@ function Row(props: { kind: Kind; item: IntegrationItem; selected: boolean; open
 }
 
 /** What shows beside the list with nothing open: a line saying what to do; the section's head has Add. */
-function Overview(props: { empty: boolean }) {
+function Overview(props: { empty: boolean; addable: boolean }) {
   return (
     <p class="settings-empty">
-      {props.empty ? "None yet: add one to give agents more to work with." : "Pick one to see its state, how it is reached, and what it offers."}
+      {!props.empty
+        ? "Pick one to see its state, how it is reached, and what it offers."
+        : props.addable
+          ? "None yet: add one to give agents more to work with."
+          : "None: no plugin that adds integrations is on."}
     </p>
   );
 }
@@ -351,7 +355,7 @@ function IntegrationsPage(props: { slots: SlotsService; settings: SettingsServic
       <main class="integrations-detail">
         <Show
           when={openKind() !== undefined && openItem() !== undefined}
-          fallback={<Overview empty={kinds().every((kind) => kind.loaded() && kind.items().length === 0)} />}
+          fallback={<Overview empty={kinds().every((kind) => kind.loaded() && kind.items().length === 0)} addable={kinds().some(addable)} />}
         >
           <Show when={`${openKind()!.id}:${openItem()!.id}`} keyed>
             {(_key: string) => <Contained slot={IntegrationKinds} item={openKind()!} component={openKind()!.detail} props={{ id: openItem()!.id, close }} />}

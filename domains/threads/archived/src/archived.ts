@@ -88,10 +88,10 @@ export const withSelection = (selected: ReadonlySet<string>, ids: readonly strin
 export const extendSelection = (base: ReadonlySet<string>, order: readonly string[], anchor: string | undefined, id: string): ReadonlySet<string> =>
   anchor === undefined || !order.includes(anchor) ? withSelection(base, [id], true) : withSelection(base, rangeOf(order, anchor, id), base.has(anchor));
 
-/** The ids of `selected` that are no longer archived threads in `sessions`: unarchived or deleted, they leave the selection. */
-export const notArchived = (selected: ReadonlySet<string>, sessions: readonly SessionInfo[]): string[] => {
-  const archived = new Set(sessions.flatMap((session) => (session.archived === true ? [session.id] : [])));
-  return [...selected].filter((id) => !archived.has(id));
+/** The ids of `selected` that `sessions` holds unarchived: they leave the selection. One it does not hold is not said. */
+export const unarchived = (selected: ReadonlySet<string>, sessions: readonly SessionInfo[]): string[] => {
+  const shown = new Set(sessions.flatMap((session) => (session.archived === true ? [] : [session.id])));
+  return [...selected].filter((id) => shown.has(id));
 };
 
 /** How many of `ids` are selected, as a checkbox over them says it: all, some, or none (an empty list is none). */
@@ -99,6 +99,3 @@ export const selectionOf = (selected: ReadonlySet<string>, ids: readonly string[
   const count = ids.filter((id) => selected.has(id)).length;
   return count === 0 ? "none" : count === ids.length ? "all" : "some";
 };
-
-/** `1 thread`, `3 threads`. */
-export const threadCount = (count: number): string => `${count} ${count === 1 ? "thread" : "threads"}`;

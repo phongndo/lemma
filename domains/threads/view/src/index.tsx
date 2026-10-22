@@ -19,7 +19,7 @@ import {
   Views,
 } from "@lemma/threads";
 import { Actions, shownKeysOf } from "@lemma/actions";
-import { inDesktop, Layers, Layout } from "@lemma/frame";
+import { Dialogs, inDesktop, Layers, Layout } from "@lemma/frame";
 import { NewThreadRoute, ThreadRoute } from "@lemma/sessions";
 import { Client, Notify, Pages, Router, Slots, WebPlugins, defineWebPlugin, Contained, Each, First } from "@lemma/web";
 import { Workspace } from "@lemma/workspace/web";
@@ -46,6 +46,9 @@ const SHARE_KEY = "lemma.threads.view.pane-share";
  * pane opens from the keyboard (⌘I; ⌘T for a new tab), the header, and the
  * palette, and is resized by its edge, to a share of the page.
  */
+/** The palette's Delete thread dialog, as `Dialogs` names it. */
+const DELETE_DIALOG = "thread.delete";
+
 export default defineWebPlugin({
   id: "threads.view",
   styles,
@@ -59,9 +62,10 @@ export default defineWebPlugin({
     notify: Notify,
     router: Router,
     webPlugins: WebPlugins,
+    dialogs: Dialogs,
   },
   provides: { pane: Pane },
-  setup: ({ client, threads, workspace, slots, layout, notify, router, webPlugins }) => {
+  setup: ({ client, threads, workspace, slots, layout, notify, router, webPlugins, dialogs }) => {
     const views = () => slots.list(Views);
     /** The header's title is being edited in place. */
     const [renaming, setRenaming] = createSignal(false);
@@ -173,17 +177,20 @@ export default defineWebPlugin({
         category: "Thread",
         icon: TrashIcon,
         when: () => threads.active() !== undefined,
-        run: () => setDeleting(threads.activeId()),
+        run: () => {
+          setDeleting(threads.activeId());
+          dialogs.open(DELETE_DIALOG);
+        },
       },
     );
-    /** The thread the palette's Delete thread asks about. */
+    /** The thread the palette's Delete thread asks about, in a dialog of the app's (`Dialogs`): one at a time, and keys held back while it shows. */
     const [deleting, setDeleting] = createSignal<string>();
-    const asked = () => threads.list().find((session) => session.id === deleting());
+    const asked = () => (dialogs.current() === DELETE_DIALOG ? threads.list().find((session) => session.id === deleting()) : undefined);
     slots.add(Layers, {
       id: "thread.delete",
       order: 35,
       component: () => (
-        <Show when={asked()}>{(session) => <DeleteThreadsDialog threads={threads} sessions={[session()]} close={() => setDeleting(undefined)} />}</Show>
+        <Show when={asked()}>{(session) => <DeleteThreadsDialog threads={threads} sessions={[session()]} close={() => dialogs.open(undefined)} />}</Show>
       ),
     });
 
