@@ -164,6 +164,7 @@ settings:
 
 patchedDependencies:
   '@earendil-works/pi-ai@1.3.0': 915e8a7c03572c3b43a6019020d17325254f9f8239e82fec810d081d99c83176
+  '@electron/osx-sign@1.3.3': 0d4efc805b387c578ff9e5c268eca55592e4e934a223f223cb555d6fb3e664b4
 
 importers:
 
@@ -8725,7 +8726,7 @@ snapshots:
     transitivePeerDependencies:
       - supports-color
 
-  '@electron/osx-sign@1.3.3(supports-color@7.2.0)':
+  '@electron/osx-sign@1.3.3(patch_hash=0d4efc805b387c578ff9e5c268eca55592e4e934a223f223cb555d6fb3e664b4)(supports-color@7.2.0)':
     dependencies:
       compare-version: 0.1.2
       debug: 4.4.3(supports-color@7.2.0)
@@ -9695,7 +9696,7 @@ snapshots:
       '@electron/fuses': 1.8.0
       '@electron/get': 3.1.0(supports-color@7.2.0)
       '@electron/notarize': 2.5.0(supports-color@7.2.0)
-      '@electron/osx-sign': 1.3.3(supports-color@7.2.0)
+      '@electron/osx-sign': 1.3.3(patch_hash=0d4efc805b387c578ff9e5c268eca55592e4e934a223f223cb555d6fb3e664b4)(supports-color@7.2.0)
       '@electron/rebuild': 4.2.1(supports-color@7.2.0)
       '@electron/universal': 2.0.3(supports-color@7.2.0)
       '@malept/flatpak-bundler': 0.4.0(supports-color@7.2.0)
