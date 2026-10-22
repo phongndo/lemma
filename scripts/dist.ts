@@ -102,9 +102,10 @@ const platformFlags = (target: Target): string[] => {
 
 try {
   // The libraries' declarations (an editor's types for a plugin file), and the page the host serves, with the
-  // release's icon rather than a checkout's.
+  // release's icon rather than a checkout's. The page builds outside the checkout, whose own build stays a checkout's.
   run("pnpm", ["build"]);
-  run("pnpm", ["--filter", "@lemma/web-app", "build", "--mode", "release"]);
+  const page = join(temporary, "page");
+  run("pnpm", ["--filter", "@lemma/web-app", "build", "--mode", "release", "--outDir", page, "--emptyOutDir"]);
 
   // Every project's manifest, so the frozen lockfile matches the workspace; the sources of the command's and the desktop
   // app's production closures only, and the builds their packages export.
@@ -125,7 +126,7 @@ try {
     ...manifests,
     ...included,
   ]);
-  const builds = ["apps/web/dist"];
+  const builds: string[] = [];
   for (const path of included) {
     const manifest = await readFile(join(root, path, "package.json"), "utf8");
     if (manifest.includes('"./dist/')) builds.push(join(path, "dist"));
@@ -134,6 +135,7 @@ try {
   // The workspace once, file by file, then whole for each target: the same for every one until its install.
   const workspace = join(temporary, "workspace");
   await copy(workspace, [...sources, ...builds]);
+  await cp(page, join(workspace, "apps/web/dist"), { recursive: true });
 
   for (const target of chosen) {
     const name = packageName(release, target);
