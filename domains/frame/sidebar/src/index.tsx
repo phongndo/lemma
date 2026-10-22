@@ -717,53 +717,57 @@ function Sidebar(props: { deps: Deps; onPick: () => void }) {
     });
   };
 
-  /** The archived, in a panel of their own at the foot: it scrolls, its top edge resizes it, and a thread dropped on it is archived. */
+  /**
+   * The archived, in a panel of their own at the foot: it scrolls, its top edge resizes it, and a thread dropped on it is
+   * archived. It is there with none archived too, so its fold stays as it was left rather than reappearing open.
+   */
   const ArchivedPanel = () => {
     const zone = useDroppable({ id: Heads.archived });
     const count = () => props.deps.lists().archived.length;
     return (
-      <Show when={count() > 0 || heads()}>
-        <section
-          ref={zone.ref}
-          class="archived-panel"
-          classList={{ open: archivedOpen(), target: toArchive() }}
-          aria-label="Archived threads"
-          // As kept: the stylesheet caps it, so the list above keeps room in a shorter window.
-          style={archivedOpen() ? { height: `${Math.max(ARCHIVED_MIN, archivedHeight())}px` } : undefined}
-        >
-          <Show when={archivedOpen()}>
-            <div
-              class="archived-edge"
-              role="separator"
-              aria-orientation="horizontal"
-              aria-label="Resize archived threads"
-              aria-valuenow={archivedHeight()}
-              tabIndex={0}
-              onPointerDown={resizeArchived}
-              onDblClick={() => keepHeight(ARCHIVED_HEIGHT)}
-              onKeyDown={(event) => {
-                const step = event.key === "ArrowUp" ? ARCHIVED_STEP : event.key === "ArrowDown" ? -ARCHIVED_STEP : 0;
-                if (step === 0) return;
-                event.preventDefault();
-                keepHeight(archivedHeight() + step);
-              }}
-            />
-          </Show>
-          <button class="archived-head" aria-expanded={archivedOpen()} onClick={toggleArchived}>
-            <span>{archivedOpen() || heads() ? "Archived" : `Archived (${count()})`}</span>
-            <span class="archived-rule" />
-            <ChevronDownIcon />
-          </button>
-          <Show when={heads() && (!archivedOpen() || count() === 0)}>
-            <span class="thread-head-slot">Drop here to archive</span>
-          </Show>
-          <ul class="thread-section archived-rows">
-            <For each={archivedRows().map((session) => session.id)}>
-              {(id) => <Show when={sessionOf(id)}>{(session) => <li data-section="archived">{row(session)}</li>}</Show>}
-            </For>
-          </ul>
-        </section>
-      </Show>
+      <section
+        ref={zone.ref}
+        class="archived-panel"
+        classList={{ open: archivedOpen(), target: toArchive() }}
+        aria-label="Archived threads"
+        // As kept: the stylesheet caps it, so the list above keeps room in a shorter window.
+        style={archivedOpen() ? { height: `${Math.max(ARCHIVED_MIN, archivedHeight())}px` } : undefined}
+      >
+        <Show when={archivedOpen()}>
+          <div
+            class="archived-edge"
+            role="separator"
+            aria-orientation="horizontal"
+            aria-label="Resize archived threads"
+            aria-valuenow={archivedHeight()}
+            tabIndex={0}
+            onPointerDown={resizeArchived}
+            onDblClick={() => keepHeight(ARCHIVED_HEIGHT)}
+            onKeyDown={(event) => {
+              const step = event.key === "ArrowUp" ? ARCHIVED_STEP : event.key === "ArrowDown" ? -ARCHIVED_STEP : 0;
+              if (step === 0) return;
+              event.preventDefault();
+              keepHeight(archivedHeight() + step);
+            }}
+          />
+        </Show>
+        <button class="archived-head" aria-expanded={archivedOpen()} onClick={toggleArchived}>
+          <span>{archivedOpen() || heads() || count() === 0 ? "Archived" : `Archived (${count()})`}</span>
+          <span class="archived-rule" />
+          <ChevronDownIcon />
+        </button>
+        <Show when={heads() && (!archivedOpen() || count() === 0)}>
+          <span class="thread-head-slot">Drop here to archive</span>
+        </Show>
+        <Show when={archivedOpen() && count() === 0 && !heads()}>
+          <p class="archived-panel-empty">No archived threads</p>
+        </Show>
+        <ul class="thread-section archived-rows">
+          <For each={archivedRows().map((session) => session.id)}>
+            {(id) => <Show when={sessionOf(id)}>{(session) => <li data-section="archived">{row(session)}</li>}</Show>}
+          </For>
+        </ul>
+      </section>
     );
   };
   const sessionOf = (id: string) => byId().get(id);

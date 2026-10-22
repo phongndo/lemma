@@ -36,11 +36,13 @@ asked from a turn): `Needs approval`, or `Needs input` for a value. Requires
 - **Active threads** follow: new and unarchived ones on top, newest first,
   above those dragged into an order. A running thread does not move.
 - **Archived threads** are in a panel of their own at the sidebar's foot,
-  folded away, their count on the fold. Opened, it scrolls apart from the list
-  above, and its top edge resizes it: dragged, with ↑ and ↓ while focused, or
-  back to its first height with a double-click; the height is kept, and the
-  list above always keeps some room. Every archived thread is there, the latest
-  archived first. The open thread shows even while the fold is closed.
+  folded away, their count on the fold. The panel is there with none archived
+  too, so archiving a thread leaves the fold as it was. Opened, it scrolls
+  apart from the list above, and its top edge resizes it: dragged, with ↑ and
+  ↓ while focused, or back to its first height with a double-click; the height
+  is kept, and the list above always keeps some room. Every archived thread is
+  there, the latest archived first. The open thread shows even while the fold
+  is closed.
 - **A card** is two lines of one height each, so nothing it shows, or the
   pointer, changes its size. The first is its title alone, which nothing cuts
   short; a title too long fades out. The second is its project and the branch
