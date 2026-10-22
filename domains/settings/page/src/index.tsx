@@ -1,4 +1,4 @@
-import { For, Show, createEffect, createMemo, createSignal, on, onCleanup, onMount, untrack } from "solid-js";
+import { For, Index, Show, createEffect, createMemo, createSignal, on, onCleanup, onMount, untrack } from "solid-js";
 import { formatKeys, withKeys } from "@lemma/web/keys";
 import { shownKeysOf, Actions } from "@lemma/actions";
 import { filterGroups } from "./settings.ts";
@@ -27,20 +27,24 @@ const groupsOf = (slots: SlotsService, section: string): EntryGroup<SettingsEntr
   return merged.filter((group) => group.entries.length > 0);
 };
 
+/**
+ * Groups by place, so one whose entries are asked for again stays drawn, and rows by entry: an entry a group gives again
+ * (`SettingsGroup.entries`) keeps its row, and whatever is open in it.
+ */
 function Groups(props: { groups: readonly EntryGroup<SettingsEntry>[] }) {
   return (
-    <For each={props.groups}>
+    <Index each={props.groups}>
       {(group) => (
         <section class="settings-group">
-          <Show when={group.title}>
-            <h2 class="settings-group-title">{group.title}</h2>
+          <Show when={group().title}>
+            <h2 class="settings-group-title">{group().title}</h2>
           </Show>
           <div class="settings-rows">
-            <For each={group.entries}>{(entry) => entry.view()}</For>
+            <For each={group().entries}>{(entry) => entry.view()}</For>
           </div>
         </section>
       )}
-    </For>
+    </Index>
   );
 }
 

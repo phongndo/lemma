@@ -109,6 +109,29 @@ export default defineWebPlugin({
         .join(" ");
     const choosingLight = choosing("light");
     const choosingDark = choosing("dark");
+
+    // The rows, each made once (a theme row again only when the themes a search finds it by change): a group asked for
+    // its entries again then keeps its rows drawn, and a menu open in one (`SettingsGroup.entries`).
+    const previewRows = [{ text: "Preview look config", view: () => <Preview deps={deps} /> }];
+    const schemeRow = { text: "Theme scheme color mode dark light system", view: () => <SchemePicker deps={deps} /> };
+    const lightRow = createMemo(() => ({ text: `Light theme palette ${titles("light")}`, view: () => <ThemeChoice deps={deps} scheme="light" /> }));
+    const darkRow = createMemo(() => ({ text: `Dark theme palette ${titles("dark")}`, view: () => <ThemeChoice deps={deps} scheme="dark" /> }));
+    const accentRow = { text: "Accent color colour highlight primary buttons links", view: () => <AccentPicker deps={deps} /> };
+    const textRows = [
+      {
+        text: "Font typeface interface family",
+        view: () => <FontSetting deps={deps} kind="ui" title="Interface" description="Menus, settings, and the conversation." />,
+      },
+      {
+        text: "Monospace font code typeface mono",
+        view: () => <FontSetting deps={deps} kind="mono" title="Code" description="Code blocks, diffs, and tool output." />,
+      },
+      { text: "Text size font scale zoom larger smaller", view: () => <TextSizeSetting deps={deps} /> },
+    ];
+    const layoutRows = [
+      { text: "Corners radius rounded square round", view: () => <CornersSetting deps={deps} /> },
+      { text: "Conversation width layout wide full", view: () => <WidthSetting deps={deps} /> },
+    ];
     const painting = () => row()?.state === "active";
     const customized = () => Object.values(settings()).some((value) => value !== undefined);
     const reset = () => {
@@ -184,46 +207,28 @@ export default defineWebPlugin({
       id: "appearance.preview",
       order: 0,
       section,
-      entries: () => [{ text: "Preview look config", view: () => <Preview deps={deps} /> }],
+      entries: () => previewRows,
     });
     slots.add(SettingsGroups, {
       id: "appearance.theme",
       order: 10,
       section,
       title: "Theme",
-      entries: () => [
-        { text: "Theme scheme color mode dark light system", view: () => <SchemePicker deps={deps} /> },
-        ...(choosingLight() ? [{ text: `Light theme palette ${titles("light")}`, view: () => <ThemeChoice deps={deps} scheme="light" /> }] : []),
-        ...(choosingDark() ? [{ text: `Dark theme palette ${titles("dark")}`, view: () => <ThemeChoice deps={deps} scheme="dark" /> }] : []),
-        { text: "Accent color colour highlight primary buttons links", view: () => <AccentPicker deps={deps} /> },
-      ],
+      entries: () => [schemeRow, ...(choosingLight() ? [lightRow()] : []), ...(choosingDark() ? [darkRow()] : []), accentRow],
     });
     slots.add(SettingsGroups, {
       id: "appearance.text",
       order: 20,
       section,
       title: "Text",
-      entries: () => [
-        {
-          text: "Font typeface interface family",
-          view: () => <FontSetting deps={deps} kind="ui" title="Interface" description="Menus, settings, and the conversation." />,
-        },
-        {
-          text: "Monospace font code typeface mono",
-          view: () => <FontSetting deps={deps} kind="mono" title="Code" description="Code blocks, diffs, and tool output." />,
-        },
-        { text: "Text size font scale zoom larger smaller", view: () => <TextSizeSetting deps={deps} /> },
-      ],
+      entries: () => textRows,
     });
     slots.add(SettingsGroups, {
       id: "appearance.layout",
       order: 30,
       section,
       title: "Layout",
-      entries: () => [
-        { text: "Corners radius rounded square round", view: () => <CornersSetting deps={deps} /> },
-        { text: "Conversation width layout wide full", view: () => <WidthSetting deps={deps} /> },
-      ],
+      entries: () => layoutRows,
     });
     slots.add(SettingsGroups, {
       id: "appearance.plugins",
