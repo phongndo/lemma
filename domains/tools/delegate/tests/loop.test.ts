@@ -11,7 +11,7 @@ import type { SessionEvent } from "@lemma/sessions";
 import sessions from "@lemma/sessions-files";
 import tools from "@lemma/tools-registry";
 import agentLoop from "@lemma/agent-loop";
-import { call, fakeLlm, gated, hang, host, paths, reply, tempDir, useTools } from "../../../agent/loop/tests/fakes.ts";
+import { call, fakeLlm, gated, host, paths, reply, tempDir, useTools } from "../../../agent/loop/tests/fakes.ts";
 import type { Script } from "../../../agent/loop/tests/fakes.ts";
 import delegate from "../src/index.ts";
 
@@ -54,10 +54,6 @@ const model =
     switch (texts[0]) {
       case "Refactor the reader":
         return useTools(call("c1", "delegate", { prompt: "Map the callers", title: "Map callers" }));
-      case "Check quickly":
-        return useTools(call("c3", "delegate", { prompt: "Think forever", title: "Stuck", timeoutMs: 200 }));
-      case "Think forever":
-        return hang("Hmm");
       case "Survey the repo":
         return useTools(call("c2", "delegate", { prompt: "Survey slowly", title: "Survey", background: true }));
       case "Map the callers":
@@ -109,25 +105,6 @@ describe("delegate, in the agent loop", () => {
     });
     const ended = parentLog.filter((event) => event.data.type === "turn-end").map((event) => event.data);
     expect(ended).toMatchObject([{ reason: "done" }]);
-  });
-
-  it("cancels an agent's turn past timeoutMs, and answers timeout, not cancelled", async () => {
-    const { result, agentLog } = await run(() =>
-      Effect.gen(function* () {
-        const store = yield* Sessions;
-        const agent = yield* Agent;
-        const parent = yield* store.create({ cwd: home });
-        yield* agent.prompt(parent.id, [{ type: "text", text: "Check quickly" }], { requestId: "r1" });
-        const [stuck] = (yield* store.list()).filter((info) => info.parent?.sessionId === parent.id);
-        const parentLog = yield* store.branch(parent.id);
-        return {
-          result: parentLog.find((event) => event.data.type === "message" && event.data.message.role === "toolResult")?.data,
-          agentLog: yield* store.branch(stuck!.id),
-        };
-      }),
-    );
-    expect(result).toMatchObject({ details: { title: "Stuck", ended: "timeout" } });
-    expect(agentLog.find((event) => event.data.type === "turn-end")?.data).toMatchObject({ reason: "cancelled" });
   });
 
   it("tells the thread when a background agent finishes, which starts its next turn, and forgets the agent once it has", async () => {

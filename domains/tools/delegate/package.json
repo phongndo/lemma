@@ -2,7 +2,7 @@
   "name": "@lemma/tools-delegate",
   "version": "0.1.0",
   "private": true,
-  "description": "The `delegate` tool: a task handed to an agent, a thread of its own working for this one; and how agents show in the chat, the thread card's lineage, and above the composer",
+  "description": "The `delegate` tool: a task handed to an agent, a thread of its own working for this one; and how agents show in the chat and above the composer",
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
@@ -14,6 +14,7 @@
   },
   "dependencies": {
     "@lemma/agent": "workspace:*",
+    "@lemma/cli": "workspace:*",
     "@lemma/contracts": "workspace:*",
     "@lemma/core": "workspace:*",
     "@lemma/llm": "workspace:*",

@@ -278,8 +278,8 @@ export type SessionEvent = typeof SessionEvent.Type;
 
 /**
  * The session that started this one, as an agent of its own (`tools.delegate`): its id, and the tool call that started
- * it. Fixed when the session is made (`Sessions.create`, `Sessions.fork`), so what lists sessions (the sidebar, a
- * thread's lineage) groups an agent under the thread it works for without reading either log.
+ * it. Fixed when the session is made (`Sessions.create`, `Sessions.fork`), so what lists sessions (the sidebar) groups an
+ * agent under the thread it works for without reading either log.
  */
 export const SessionParent = Schema.Struct({
   sessionId: Schema.String,

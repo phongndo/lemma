@@ -3168,6 +3168,9 @@ importers:
       '@lemma/agent':
         specifier: workspace:*
         version: link:../../agent/contract
+      '@lemma/cli':
+        specifier: workspace:*
+        version: link:../../cli/contract
       '@lemma/contracts':
         specifier: workspace:*
         version: link:../../../packages/contracts

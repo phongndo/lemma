@@ -24,7 +24,7 @@ while it runs (`outputFile`).
 | [`tools.ask`](ask/README.md)               | host + web | The `ask_user` tool: questions for the user, answered above the composer                                                                                       |
 | [`tools.html`](html/README.md)             | host + web | The `html_render` tool: a page the model made, shown to the person in the chat outside the fold                                                                |
 | [`tools.lemma`](lemma/README.md)           | host       | Lemma's own channels as tools scripts call (the `lemma` namespace), writes asking first                                                                        |
-| [`tools.delegate`](delegate/README.md)     | host + web | The `delegate` tool: a task handed to an agent, a thread of its own, waited on or in the background; and how agents show (the chat, the lineage, the composer) |
+| [`tools.delegate`](delegate/README.md)     | host + web | The `delegate` tool: a task handed to an agent, a thread of its own, waited on or in the background; and how agents show (in the chat, and above the composer) |
 
 A plugin replacing `tools.registry` runs `toolsConformance` from `@lemma/tools/testing`: the tests `tools.registry` passes, against the contract alone.
 

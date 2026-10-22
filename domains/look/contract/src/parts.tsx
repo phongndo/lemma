@@ -234,7 +234,7 @@ export interface AvatarProps {
 }
 
 /**
- * An agent's picture, wherever one is named (the chat, a thread's lineage, the sidebar): `kit`'s default is an
+ * An agent's picture, wherever one is named (the chat, the sidebar, above the composer): `kit`'s default is an
  * identicon of its seed (`identicon`), as GitHub draws a new account's, so each agent is told apart at a glance with
  * nothing chosen or stored. A replacement draws them all its own way.
  */
