@@ -59,6 +59,7 @@ import {
 import type { DropVerb, Flags, Marks, NestedAgent, Section } from "./list.ts";
 import styles from "./sidebar.css?inline";
 
+// Under the plugin's former id (`frame.sidebar`), so what a browser kept carries over.
 const MARKS_KEY = "lemma.frame.sidebar.marks";
 const ARCHIVED_OPEN_KEY = "lemma.frame.sidebar.archived-open";
 /** The archived panel's height (px), as dragged and kept: at first, at least, and by a key's step; the list above keeps at least `LIST_MIN`. */
@@ -921,7 +922,8 @@ const loadMarks = (): Marks => {
  * Search narrows the list by title and project.
  */
 export default defineWebPlugin({
-  id: "frame.sidebar",
+  id: "frame.threads",
+  formerly: ["frame.sidebar"],
   styles,
   requires: {
     threads: Threads,

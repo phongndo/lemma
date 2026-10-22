@@ -35,7 +35,7 @@
     "@lemma/frame-questions": "workspace:*",
     "@lemma/frame-reload": "workspace:*",
     "@lemma/frame-shell": "workspace:*",
-    "@lemma/frame-sidebar": "workspace:*",
+    "@lemma/frame-threads": "workspace:*",
     "@lemma/frame-toasts": "workspace:*",
     "@lemma/frame-tooltips": "workspace:*",
     "@lemma/integrations": "workspace:*",

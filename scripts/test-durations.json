@@ -52,7 +52,7 @@
   "domains/devtools/trace/tests/model.test.ts": 0,
   "domains/devtools/trace/tests/query.test.ts": 0,
   "domains/devtools/trace/tests/trace.test.ts": 0,
-  "domains/frame/sidebar/tests/list.test.ts": 0,
+  "domains/frame/threads/tests/list.test.ts": 0,
   "domains/integrations/page/tests/model.test.ts": 0,
   "domains/llm/cli/tests/format.test.ts": 0,
   "domains/llm/commands/tests/commands.test.ts": 0,

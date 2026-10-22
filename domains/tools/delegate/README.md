@@ -12,7 +12,7 @@ card's lineage, and above the composer.
 
 An agent is an ordinary session whose `SessionInfo.parent` names the thread
 and the call that started it (`@lemma/sessions`), so the sidebar lists it under
-that thread ([frame.sidebar](../../frame/sidebar/README.md)), and the person
+that thread ([frame.threads](../../frame/threads/README.md)), and the person
 can open it, read it whole, and write to it themselves. Its name is its
 thread's title.
 

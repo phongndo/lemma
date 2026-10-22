@@ -1,5 +1,5 @@
 {
-  "name": "@lemma/frame-sidebar",
+  "name": "@lemma/frame-threads",
   "version": "0.1.0",
   "private": true,
   "description": "The sidebar: every thread, drafts first, then pinned and active in the order dragged into, and the archived below",

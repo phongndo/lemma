@@ -339,9 +339,9 @@ importers:
       '@lemma/frame-shell':
         specifier: workspace:*
         version: link:../../domains/frame/shell
-      '@lemma/frame-sidebar':
+      '@lemma/frame-threads':
         specifier: workspace:*
-        version: link:../../domains/frame/sidebar
+        version: link:../../domains/frame/threads
       '@lemma/frame-toasts':
         specifier: workspace:*
         version: link:../../domains/frame/toasts
@@ -1623,7 +1623,7 @@ importers:
         specifier: 5.0.5
         version: 5.0.5(@types/node@24.19.2)(vite@8.3.4(@types/node@24.19.2)(esbuild@0.28.2)(jiti@2.7.0))
 
-  domains/frame/sidebar:
+  domains/frame/threads:
     dependencies:
       '@dnd-kit/abstract':
         specifier: 0.5.1

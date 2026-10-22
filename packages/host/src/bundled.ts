@@ -146,7 +146,7 @@ export const bundledWeb: readonly string[] = [
   "frame.questions",
   "frame.reload",
   "frame.shell",
-  "frame.sidebar",
+  "frame.threads",
   "frame.toasts",
   "frame.tooltips",
   "integrations.page",
@@ -192,7 +192,9 @@ export const bundledWeb: readonly string[] = [
 ];
 
 /** The bundled web halves' ids before a rename (their `formerly`): a row under one is the web app's, which applies it. */
-export const bundledWebFormerly: Readonly<Record<string, readonly string[]>> = {};
+export const bundledWebFormerly: Readonly<Record<string, readonly string[]>> = {
+  "frame.threads": ["frame.sidebar"],
+};
 
 /**
  * Config the app supplies for bundled plugins (the planner's `defaults`): it

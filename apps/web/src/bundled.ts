@@ -50,7 +50,7 @@ import write from "@lemma/tools-write/web";
 import threads from "@lemma/threads-client";
 import settings from "@lemma/settings-page";
 import shell from "@lemma/frame-shell";
-import sidebar from "@lemma/frame-sidebar";
+import frameThreads from "@lemma/frame-threads";
 import toasts from "@lemma/frame-toasts";
 import tooltips from "@lemma/frame-tooltips";
 import trajectory from "@lemma/threads-trajectory";
@@ -80,7 +80,7 @@ export const bundled: readonly Plugin[] = [
   appearance,
   shell,
   pages,
-  sidebar,
+  frameThreads,
   threadView,
   chat,
   highlight,

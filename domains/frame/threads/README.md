@@ -1,5 +1,6 @@
-# frame.sidebar
+# frame.threads
 
+It was `frame.sidebar`: a row under that id applies to it (`formerly`).
 Every thread down the side (in `SidebarRegion`): new threads left mid-prompt
 on top, then the pinned and the active ones in an order dragged into, and the
 archived folded away below. Its head has the toggle, and across from it the
