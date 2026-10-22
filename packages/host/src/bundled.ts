@@ -1,3 +1,4 @@
+import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { shellWord } from "@lemma/contracts";
@@ -53,12 +54,17 @@ export const optIn: ReadonlySet<string> = new Set<string>();
 /** The web app build the transport serves when no `staticDir` is configured. */
 export const webDist = fileURLToPath(new URL("../../../apps/web/dist", import.meta.url));
 
+/** A release's `lemma` command (scripts/dist.ts), which runs the CLI on the Node.js the release carries; a checkout has none. */
+const releaseCommand = fileURLToPath(new URL("../../../bin/lemma", import.meta.url));
+
 /**
  * How the agent, and `release.updates`, run the `lemma` CLI beside this host from a shell (its bundle when built, see
- * apps/cli): on the Node.js the host runs on, which a release carries and need not put on PATH; a host in the desktop
- * app runs on Electron, so they use the `node` on PATH.
+ * apps/cli): a release's own command, whatever the host runs on, the desktop app's Electron too, so no Node.js need be
+ * on PATH. From a checkout, on the Node.js the host runs on, or for a host on Electron the `node` on PATH.
  */
-export const cliCommand = `${process.versions.electron === undefined ? shellWord(process.execPath) : "node"} --conditions=lemma-source ${shellWord(fileURLToPath(new URL("../../../apps/cli/bin/lemma.js", import.meta.url)))}`;
+export const cliCommand = existsSync(releaseCommand)
+  ? shellWord(releaseCommand)
+  : `${process.versions.electron === undefined ? shellWord(process.execPath) : "node"} --conditions=lemma-source ${shellWord(fileURLToPath(new URL("../../../apps/cli/bin/lemma.js", import.meta.url)))}`;
 
 /**
  * Everything a fresh install runs. What the host provides itself (`Paths`,
