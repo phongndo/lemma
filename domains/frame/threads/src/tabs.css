@@ -1,0 +1,451 @@
+/* The threads as tabs across the window's top: a bar in the page's sunk color, the tab shown raised to the page's. */
+.tab-strip {
+  /* A title too long for its tab fades out at its end. */
+  --tab-fade: linear-gradient(to right, #000 calc(100% - 20px), transparent);
+  /* Under the tab shown, the edge that lifts it off the bar. */
+  --tab-shadow: 0 1px 2px rgba(0, 0, 0, 0.06);
+  /* A prompt written and not sent tints its tab. */
+  --tab-draft-tint: color-mix(in srgb, var(--warn) 8%, transparent);
+  --tab-draft-tint-hover: color-mix(in srgb, var(--warn) 13%, transparent);
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-height: 40px;
+  padding: 0 8px;
+  background: var(--bg-sunk);
+  border-bottom: 1px solid var(--border);
+}
+
+/* In a desktop window: the bar is the title bar, beside the window's controls, and drags it. */
+[data-titlebar] .tab-strip {
+  padding-left: max(8px, var(--titlebar-inset, 0px));
+  padding-right: max(8px, var(--titlebar-inset-end, 0px));
+  app-region: drag;
+}
+
+/* The tabs scroll sideways, with no bar of their own; + follows the last. */
+.tab-track {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: none;
+}
+
+.tab-list {
+  list-style: none;
+  margin: 0;
+  padding: 4px 1px;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+/* Each as wide as the next, narrower as they crowd, until the track scrolls. */
+.tab-item {
+  position: relative;
+  flex: 0 1 auto;
+  width: 200px;
+  min-width: 112px;
+  display: flex;
+}
+
+/* A section's head: nothing until a tab drags, then its name, a place to drop (the active one is the divider meanwhile). */
+.tab-head {
+  flex: none;
+  display: flex;
+  align-items: center;
+}
+
+.tab-head-label {
+  display: flex;
+  align-items: center;
+  height: 22px;
+  margin: 0 4px;
+  padding: 0 8px;
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--radius-full);
+  color: var(--text-3);
+  font-size: calc(11px * var(--text-scale));
+  white-space: nowrap;
+}
+
+.tab-head-label.target {
+  border-color: var(--accent);
+  color: var(--accent-text);
+}
+
+.tab-rule {
+  flex: none;
+  width: 1px;
+  height: 16px;
+  margin: 0 5px;
+  background: var(--border-strong);
+}
+
+.tab {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  height: 30px;
+  border-radius: var(--radius-sm);
+  color: var(--text-2);
+  /* A tab is a control: pressing it opens the thread, not a text selection. */
+  user-select: none;
+  -webkit-user-select: none;
+  transition: background-color 0.12s;
+}
+
+.tab:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+
+.tab.drafted,
+.tab.draft {
+  background: var(--tab-draft-tint);
+}
+
+.tab.drafted:hover,
+.tab.draft:hover {
+  background: var(--tab-draft-tint-hover);
+}
+
+.tab.active {
+  background: var(--bg);
+  color: var(--text);
+  box-shadow:
+    0 0 0 1px var(--border),
+    var(--tab-shadow);
+}
+
+.tab-open {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 100%;
+  padding: 0 2px 0 10px;
+  border-radius: inherit;
+  color: inherit;
+  text-decoration: none;
+  cursor: default;
+  font-size: calc(12.5px * var(--text-scale));
+}
+
+.tab-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  mask-image: var(--tab-fade);
+}
+
+.tab.active .tab-title {
+  font-weight: 500;
+}
+
+/* The thread shown while listed nowhere else (a new one, an archived one, an agent's): a tab only while it shows. */
+.tab.transient .tab-title {
+  font-style: italic;
+}
+
+.tab-mark {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 14px;
+  height: 14px;
+  color: var(--text-3);
+}
+
+.tab-mark svg,
+.tab-mark .spinner {
+  width: 12px;
+  height: 12px;
+}
+
+.tab-mark[data-mark="waiting"] {
+  color: var(--warn);
+}
+
+.tab-mark[data-mark="working"] {
+  color: var(--accent-text);
+}
+
+.tab-mark[data-mark="done"]::before {
+  content: "";
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--ok);
+}
+
+.tab-mark[data-mark="drafted"] {
+  color: var(--warn);
+}
+
+/* While a tab drags: it is ringed in the accent and says what dropping it does, in place of its buttons. */
+.tab-item.drag-source .tab {
+  background: var(--bg-raised);
+  box-shadow: 0 0 0 1px var(--accent);
+}
+
+.tab-verb {
+  position: absolute;
+  top: 50%;
+  right: 6px;
+  transform: translateY(-50%);
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 20px;
+  padding: 0 6px;
+  border-radius: var(--radius-full);
+  /* Solid, over the title's end. */
+  background: color-mix(in srgb, var(--accent) 10%, var(--bg-raised));
+  color: var(--accent-text);
+  font-size: calc(11px * var(--text-scale));
+  font-weight: 500;
+  pointer-events: none;
+}
+
+.tab-verb svg {
+  width: 12px;
+  height: 12px;
+}
+
+.tab-strip.dragging .tab-buttons,
+.tab-strip.dragging .tab-agents,
+.tab-strip.dragging .thread-details {
+  display: none;
+}
+
+.tab-strip.dragging .tab:not(.active):hover {
+  background: transparent;
+}
+
+/* Its buttons: × on the tab shown and the one under the pointer, in a place kept for it; pin or unpin under the pointer. */
+.tab-buttons {
+  flex: none;
+  display: flex;
+  align-items: center;
+  margin-right: 5px;
+}
+
+.tab-button {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-xs);
+  background: transparent;
+  color: var(--text-3);
+}
+
+.tab-button:hover {
+  background: var(--bg-active);
+  color: var(--text);
+}
+
+.tab-button svg {
+  width: 12px;
+  height: 12px;
+}
+
+.tab-close {
+  opacity: 0;
+}
+
+.tab:hover .tab-close,
+.tab.active .tab-close,
+.tab-close:focus-visible {
+  opacity: 1;
+}
+
+.tab-pin {
+  display: none;
+}
+
+.tab:hover .tab-pin,
+.tab-pin:focus-visible {
+  display: grid;
+}
+
+/* The agents it started: how many, which opens them. */
+.tab-agents {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  height: 20px;
+  margin-right: 2px;
+  padding: 0 5px;
+  border: 0;
+  border-radius: var(--radius-xs);
+  background: transparent;
+  color: var(--text-3);
+  font-size: calc(11px * var(--text-scale));
+  font-variant-numeric: tabular-nums;
+}
+
+.tab-agents:hover {
+  background: var(--bg-active);
+  color: var(--text);
+}
+
+.tab-agents svg,
+.tab-agents .spinner {
+  width: 12px;
+  height: 12px;
+}
+
+/* While `mod` is held alone: the keys that go to the tab, where its buttons go. */
+.tab-keys {
+  flex: none;
+  margin-right: 6px;
+  padding: 1px 5px;
+  border-radius: var(--radius-xs);
+  background: var(--bg-active);
+  color: var(--text);
+  font-size: calc(11px * var(--text-scale));
+  font-variant-numeric: tabular-nums;
+}
+
+.tab-rename {
+  width: 200px;
+  height: 30px;
+  padding: 0 10px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--accent);
+  background: var(--bg-raised);
+  color: var(--text);
+  font-size: calc(12.5px * var(--text-scale));
+  outline: none;
+}
+
+.tab-new,
+.tab-actions .icon-button {
+  flex: none;
+  width: 28px;
+  height: 28px;
+}
+
+/* What is left of the bar: in a desktop window, where it drags. */
+.tab-spacer {
+  flex: 1;
+  min-width: 24px;
+  align-self: stretch;
+}
+
+.tab-actions {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+/* The archived: a button with their count, which opens them; while a tab drags, a place to drop it, lit while it is over. */
+.tab-archived {
+  flex: none;
+  display: flex;
+  align-items: center;
+}
+
+.tab-archived-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 28px;
+  padding: 0 8px;
+  border: 1px dashed transparent;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-2);
+  font-size: calc(12px * var(--text-scale));
+  font-variant-numeric: tabular-nums;
+}
+
+.tab-archived-trigger:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+
+.tab-archived-trigger svg {
+  width: 15px;
+  height: 15px;
+}
+
+.tab-archived.dropping .tab-archived-trigger {
+  border-color: var(--border-strong);
+}
+
+.tab-archived.target .tab-archived-trigger {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--accent-text);
+}
+
+/* The lists the bar opens: the archived, and a thread's agents. */
+.tab-menu {
+  min-width: 280px;
+}
+
+.tab-menu .menu-item[aria-current="page"] {
+  color: var(--text);
+  font-weight: 500;
+}
+
+.tab-menu-row {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.tab-menu-row .menu-item {
+  flex: 1;
+  min-width: 0;
+}
+
+.tab-menu-unarchive {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-3);
+}
+
+.tab-menu-unarchive:hover,
+.tab-menu-unarchive[data-active="true"] {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+
+.tab-menu-unarchive svg {
+  width: 13px;
+  height: 13px;
+}
+
+.tab-menu-empty {
+  margin: 2px 10px 8px;
+  color: var(--text-3);
+  font-size: calc(12px * var(--text-scale));
+}
+
+/* An agent's own agents step in under it. */
+.tab-menu-agent {
+  padding-left: calc(10px + var(--agent-level, 0) * 14px);
+}

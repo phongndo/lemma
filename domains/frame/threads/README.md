@@ -1,8 +1,9 @@
 # frame.threads
 
-It was `frame.sidebar`: a row under that id applies to it (`formerly`).
-Every thread down the side (in `SidebarRegion`): new threads left mid-prompt
-on top, then the pinned and the active ones in an order dragged into, and the
+Every thread as a tab: down the side (`SidebarRegion`, the default), or
+across the window's top (`TopRegion`), as its `tabs` setting says. It was
+`frame.sidebar` before it drew tabs too: a row under that id applies to it
+(`formerly`). Down the side: new threads left mid-prompt on top, then the pinned and the active ones in an order dragged into, and the
 archived folded away below. Its head has the toggle, and across from it the
 `SidebarActions` ([`@lemma/frame`](../contract/src/index.ts)), whose defaults
 it adds: the command palette (`ActionIds.palette`) and Search, which opens
@@ -89,3 +90,37 @@ asked from a turn): `Needs approval`, or `Needs input` for a value. Requires
   active orders, and when threads were archived and unarchived, which order the
   list beyond when each was made; and whether the archived fold is open, and
   how tall.
+
+## Tabs across the top
+
+`tabs: "horizontal"` draws the same threads as a bar of tabs across the
+window's top instead, and there is no sidebar; `"vertical"`, the default, is
+the sidebar above. Settings › Appearance › Layout switches it, as the Plugins page
+would, restarting the plugin the other way. Both are the same list, kept in
+the same order and marks, so what is above holds for the bar too; where it
+differs:
+
+- **The bar** holds the drafts, then the pinned and the active threads with a
+  divider between; the thread shown, when it is listed nowhere else (a new
+  thread, an archived one, an agent's), at the end, in italics, while it
+  shows. + after the last starts a new thread. At the bar's end are Archived
+  and the `SidebarActions` and `SidebarFooter`. In a desktop window the bar
+  is the title bar, and drags it.
+- **A tab** is the card's first line: its title, after the most pressing of
+  what it waits on, a running turn, a finished one unseen, an unsent prompt,
+  or its pin. The card's second line is in its details, under it after a
+  moment's pointing. A count of the agents it started opens them, each with
+  its state. × on the tab shown and the one under the pointer archives it (a
+  draft's discards it, an archived one's unarchives it), and under the
+  pointer it offers to pin or unpin it. While `mod` is held, its keys show in
+  their place.
+- **Archived** is the fold at the sidebar's foot as a button: its count, and
+  a list of the archived, the latest first, each opening its thread or
+  unarchiving it.
+- **Dragging** a tab is dragging a card, sideways: the sections are named
+  where the divider is, the one it is in lit, and it says what dropping it
+  does; Archived takes one dropped on it.
+- **The track** scrolls sideways when the tabs, narrowed to a floor, no longer
+  fit, and while a tab is dragged near its ends; a wheel turning up and down
+  scrolls it too, and the tab shown scrolls into sight. ← and → move between
+  tabs.

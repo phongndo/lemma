@@ -1,14 +1,16 @@
 import { For, Match, Show, Switch, createEffect, createMemo, createSignal, on, onCleanup, untrack } from "solid-js";
 import { useDroppable } from "@dnd-kit/solid";
+import { Effect, Schema } from "effect";
 import type { SessionInfo, SessionMarks } from "@lemma/sessions";
 import { formatKeys, withKeys } from "@lemma/web/keys";
 import { loadJson, recordOf, save } from "@lemma/web/storage";
 import { dragEdge } from "@lemma/web/drag";
 import { ActionIds, Actions, shownKeysOf } from "@lemma/actions";
 import { sessionTitle, ThreadActions, Threads, ThreadWaits, SidebarRowPart, SidebarRow, waitingOn } from "@lemma/threads";
-import { ActionMenu, Layout, SidebarActions, SidebarFooter, SidebarRegion } from "@lemma/frame";
+import { ActionMenu, Layout, SidebarActions, SidebarFooter, SidebarRegion, TopRegion } from "@lemma/frame";
+import { SectionIds, SettingsGroups, configSetting } from "@lemma/settings";
 import { Workspace } from "@lemma/workspace/web";
-import { Interactions, Slots, WebPlugins, defineWebPlugin, Each, usePlugin } from "@lemma/web";
+import { Interactions, Notify, Slots, WebPlugins, defineWebPlugin, Each, usePlugin } from "@lemma/web";
 import type { Action } from "@lemma/actions";
 import type { SidebarRowProps, ThreadDraft } from "@lemma/threads";
 import {
@@ -25,6 +27,8 @@ import {
   QuestionIcon,
   RedoIcon,
   SearchIcon,
+  Segmented,
+  SettingRow,
   SidebarIcon,
   Spinner,
   WorktreeIcon,
@@ -35,7 +39,9 @@ import type { Flags, Marks } from "./list.ts";
 import type { Deps } from "./deps.ts";
 import { SortableItem, SortableThreads, createArrangement, verbs } from "./sortable.tsx";
 import { ThreadDetails, createDetails } from "./details.tsx";
-import styles from "./sidebar.css?inline";
+import { TabStrip } from "./tabs.tsx";
+import sidebarStyles from "./sidebar.css?inline";
+import tabStyles from "./tabs.css?inline";
 
 // Under the plugin's former id (`frame.sidebar`), so what a browser kept carries over.
 const MARKS_KEY = "lemma.frame.sidebar.marks";
@@ -470,7 +476,7 @@ function Sidebar(props: { deps: Deps; onPick: () => void }) {
     return archivedOpen() ? all : all.filter((session) => session.id === threads.activeId());
   });
 
-  // Dragging: the arrangement holds the list as dragged until the drop lands.
+  // Dragging, as the tab strip drags its tabs: the arrangement holds the list as dragged until the drop lands.
   const arrangement = createArrangement(props.deps);
 
   // The archived panel's height, as its top edge was dragged to, kept; within what leaves the list above room.
@@ -649,16 +655,29 @@ const loadMarks = (): Marks => {
   };
 };
 
+type Tabs = "horizontal" | "vertical";
+
+const ThreadsConfig = Schema.Struct({
+  tabs: Schema.Literals(["vertical", "horizontal"])
+    .pipe(Schema.withDecodingDefaultType(Effect.sync((): Tabs => "vertical")))
+    .annotate({
+      title: "Tabs",
+      description: "The threads down a sidebar beside the thread (vertical), or as tabs across the top of the window (horizontal).",
+    }),
+});
+
 /**
- * Every thread down the sidebar, as T3 Code lists them, in two kinds: the active ones (pinned first, then the newest
- * made or unarchived on top, a running one staying put), each a card with its project, state, title, and branch; and
- * the archived ones, folded away below. A card under the pointer archives it in a click (an archived one unarchives).
- * Search narrows the list by title and project.
+ * Every thread, as T3 Code lists them, in two kinds: the active ones (pinned first, then the newest made or unarchived
+ * on top, a running one staying put), and the archived ones, kept apart. Down the sidebar (`tabs: "vertical"`, the
+ * default) each is a card with its project, state, title, and branch, the archived folded away below; across the
+ * window's top (`"horizontal"`, in `TopRegion`) each is a tab, the archived behind a button at the bar's end. Both are
+ * the same list, ordered, pinned, and archived alike. Called `frame.sidebar` before it drew tabs too (`formerly`).
  */
 export default defineWebPlugin({
   id: "frame.threads",
   formerly: ["frame.sidebar"],
-  styles,
+  styles: sidebarStyles + tabStyles,
+  config: ThreadsConfig,
   requires: {
     threads: Threads,
     slots: Slots,
@@ -666,8 +685,9 @@ export default defineWebPlugin({
     layout: Layout,
     workspace: Workspace,
     interactions: Interactions,
+    notify: Notify,
   },
-  setup: ({ threads, slots, webPlugins, layout, workspace, interactions }, plugin) => {
+  setup: ({ threads, slots, webPlugins, layout, workspace, interactions, notify }, plugin) => {
     // Times tick once a second while a turn runs (its time shows), else once a minute.
     const [now, setNow] = createSignal(Date.now());
     createEffect(() => {
@@ -787,8 +807,38 @@ export default defineWebPlugin({
       marks,
       shortcut: (id) => shortcuts().get(id),
     };
-    slots.add(SidebarRegion, { id: "sidebar", phase: "default", component: (props) => <Sidebar deps={deps} onPick={props.onPick} /> });
+    const horizontal = plugin.config.tabs === "horizontal";
+    if (horizontal) slots.add(TopRegion, { id: "tabs", phase: "default", component: () => <TabStrip deps={deps} /> });
+    else slots.add(SidebarRegion, { id: "sidebar", phase: "default", component: (props) => <Sidebar deps={deps} onPick={props.onPick} /> });
     slots.add(SidebarRowPart, { id: "sidebar.row", phase: "default", component: ThreadRow });
+
+    // Which way the tabs go, in Settings › Appearance › Layout: its config, written as the Plugins page would, which
+    // restarts it the other way.
+    const tabs = configSetting<Tabs>(webPlugins, notify, plugin.id, "tabs");
+    slots.add(SettingsGroups, {
+      id: "sidebar.layout",
+      order: 30,
+      section: SectionIds.appearance,
+      title: "Layout",
+      entries: () => [
+        {
+          text: "Tabs horizontal vertical sidebar top bar threads layout",
+          view: () => (
+            <SettingRow title="Tabs" description="The threads down a sidebar beside the thread, or as tabs across the top of the window.">
+              <Segmented
+                label="Tabs"
+                value={tabs.value() ?? plugin.config.tabs}
+                options={[
+                  { value: "vertical", label: "Vertical" },
+                  { value: "horizontal", label: "Horizontal" },
+                ]}
+                onChange={(next) => tabs.set(next)}
+              />
+            </SettingRow>
+          ),
+        },
+      ],
+    });
 
     // A question a turn asked the host to put (an approval, a choice, a value) waits on the person in its thread.
     slots.add(ThreadWaits, {
@@ -845,23 +895,25 @@ export default defineWebPlugin({
         </Show>
       ),
     });
-    slots.add(SidebarActions, {
-      id: "sidebar.new-thread",
-      order: 20,
-      component: (props) => (
-        <button
-          class="icon-button"
-          aria-label="New thread"
-          data-tip={withKeys("New thread", keysOf("thread.new-chat"))}
-          onClick={() => {
-            newThread();
-            props.onPick();
-          }}
-        >
-          <PenSquareIcon />
-        </button>
-      ),
-    });
+    // The tab strip has its own + after the tabs.
+    if (!horizontal)
+      slots.add(SidebarActions, {
+        id: "sidebar.new-thread",
+        order: 20,
+        component: (props) => (
+          <button
+            class="icon-button"
+            aria-label="New thread"
+            data-tip={withKeys("New thread", keysOf("thread.new-chat"))}
+            onClick={() => {
+              newThread();
+              props.onPick();
+            }}
+          >
+            <PenSquareIcon />
+          </button>
+        ),
+      });
 
     // Moving through the threads and archiving them, from the keyboard and the palette; Settings › Keyboard rebinds these.
     const add = (id: string, order: number, action: Omit<Action, "category">) => slots.add(Actions, { id, order, category: "Thread", ...action });
