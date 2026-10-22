@@ -4,8 +4,8 @@ A release holds the `lemma` command, the host, and the web app, with the
 Node.js they run on, so it needs no checkout, Nix, or Node.js. There is one
 for macOS on Apple silicon and for Linux (glibc) on x64 and arm64; Windows is
 not supported. On NixOS, its Node.js needs
-[nix-ld](https://github.com/nix-community/nix-ld) (`programs.nix-ld.enable = true`). The desktop app is not in a release yet: `lemma serve` opens
-the web app in your browser.
+[nix-ld](https://github.com/nix-community/nix-ld) (`programs.nix-ld.enable = true`).
+Each release also has the [desktop app](#the-desktop-app) for those platforms.
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/phongndo/lemma/main/scripts/install.sh | sh
@@ -66,6 +66,38 @@ credentials, and sessions are (`~/.lemma`). The agent's tools run Git and a
 shell; its browser tools need a Chrome or Chromium on the machine
 ([browser.chromium](../domains/browser/chromium/README.md)).
 
+## The desktop app
+
+The [desktop app](../apps/desktop/README.md) is the web app in a window of its
+own, with the release inside it: the host it starts when none runs, and the
+`lemma` command that host and its agent run, all at the app's version.
+Download the file for your system from a
+[release](https://github.com/phongndo/lemma/releases):
+
+| System                | File                                             | Install                                   |
+| --------------------- | ------------------------------------------------ | ----------------------------------------- |
+| macOS (Apple silicon) | `lemma-desktop-v<version>-darwin-arm64.dmg`      | Open it and drag Lemma into Applications  |
+| Debian, Ubuntu        | `lemma-desktop-v<version>-linux-<arch>.deb`      | `sudo apt install ./lemma-desktop-v*.deb` |
+| Other Linux           | `lemma-desktop-v<version>-linux-<arch>.AppImage` | `chmod +x` it, then run it                |
+
+- **macOS asks before it opens the app.** It is not signed with an Apple
+  Developer ID yet, so macOS says it cannot check it for malicious software.
+  Open System Settings › Privacy & Security, choose **Open Anyway** beside
+  "Lemma was blocked", and confirm. Each new version asks again.
+- **On Ubuntu 24.04 and later, prefer the Debian package.** Ubuntu keeps an
+  app from the user namespaces Electron's sandbox needs unless AppArmor lets
+  it, and the package installs the profile that does. An AppImage has none, so
+  there it runs without the sandbox.
+- **On NixOS,** run the AppImage with `appimage-run` (nixpkgs), which gives it
+  the libraries it expects.
+
+Settings › About says which release the app is. It does not update itself
+yet: install the new version's file as you did the first. The `lemma` in your
+terminal is the installer's, a separate install of its own: keep it at the
+app's version (`lemma update <version>`), as both use `~/.lemma`. To remove the
+app, move Lemma from Applications to the Trash, run
+`sudo apt remove lemma-desktop`, or delete the AppImage; `~/.lemma` stays.
+
 ## Updating
 
 Settings › About in the web app says which release runs and whether a newer
@@ -109,6 +141,8 @@ gh attestation verify lemma-v0.2.7-linux-x64.tar.gz --repo phongndo/lemma \
   --signer-workflow phongndo/lemma/.github/workflows/nightly.yml
 ```
 
+The desktop app's files have one each too: verify one the same way, by its name.
+
 ## Removing
 
 Stop the host, then remove `~/.local/bin/lemma` and `~/.local/share/lemma`.
@@ -117,9 +151,9 @@ that too.
 
 ## Before a release
 
-Each Check run keeps the Linux x64 archive it built for a week, as its
-`lemma-linux-x64` artifact, so a pull request can be tried before it is
-merged:
+Each Check run keeps the Linux x64 archive it built, and the desktop app made
+from it, for a week, as its `lemma-linux-x64` artifact, so a pull request can
+be tried before it is merged:
 
 ```sh
 gh run download <run-id> --repo phongndo/lemma --name lemma-linux-x64 --dir /tmp/lemma-preview
