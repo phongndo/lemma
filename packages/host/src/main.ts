@@ -135,8 +135,8 @@ teeLog(
 );
 // What the host's tools run reaches this host: a \`lemma\` command the agent runs finds it in this home and profile,
 // whatever the environment the host was started in names (another host's LEMMA_URL, a default environment), and prints
-// JSON; its kind's own root and default profile go unnamed (\`homeForTools\`). Leave to running on the other kind's
-// home (\`LEMMA_ALLOW_OTHER_HOME\`) is this host's alone, not its tools'.
+// JSON; its kind's own root and default profile go unnamed (\`homeForTools\`). Leave to run on the other kind's home
+// (\`LEMMA_ALLOW_OTHER_HOME\`) was given this host, not its tools.
 for (const [key, value] of Object.entries(homeForTools(paths, process.env))) {
   if (value === undefined) delete process.env[key];
   else process.env[key] = value;
