@@ -7,6 +7,7 @@ import { defineSlot } from "@lemma/web";
 import type { Region } from "@lemma/web";
 import { Context } from "effect";
 import type { Accessor, Component } from "solid-js";
+import type { ThreadAttention } from "./attention.ts";
 import type { LiveState } from "./live.ts";
 import type { ToolSummary } from "./summary.ts";
 import type { ToolResultView } from "./transcript.ts";
@@ -33,6 +34,16 @@ export interface ThreadsService {
   readonly running: Accessor<readonly string[]>;
   /** The active session has a turn running. */
   readonly busy: Accessor<boolean>;
+  /**
+   * What each thread asks of the person now (`ThreadAttention`), by id; a thread at rest is absent. It waits on them
+   * (`ThreadWaits`), a turn runs in it, or a turn ended (done, failed, out of steps) and they have not looked since: one
+   * that ends while its thread is shown in a window they are looking at is seen at once, and one that ends otherwise is
+   * seen once its thread shows in such a window. Unseen ends are kept in this browser, so they last a reload, and one
+   * seen in another tab is seen here too. A turn the person cancelled leaves nothing to see.
+   */
+  readonly attention: Accessor<ReadonlyMap<string, ThreadAttention>>;
+  /** Marks a thread's finished turn seen, or with no id every thread's: what showing a thread does for its own. */
+  readonly markSeen: (sessionId?: string) => void;
   /** Nothing has gone into the thread shown yet (`isBlank`), or no thread is shown: what is sent next starts it. */
   readonly blank: Accessor<boolean>;
   /**
@@ -156,8 +167,8 @@ export interface PromptAnswer {
 /**
  * Threads waiting on the person: the agent's questions (the ask tool's), a question a turn asked the host to put
  * (an approval). `waiting` says what a thread waits for, as a short label (`Needs input`, `Needs approval`), or
- * nothing; reactive. The sidebar marks such a thread with the first label an item gives, by order, above its being
- * at work or done.
+ * nothing; reactive. `Threads.attention` has such a thread waiting, with the first label an item gives, by order, above
+ * its being at work or done.
  */
 export interface ThreadWait {
   readonly waiting: (sessionId: string) => string | undefined;

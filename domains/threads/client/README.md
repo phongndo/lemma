@@ -2,7 +2,7 @@
 
 Keeps the web app's threads in step with the host: the list of threads, which
 one is open, the open thread's log and what is streaming into it, which
-threads are running, and sending prompts. Provides `Threads`
+threads are running, what each asks of the person, and sending prompts. Provides `Threads`
 ([`@lemma/threads`](../contract/src/threads.ts)), which the domain's other
 plugins read. It follows the host through the `sessions.changes` and
 `agent.activity` channels and the open thread's `sessions.log` and
@@ -74,10 +74,23 @@ restarts host plugins mid-turn. Requires the runtime's `Client`, `Notify`,
   frames).
 - **Running threads** follow `agent.activity`'s turn events; when a prompt it
   sent settles, it asks `agent.running` again, in case those were lost.
+- **Attention** (`attention`) is one record per thread, which the sidebar and
+  notifications both read, so they agree: waiting on the person
+  (the first `ThreadWaits` label), else working, else a turn's end not yet
+  seen: `Done`, or `Failed` (an error) and `Out of steps`; a turn the person
+  cancelled leaves nothing. A turn that ends while its thread shows in a window
+  the person is looking at (the page visible, its window focused) is seen at
+  once; one that ends otherwise stays until its thread shows to them so, or
+  `markSeen`, and a new turn in a thread leaves the last one's end behind.
+  Unseen ends are kept in the browser (`lemma.threads.client.unseen`), shared
+  with its other tabs, so a reload keeps them and one seen in another tab is
+  seen here; a deleted thread's goes with it. Times count from when this page
+  saw a turn start or a thread begin waiting.
 - **Failures are reported, not thrown.** A method whose call to the host fails
   reports it through `Notify` rather than rejecting; `send` resolves false.
 - **For a replacement.** The state it keeps is built with the contract's pure
   functions (`appendLog`, `resolveLeaf`, `trackTurn`, `newerQueue`, and
   `applyDelta`, `joinLive`, `reconcileLive` for `live`, against what is
-  over, `Finished`, noted as the log grows: `noteLogged`, `noteEnded`), which a
-  replacement can reuse so the views read the same shapes.
+  over, `Finished`, noted as the log grows: `noteLogged`, `noteEnded`; and
+  `attentionOf` and `tells` for `attention`), which a replacement can reuse so
+  the views read the same shapes.

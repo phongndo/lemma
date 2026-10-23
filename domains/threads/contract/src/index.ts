@@ -1,4 +1,5 @@
 export * from "./threads.ts";
+export * from "./attention.ts";
 export * from "./parts.tsx";
 export * from "./transcript.ts";
 export * from "./fold.ts";
