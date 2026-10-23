@@ -114,3 +114,18 @@
   height: 12px;
   color: var(--accent-text);
 }
+
+/* A theme or an accent in the palette's Theme page: an accent its color, a theme its background and its accent. */
+.appearance-swatch {
+  flex: none;
+  width: 14px;
+  height: 14px;
+  /* As wide as an icon, so the titles line up. */
+  margin: 0 1px;
+  border-radius: 50%;
+  box-shadow: inset 0 0 0 1px var(--border-strong);
+}
+
+.appearance-swatch-theme {
+  background: linear-gradient(135deg, var(--bg) 50%, var(--accent) 50%);
+}
