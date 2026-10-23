@@ -220,6 +220,10 @@
   color: var(--ok);
 }
 
+.thread-state[data-state="failed"] {
+  color: var(--err);
+}
+
 .thread-state .spinner {
   width: 11px;
   height: 11px;

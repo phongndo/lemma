@@ -10,15 +10,16 @@ import { formatKeys, withKeys } from "@lemma/web/keys";
 import { loadJson, recordOf, save } from "@lemma/web/storage";
 import { dragEdge } from "@lemma/web/drag";
 import { ActionIds, Actions, shownKeysOf } from "@lemma/actions";
-import { sessionTitle, ThreadActions, Threads, ThreadWaits, SidebarRowPart, SidebarRow, waitingOn } from "@lemma/threads";
+import { sessionTitle, ThreadActions, Threads, SidebarRowPart, SidebarRow } from "@lemma/threads";
 import { ActionMenu, inDesktop, Layout, SidebarActions, SidebarFooter, SidebarRegion } from "@lemma/frame";
 import type { LayoutService } from "@lemma/frame";
 import { Workspace } from "@lemma/workspace/web";
 import { Slots, WebPlugins, defineWebPlugin, Each, usePlugin } from "@lemma/web";
 import type { Action } from "@lemma/actions";
-import type { SidebarRowProps, ThreadDraft, ThreadsService } from "@lemma/threads";
+import type { SidebarRowProps, ThreadAttention, ThreadDraft, ThreadsService } from "@lemma/threads";
 import type { SlotsService } from "@lemma/web";
 import {
+  AlertIcon,
   ArchiveIcon,
   Avatar,
   CheckIcon,
@@ -75,7 +76,7 @@ let cardClosedAt = 0;
 
 /**
  * Its state where the time goes, as T3 Code shows it, the most pressing first: what it waits on the person for, a
- * running turn and its time, a finished one not yet seen; else how long ago it was used.
+ * running turn and its time, a turn that failed or finished and is not yet seen; else how long ago it was used.
  */
 const Status = (props: SidebarRowProps & { readonly since?: number }) => (
   <Switch fallback={<span class="thread-when">{shortAge(props.since ?? props.session.updatedAt, props.now)}</span>}>
@@ -94,6 +95,14 @@ const Status = (props: SidebarRowProps & { readonly since?: number }) => (
         <Show when={props.runningSince}>{(since) => <span aria-hidden="true">{runTime(since(), props.now)}</span>}</Show>
       </span>
     </Match>
+    <Match when={props.attention?.state === "failed" ? props.attention.label : undefined}>
+      {(label) => (
+        <span class="thread-when thread-state" data-state="failed" role="status">
+          <AlertIcon />
+          {label()}
+        </span>
+      )}
+    </Match>
     <Match when={props.unread}>
       <span class="thread-when thread-state" data-state="done" role="status">
         <CheckIcon />
@@ -102,6 +111,18 @@ const Status = (props: SidebarRowProps & { readonly since?: number }) => (
     </Match>
   </Switch>
 );
+
+/** What a row says of its state in its details: at work, archived, a turn's end not yet seen, or its last use. */
+const stateWords = (props: SidebarRowProps, archived: boolean): string =>
+  props.running
+    ? "Working"
+    : archived
+      ? "Archived"
+      : props.attention?.state === "failed"
+        ? `${props.attention.label}, not yet seen`
+        : props.unread
+          ? "Finished, not yet seen"
+          : "Last used";
 
 /** The room the buttons under the pointer take at a line's end (a card's second, a slim row's one), which it stops short of then. */
 const ARCHIVE_ROOM = 80;
@@ -285,7 +306,7 @@ function ThreadRow(props: SidebarRowProps) {
                 </Show>
                 <Show when={props.waiting}>{(label) => <div class="thread-details-line waiting">{label()}</div>}</Show>
                 <div class="thread-details-line muted">
-                  {props.running ? "Working" : archived() ? "Archived" : props.unread ? "Finished, not yet seen" : "Last used"}
+                  {stateWords(props, archived())}
                   {props.running && props.runningSince !== undefined ? ` for ${runTime(props.runningSince, props.now)}` : ""}
                   {props.running ? "" : ` ${shortAge(since(), props.now) === "now" ? "just now" : `${shortAge(since(), props.now)} ago`}`}
                 </div>
@@ -341,8 +362,8 @@ interface Deps {
   readonly lists: () => ReturnType<typeof sections>;
   /** Each thread's agents, and theirs, listed under it (`nestedAgents`). */
   readonly agents: () => ReadonlyMap<string, readonly NestedAgent[]>;
-  readonly unread: () => ReadonlySet<string>;
-  readonly runningSince: (id: string) => number | undefined;
+  /** What each thread asks of the person (`Threads.attention`). */
+  readonly attention: (id: string) => ThreadAttention | undefined;
   /** What the folder `cwd` has checked out, once asked. */
   readonly place: (cwd: string) => { readonly branch?: string | undefined; readonly project: string; readonly worktree: boolean };
   readonly archive: (session: SessionInfo) => void;
@@ -368,14 +389,16 @@ const rowOf = (deps: Deps, onPick: () => void) => {
     const id = () => session().id;
     const running = () => threads.running().includes(id());
     const place = () => deps.place(session().cwd);
+    const attention = () => deps.attention(id());
     return (
       <SidebarRow
         session={session()}
         active={threads.activeId() === id()}
         running={running()}
-        runningSince={deps.runningSince(id())}
-        unread={deps.unread().has(id())}
-        waiting={waitingOn(slots.list(ThreadWaits), id())}
+        runningSince={attention()?.state === "working" ? attention()?.since : undefined}
+        unread={attention()?.state === "done" || attention()?.state === "failed"}
+        attention={attention()}
+        waiting={attention()?.state === "waiting" ? attention()?.label : undefined}
         drafted={threads.activeId() !== id() && threads.drafts().has(id())}
         now={deps.now()}
         href={threads.href(id())}
@@ -431,13 +454,14 @@ const verbs: Readonly<Record<DropVerb, () => JSX.Element>> = {
  * name), and its state, which opens the agent's thread.
  */
 function NestedAgents(props: { deps: Deps; parent: SessionInfo; onPick: () => void }) {
-  const { threads, slots } = props.deps;
+  const { threads } = props.deps;
   const plugin = usePlugin();
   const openAgent = plugin.action("open an agent's thread", (id: string) => threads.select(id));
   const rows = () => props.deps.agents().get(props.parent.id) ?? [];
   const agents = () => rows().map((row) => row.session);
   const [chosen, setChosen] = createSignal<boolean>();
-  const waiting = (id: string) => waitingOn(slots.list(ThreadWaits), id);
+  const attention = (id: string) => props.deps.attention(id);
+  const waiting = (id: string) => (attention(id)?.state === "waiting" ? attention(id)?.label : undefined);
   const working = () => agents().filter((agent) => threads.running().includes(agent.id) || waiting(agent.id) !== undefined).length;
   const near = () => threads.activeId() === props.parent.id || agents().some((agent) => agent.id === threads.activeId());
   const open = () => chosen() ?? (working() > 0 || near());
@@ -479,8 +503,9 @@ function NestedAgents(props: { deps: Deps; parent: SessionInfo; onPick: () => vo
                       session={agent}
                       active={threads.activeId() === agent.id}
                       running={threads.running().includes(agent.id)}
-                      runningSince={props.deps.runningSince(agent.id)}
-                      unread={props.deps.unread().has(agent.id)}
+                      runningSince={attention(agent.id)?.state === "working" ? attention(agent.id)?.since : undefined}
+                      unread={attention(agent.id)?.state === "done" || attention(agent.id)?.state === "failed"}
+                      attention={attention(agent.id)}
                       waiting={waiting(agent.id)}
                       drafted={false}
                       now={props.deps.now()}
@@ -978,26 +1003,7 @@ export default defineWebPlugin({
     );
     const drafts = createMemo(() => draftRows(threads.list(), (id) => threads.drafts().has(id), threads.activeId(), held()));
 
-    // A turn that ends while another thread is open leaves its thread unread until it is opened; a turn's start is
-    // kept for its time.
-    const [unread, setUnread] = createSignal<ReadonlySet<string>>(new Set());
-    const [since, setSince] = createSignal<Readonly<Record<string, number>>>({});
-    createEffect(
-      on(threads.running, (running, before) => {
-        const ended = (before ?? []).filter((id) => !running.includes(id));
-        const started = running.filter((id) => !(before ?? []).includes(id));
-        if (ended.length > 0) setUnread(new Set([...unread(), ...ended.filter((id) => id !== threads.activeId())]));
-        if (ended.length > 0 || started.length > 0)
-          setSince(Object.fromEntries([...Object.entries(since()).filter(([id]) => running.includes(id)), ...started.map((id) => [id, Date.now()] as const)]));
-      }),
-    );
-    createEffect(() => {
-      const id = threads.activeId();
-      if (id === undefined || !untrack(unread).has(id)) return;
-      const next = new Set(untrack(unread));
-      next.delete(id);
-      setUnread(next);
-    });
+    const attention = (id: string) => threads.attention().get(id);
 
     // Where each thread works: its project (a worktree's is its repository's), and the branch its folder has checked out.
     const place = (cwd: string) => {
@@ -1035,8 +1041,7 @@ export default defineWebPlugin({
       now,
       lists,
       agents,
-      unread,
-      runningSince: (id) => since()[id],
+      attention,
       place,
       archive: (session) => void archive(session),
       unarchive,
@@ -1161,8 +1166,9 @@ export default defineWebPlugin({
       },
     });
     /**
-     * The thread that needs the person `by` places on, going round: one listed that waits on them (`ThreadWaits`) or
-     * finished unseen, or an agent under one that waits on them (a finished agent does not: its thread goes on with what it did).
+     * The thread that needs the person `by` places on, going round: one listed that waits on them or failed or finished
+     * unseen (`Threads.attention`), or an agent under one that waits on them (a finished agent does not: its thread goes
+     * on with what it did).
      */
     const needing = (by: 1 | -1) => {
       const nested = new Set<string>();
@@ -1171,14 +1177,10 @@ export default defineWebPlugin({
         for (const agent of under) nested.add(agent.id);
         return [session, ...under];
       });
-      const waits = slots.list(ThreadWaits);
-      return nextNeeding(
-        listed,
-        threads.activeId(),
-        by,
-        (session) =>
-          waitingOn(waits, session.id) !== undefined || (!nested.has(session.id) && unread().has(session.id) && !threads.running().includes(session.id)),
-      );
+      return nextNeeding(listed, threads.activeId(), by, (session) => {
+        const state = attention(session.id)?.state;
+        return state === "waiting" || (!nested.has(session.id) && (state === "done" || state === "failed"));
+      });
     };
     const goNeeding = (by: 1 | -1) => () => {
       const next = needing(by);

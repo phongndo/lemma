@@ -45,9 +45,10 @@ Requires `Threads`, `Slots`, `WebPlugins`, `Layout`, and `Workspace`.
   short; a title too long fades out. The second is its project and the branch
   its folder has checked out (`Workspace.place`: a thread in a worktree is
   under its repository's project, its branch marked as a worktree's), then at its end its state, the most pressing first, as T3 Code
-  shows it: what it waits on the person for (`ThreadWaits`: `Needs input`),
-  `Working` and how long while a turn runs, `Done` once one finished unseen,
-  else how long ago it was used. An archived thread is one slim line.
+  shows it (`Threads.attention`): what it waits on the person for
+  (`Needs input`), `Working` and how long while a turn runs, `Failed` (or
+  `Out of steps`) or `Done` once one ended unseen, else how long ago it was
+  used. An archived thread is one slim line.
 - **Under the pointer** a card's state gives way to buttons to pin it (or
   unpin it) and to archive it, and an archived row's age to Unarchive;
   `mod+alt+a` archives the thread shown, or unarchives it. Archiving the thread
@@ -80,7 +81,7 @@ Requires `Threads`, `Slots`, `WebPlugins`, `Layout`, and `Workspace`.
   `alt+shift+arrowdown` and `alt+shift+arrowup` go to the next and previous
   thread that needs you, round
   the list, as Slack and Discord step through what is unread: one that waits
-  on you (`ThreadWaits`) or is `Done`, or an agent under one that waits on you
+  on you or is `Done` or `Failed`, or an agent under one that waits on you
   (a finished agent's thread goes on with what it did). In a text field they
   stay its own (on macOS, selecting to a paragraph's end). A right-click opens
   a thread's menu and a double-click renames it. Settings › Keyboard rebinds
