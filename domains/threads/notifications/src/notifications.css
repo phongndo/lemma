@@ -1,0 +1,234 @@
+/* The app's notices: a card per thread that tells the person something, stacked in the corner they chose. */
+.thread-notices {
+  position: fixed;
+  z-index: var(--z-toast);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: 340px;
+  max-width: calc(100vw - 32px);
+  pointer-events: none;
+}
+
+.thread-notices[data-corner^="top"] {
+  top: 56px;
+}
+
+.thread-notices[data-corner^="bottom"] {
+  bottom: 16px;
+}
+
+.thread-notices[data-corner$="left"] {
+  left: 16px;
+}
+
+.thread-notices[data-corner$="right"] {
+  right: 16px;
+}
+
+.thread-notices[data-corner$="center"] {
+  left: 50%;
+  transform: translateX(-50%);
+}
+
+.thread-notice {
+  pointer-events: auto;
+  display: flex;
+  align-items: flex-start;
+  gap: 4px;
+  padding: 4px 6px 4px 4px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  background: var(--bg-raised);
+  box-shadow: var(--shadow-lg);
+  animation: drop 0.16s ease-out;
+}
+
+.thread-notice-open {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 8px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.thread-notice-open:hover {
+  background: var(--bg-hover);
+}
+
+.thread-notice-icon {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  background: color-mix(in srgb, currentColor 14%, transparent);
+}
+
+.thread-notice[data-state="waiting"] .thread-notice-icon,
+.thread-notice[data-state="waiting"] .thread-notice-state {
+  color: var(--warn);
+}
+
+.thread-notice[data-state="failed"] .thread-notice-icon,
+.thread-notice[data-state="failed"] .thread-notice-state {
+  color: var(--err);
+}
+
+.thread-notice[data-state="done"] .thread-notice-icon,
+.thread-notice[data-state="done"] .thread-notice-state {
+  color: var(--ok);
+}
+
+.thread-notice-text {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.thread-notice-title {
+  overflow: hidden;
+  font-size: calc(13px * var(--text-scale));
+  font-weight: 500;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.thread-notice-detail {
+  overflow: hidden;
+  color: var(--text-3);
+  font-size: calc(12px * var(--text-scale));
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.thread-notice-state {
+  font-weight: 500;
+}
+
+.thread-notice-close {
+  margin-top: 6px;
+  width: 22px;
+  height: 22px;
+}
+
+/* Settings › Notifications: each state a row, each channel a column of switches. */
+.notify-grid {
+  display: grid;
+  padding: 4px 0 8px;
+}
+
+.notify-grid-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) repeat(4, 76px);
+  align-items: center;
+  min-height: 64px;
+  border-bottom: 1px solid var(--border);
+}
+
+.notify-grid-row:last-child {
+  border-bottom: 0;
+}
+
+.notify-grid-head {
+  min-height: 32px;
+  color: var(--text-3);
+  font-size: calc(12px * var(--text-scale));
+  font-weight: 500;
+}
+
+.notify-grid-head > [role="columnheader"]:not(.notify-grid-corner) {
+  justify-self: center;
+}
+
+.notify-grid-state {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+
+.notify-grid-icon {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  background: color-mix(in srgb, currentColor 14%, transparent);
+}
+
+.notify-grid-state[data-state="waiting"] .notify-grid-icon {
+  color: var(--warn);
+}
+
+.notify-grid-state[data-state="failed"] .notify-grid-icon {
+  color: var(--err);
+}
+
+.notify-grid-state[data-state="done"] .notify-grid-icon {
+  color: var(--ok);
+}
+
+.notify-grid-cell {
+  justify-self: center;
+}
+
+@media (max-width: 820px) {
+  .notify-grid-row {
+    grid-template-columns: minmax(0, 1fr) repeat(4, 52px);
+  }
+
+  .notify-grid-state .setting-desc {
+    display: none;
+  }
+}
+
+/* Where notices show: the window in miniature, a spot in each corner and at the middle of each edge. */
+.notify-corners {
+  display: grid;
+  grid-template-columns: repeat(3, 28px);
+  grid-template-rows: 22px 22px;
+  justify-content: space-between;
+  align-content: space-between;
+  width: 132px;
+  height: 78px;
+  padding: 8px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--bg-sunk);
+}
+
+.notify-corner {
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-xs);
+  background: var(--bg-hover);
+  color: var(--accent-fg);
+  cursor: pointer;
+}
+
+.notify-corner:hover {
+  background: var(--border-strong);
+}
+
+.notify-corner[aria-checked="true"] {
+  background: var(--accent);
+}
+
+.notify-corner .icon {
+  width: 12px;
+  height: 12px;
+}

@@ -451,6 +451,9 @@ importers:
       '@lemma/threads-composer':
         specifier: workspace:*
         version: link:../../domains/threads/composer
+      '@lemma/threads-notifications':
+        specifier: workspace:*
+        version: link:../../domains/threads/notifications
       '@lemma/threads-prompt-commands':
         specifier: workspace:*
         version: link:../../domains/threads/prompt-commands
@@ -2839,6 +2842,46 @@ importers:
       effect:
         specifier: 4.0.5
         version: 4.0.5
+      solid-js:
+        specifier: 1.9.17
+        version: 1.9.17
+    devDependencies:
+      '@types/node':
+        specifier: 24.19.2
+        version: 24.19.2
+      tsrs:
+        specifier: 0.18.0-ts7.1.0-dev.20260929
+        version: 0.18.0-ts7.1.0-dev.20260929
+      vitest:
+        specifier: 5.0.5
+        version: 5.0.5(@types/node@24.19.2)(vite@8.3.4(@types/node@24.19.2)(esbuild@0.28.2)(jiti@2.7.0))
+
+  domains/threads/notifications:
+    dependencies:
+      '@lemma/actions':
+        specifier: workspace:*
+        version: link:../../actions/contract
+      '@lemma/frame':
+        specifier: workspace:*
+        version: link:../../frame/contract
+      '@lemma/look':
+        specifier: workspace:*
+        version: link:../../look/contract
+      '@lemma/sessions':
+        specifier: workspace:*
+        version: link:../../sessions/contract
+      '@lemma/settings':
+        specifier: workspace:*
+        version: link:../../settings/contract
+      '@lemma/threads':
+        specifier: workspace:*
+        version: link:../contract
+      '@lemma/web':
+        specifier: workspace:*
+        version: link:../../../packages/web
+      '@lemma/workspace':
+        specifier: workspace:*
+        version: link:../../workspace/contract
       solid-js:
         specifier: 1.9.17
         version: 1.9.17

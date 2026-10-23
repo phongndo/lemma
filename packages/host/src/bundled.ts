@@ -169,6 +169,7 @@ export const bundledWeb: readonly string[] = [
   "threads.browser",
   "threads.client",
   "threads.composer",
+  "threads.notifications",
   "threads.prompt-commands",
   "threads.trajectory",
   "threads.transcript",

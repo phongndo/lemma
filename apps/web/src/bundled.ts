@@ -48,6 +48,7 @@ import read from "@lemma/tools-read/web";
 import search from "@lemma/tools-search-fff/web";
 import write from "@lemma/tools-write/web";
 import threads from "@lemma/threads-client";
+import threadNotifications from "@lemma/threads-notifications";
 import settings from "@lemma/settings-page";
 import shell from "@lemma/frame-shell";
 import sidebar from "@lemma/frame-sidebar";
@@ -81,6 +82,7 @@ export const bundled: readonly Plugin[] = [
   shell,
   pages,
   sidebar,
+  threadNotifications,
   threadView,
   chat,
   highlight,
