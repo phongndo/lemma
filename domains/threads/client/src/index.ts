@@ -362,12 +362,12 @@ export default defineWebPlugin({
       }
       return waiting;
     });
-    const [waitingSince, setWaitingSince] = createSignal<Readonly<Record<string, number>>>({});
-    createEffect(() => {
-      const now = waits();
-      const at = untrack(waitingSince);
-      setWaitingSince(Object.fromEntries([...now.keys()].map((id) => [id, at[id] ?? Date.now()] as const)));
-    });
+    // Derived with the waits rather than after them, so a thread begins waiting once, at one time: an effect would set
+    // it a moment later, and a reader in between would see a wait begin twice.
+    const waitingSince = createMemo<Readonly<Record<string, number>>>((at) => {
+      const now = Date.now();
+      return Object.fromEntries([...waits().keys()].map((id) => [id, at[id] ?? now] as const));
+    }, {});
     const attention = createMemo((): ReadonlyMap<string, ThreadAttention> => {
       const ends = unseen();
       const turns = running();
