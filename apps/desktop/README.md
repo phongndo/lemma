@@ -69,6 +69,11 @@ it reads beside its sources, as the icon, is in the archive (`scripts/dist.ts`).
   the window's title bar, and its controls sit in them, level with their
   buttons: the traffic lights centered on macOS; on Windows and Linux an
   overlay as tall as a head, in the page's colors, which change with its look.
+- **The app's icon counts what needs you.** A page says how many of its threads
+  wait on you or have a turn's end to see (`lemmaDesktop.attention.setBadge(count)`,
+  as `threads.notifications` does), and the Dock's badge (Unity's launcher's on
+  Linux) is every window's sum. Picking a system notification about a thread
+  brings its window forward (`lemmaDesktop.attention.focus()`).
 - **Links open in the system browser.** Navigation stays within the host's
   origin.
 - **The browser view's pages are Chromium's** (`src/browser.ts`): a

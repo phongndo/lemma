@@ -367,6 +367,31 @@ ipcMain.on("lemma:title-bar", (event, color: unknown, symbolColor: unknown) => {
   window.setTitleBarOverlay({ color, symbolColor, height: HEAD_HEIGHT });
 });
 
+// How many threads need the person, by window (`lemma:badge`): the app's icon counts every window's. Only a window's own page says.
+const badges = new Map<number, number>();
+const showBadges = () => app.setBadgeCount([...badges.values()].reduce((sum, count) => sum + count, 0));
+ipcMain.on("lemma:badge", (event, count: unknown) => {
+  if (senderOf(event) === undefined || typeof count !== "number" || !Number.isInteger(count) || count < 0 || count > 9999) return;
+  const id = event.sender.id;
+  if (!badges.has(id))
+    event.sender.once("destroyed", () => {
+      badges.delete(id);
+      showBadges();
+    });
+  badges.set(id, count);
+  showBadges();
+});
+
+// A notification about a window's thread was picked: that window comes forward.
+ipcMain.on("lemma:focus", (event) => {
+  const sender = senderOf(event);
+  if (sender === undefined) return;
+  if (sender.window.isMinimized()) sender.window.restore();
+  sender.window.show();
+  sender.window.focus();
+  if (mac) app.focus({ steal: true });
+});
+
 const openWindow = (name: string, url: string) => {
   const partition = browserPartition(name);
   const window = new BrowserWindow({
