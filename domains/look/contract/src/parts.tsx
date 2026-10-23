@@ -195,7 +195,8 @@ export type IconName =
   | "maximize"
   | "minimize"
   | "spinner"
-  | "agent";
+  | "agent"
+  | "bell";
 
 export interface IconProps {
   readonly name: IconName;
@@ -456,3 +457,5 @@ export const MinimizeIcon = () => <Icon name="minimize" />;
 export const AgentIcon = () => <Icon name="agent" />;
 
 export const Spinner = () => <Icon name="spinner" />;
+
+export const BellIcon = () => <Icon name="bell" />;

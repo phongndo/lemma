@@ -1,0 +1,33 @@
+{
+  "name": "@lemma/threads-notifications",
+  "version": "0.1.0",
+  "private": true,
+  "description": "How a thread tells you it waits on you, failed, or finished while you were elsewhere: a notice in the app, a system notification, a count on the app's icon, a sound",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.tsx"
+  },
+  "scripts": {
+    "check": "tsrs --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@lemma/actions": "workspace:*",
+    "@lemma/frame": "workspace:*",
+    "@lemma/look": "workspace:*",
+    "@lemma/sessions": "workspace:*",
+    "@lemma/settings": "workspace:*",
+    "@lemma/threads": "workspace:*",
+    "@lemma/web": "workspace:*",
+    "@lemma/workspace": "workspace:*",
+    "solid-js": "1.9.17"
+  },
+  "devDependencies": {
+    "@types/node": "24.19.2",
+    "tsrs": "0.18.0-ts7.1.0-dev.20260929",
+    "vitest": "5.0.5"
+  },
+  "lemma": {
+    "web": "./src/index.tsx"
+  }
+}

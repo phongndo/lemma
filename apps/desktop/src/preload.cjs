@@ -16,6 +16,12 @@ contextBridge.exposeInMainWorld("lemmaDesktop", {
   openProfile: (name) => ipcRenderer.invoke("lemma:open-profile", String(name)),
   // A profile the page deleted: its windows close, and what its pages kept goes (`lemma:profile-removed`).
   profileRemoved: (name) => ipcRenderer.invoke("lemma:profile-removed", String(name)),
+  // How many threads need the person in this window, counted on the app's icon (`lemma:badge`); and the window brought
+  // forward when they pick a notification about one (`lemma:focus`).
+  attention: {
+    setBadge: (count) => ipcRenderer.send("lemma:badge", Number(count)),
+    focus: () => ipcRenderer.send("lemma:focus"),
+  },
   // The browser view's pages (`src/browser.ts`), in the window's profile's partition.
   browser: {
     partition: process.argv.find((arg) => arg.startsWith("--lemma-browser-partition="))?.slice("--lemma-browser-partition=".length) ?? "persist:lemma-browser",

@@ -3,6 +3,7 @@ import type { ImageContent, TextContent } from "@lemma/llm";
 import type { SessionInfo } from "@lemma/sessions";
 import { definePart, partView } from "@lemma/web";
 import type { JSX } from "solid-js";
+import type { ThreadAttention } from "./attention.ts";
 import type { ComposerSuggestion, PromptInfo, ThreadAction, ToolBodyProps } from "./threads.ts";
 import type { TurnView } from "./transcript.ts";
 
@@ -133,8 +134,10 @@ export interface SidebarRowProps {
   readonly running: boolean;
   /** When its running turn began, as far as this page saw it start. */
   readonly runningSince?: number | undefined;
-  /** A turn ended in it while another thread was open, and it has not been opened since. */
+  /** A turn's end in it is there to see: `attention` is done or failed. */
   readonly unread: boolean;
+  /** What it asks of the person (`Threads.attention`): what `running`, `waiting`, and `unread` say, and whether a turn failed. */
+  readonly attention?: ThreadAttention | undefined;
   /** A prompt is written in it and not sent (`Threads.drafts`); never so for the open thread, whose composer shows it. */
   readonly drafted: boolean;
   /** What it waits on the person for (`ThreadWaits`): `Needs input`. */

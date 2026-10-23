@@ -11,10 +11,12 @@ import {
   appendOutput,
   applyDelta,
   applySessionsChange,
+  attentionOf,
   createFinished,
   emptyLive,
   endTurn,
   isBlank,
+  isUnseenEnd,
   joinLive,
   LEAVING_MS,
   logFailure,
@@ -24,19 +26,22 @@ import {
   recentRequests,
   reconcileLive,
   resolveLeaf,
+  tells,
   ThreadHolds,
+  ThreadWaits,
   growBranch,
   Threads,
   THREADS_CONTRACT,
   trackTurn,
   upsertSession,
+  waitingOn,
   waitingPrompts,
   written,
 } from "@lemma/threads";
-import type { Finished, LiveState, KnownQueue, LogState, PromptAnswer, ThreadDraft, WalkedBranch } from "@lemma/threads";
+import type { Finished, LiveState, KnownQueue, LogState, PromptAnswer, ThreadAttention, ThreadDraft, UnseenEnd, WalkedBranch } from "@lemma/threads";
 import { PluginsFacts } from "@lemma/settings";
 import { Client, Notify, Router, Slots, defineWebPlugin } from "@lemma/web";
-import { loadJson, recordOf, save } from "@lemma/web/storage";
+import { load, loadJson, recordOf, save } from "@lemma/web/storage";
 
 /** How long a preloaded log stays fresh enough to open with (ms). */
 const PRELOAD_MS = 15_000;
@@ -47,6 +52,11 @@ const DRAFTS_KEY = "lemma.threads.client.drafts";
 /** How long after a draft's last change it is written to storage (ms). */
 const SAVE_MS = 400;
 const isTexts = recordOf((text): text is string => typeof text === "string");
+/** The turns' ends not looked at yet, by thread (`Threads.attention`), shared by this browser's tabs. */
+const UNSEEN_KEY = "lemma.threads.client.unseen";
+const isUnseen = recordOf(isUnseenEnd);
+/** At most this many unseen ends are kept in storage, the newest. */
+const UNSEEN_KEPT = 200;
 
 /** What this tab keeps across its reloads (`sessionStorage`): no other tab reads it. */
 const tabLoad = (key: string): string[] => {
@@ -227,6 +237,158 @@ export default defineWebPlugin({
       const id = activeId();
       return id !== undefined && running().includes(id);
     });
+
+    // ---------------------------------------------------------------- attention
+
+    /** The person is looking at this window: the page shows, and its window has focus. */
+    const looking = () => document.visibilityState === "visible" && document.hasFocus();
+    const [attending, setAttending] = createSignal(looking());
+    const lookAgain = () => setAttending(looking());
+    plugin.listen(document, "visibilitychange", lookAgain);
+    plugin.listen(window, "focus", lookAgain);
+    plugin.listen(window, "blur", lookAgain);
+    /**
+     * Turns' ends not looked at yet, by thread: kept in this browser for this page's threads. Each change is written as
+     * itself into what storage holds (another tab's ends stay), and another tab's changes arrive the same way, for the
+     * threads this page lists.
+     */
+    const [unseen, setUnseen] = createSignal<Readonly<Record<string, UnseenEnd>>>({});
+    const readEnds = (text: string | null | undefined): Record<string, UnseenEnd> => {
+      try {
+        const value: unknown = JSON.parse(text ?? "{}");
+        return isUnseen(value) ? { ...value } : {};
+      } catch {
+        return {};
+      }
+    };
+    const writeEnds = (change: (ends: Record<string, UnseenEnd>) => void) => {
+      const ends = readEnds(load(UNSEEN_KEY));
+      change(ends);
+      // The newest only, so ends of threads no tab lists any more do not pile up.
+      const kept = Object.entries(ends)
+        .sort(([, a], [, b]) => b.at - a.at)
+        .slice(0, UNSEEN_KEPT);
+      save(UNSEEN_KEY, kept.length === 0 ? undefined : JSON.stringify(Object.fromEntries(kept)));
+    };
+    const listed = () => new Set(untrack(list).map((session) => session.id));
+    plugin.listen(window, "storage", (event) => {
+      if (event.key !== UNSEEN_KEY) return;
+      const before = readEnds(event.oldValue);
+      const after = readEnds(event.newValue);
+      const mine = listed();
+      const next = { ...untrack(unseen) };
+      let changed = false;
+      for (const [id, end] of Object.entries(after))
+        if (mine.has(id) && (before[id]?.at !== end.at || before[id]?.reason !== end.reason)) {
+          next[id] = end;
+          changed = true;
+        }
+      for (const id of Object.keys(before))
+        if (!(id in after) && id in next) {
+          delete next[id];
+          changed = true;
+        }
+      if (changed) setUnseen(next);
+    });
+    // Once the list is in, the ends kept for its threads are this page's.
+    createEffect(
+      on(loaded, (ready) => {
+        if (!ready) return;
+        const mine = listed();
+        const kept = Object.entries(readEnds(load(UNSEEN_KEY))).filter(([id]) => mine.has(id));
+        if (kept.length > 0) setUnseen({ ...Object.fromEntries(kept), ...untrack(unseen) });
+      }),
+    );
+    const markSeen = (sessionId?: string) => {
+      const now = untrack(unseen);
+      const ids = sessionId === undefined ? Object.keys(now) : sessionId in now ? [sessionId] : [];
+      if (ids.length === 0) return;
+      const next = { ...now };
+      for (const id of ids) delete next[id];
+      setUnseen(next);
+      writeEnds((ends) => {
+        for (const id of ids) delete ends[id];
+      });
+    };
+    /** The threads whose turn's end this page heard since their turn began: one that stops running unheard ended unseen. */
+    const heardEnd = new Set<string>();
+    /** A turn ended: one to tell of is there to see, unless its thread shows to the person now. */
+    const turnEnded = (sessionId: string, reason: Parameters<typeof tells>[0]) => {
+      heardEnd.add(sessionId);
+      if (!tells(reason)) return markSeen(sessionId);
+      if (sessionId === untrack(activeId) && untrack(attending)) return markSeen(sessionId);
+      const end = { reason, at: Date.now() };
+      setUnseen({ ...untrack(unseen), [sessionId]: end });
+      writeEnds((ends) => {
+        ends[sessionId] = end;
+      });
+    };
+    /** A turn began: the last one's end is left behind. Only the agent's word for it: `running` is also guessed from replies. */
+    const turnStarted = (sessionId: string) => {
+      heardEnd.delete(sessionId);
+      markSeen(sessionId);
+    };
+    // The thread shown, to a person looking, is seen (an end kept from before a reload, or another tab's, too); one that
+    // is gone has nothing to see.
+    createEffect(() => {
+      const id = activeId();
+      if (id !== undefined && attending() && id in unseen()) markSeen(id);
+    });
+    createEffect(() => {
+      if (!loaded()) return;
+      const known = new Set(list().map((session) => session.id));
+      const gone = Object.keys(untrack(unseen)).filter((id) => !known.has(id));
+      for (const id of gone) markSeen(id);
+    });
+    /** When this page saw each turn start, and each thread begin waiting: what attention counts from. */
+    const [startedAt, setStartedAt] = createSignal<Readonly<Record<string, number>>>({});
+    createEffect(
+      on(running, (now, before) => {
+        const started = now.filter((id) => !(before ?? []).includes(id));
+        // A turn that stopped with no end heard (the agent's activity fell behind): it ended, unseen.
+        for (const id of before ?? []) if (!now.includes(id) && !heardEnd.has(id)) turnEnded(id, "done");
+        const at = untrack(startedAt);
+        setStartedAt(
+          Object.fromEntries([...Object.entries(at).filter(([id]) => now.includes(id)), ...started.map((id) => [id, at[id] ?? Date.now()] as const)]),
+        );
+      }),
+    );
+    const waits = createMemo(() => {
+      const items = slots.list(ThreadWaits);
+      const waiting = new Map<string, string>();
+      for (const session of list()) {
+        const label = waitingOn(items, session.id);
+        if (label !== undefined) waiting.set(session.id, label);
+      }
+      return waiting;
+    });
+    // Derived with the waits rather than after them, so a thread begins waiting once, at one time: an effect would set
+    // it a moment later, and a reader in between would see a wait begin twice.
+    const waitingSince = createMemo<Readonly<Record<string, number>>>((at) => {
+      const now = Date.now();
+      return Object.fromEntries([...waits().keys()].map((id) => [id, at[id] ?? now] as const));
+    }, {});
+    const attention = createMemo((): ReadonlyMap<string, ThreadAttention> => {
+      const ends = unseen();
+      const turns = running();
+      const ids = new Set([...turns, ...waits().keys(), ...Object.keys(ends)]);
+      const now = Date.now();
+      const all = new Map<string, ThreadAttention>();
+      for (const id of ids) {
+        const found = attentionOf(
+          {
+            waiting: waits().get(id),
+            waitingSince: waitingSince()[id],
+            running: turns.includes(id),
+            runningSince: startedAt()[id],
+            unseen: ends[id],
+          },
+          now,
+        );
+        if (found !== undefined) all.set(id, found);
+      }
+      return all;
+    });
     const activeQueue = createMemo<readonly QueuedPrompt[]>((previous) => waitingPrompts(queue()?.queue ?? [], leaving(), branch(), previous), []);
     // One the log has placed leaves for good, as it arrives: `waitingPrompts` reads only the log's last turns, which
     // move on past it.
@@ -368,6 +530,8 @@ export default defineWebPlugin({
             setRunning(activity.running);
             return;
           case "turn-started":
+            // A late start of a turn already over is not a new turn.
+            if (endedTurns[activity.sessionId] !== activity.turnId) turnStarted(activity.sessionId);
             setRunning(trackTurn({ running: running(), ended: endedTurns }, activity).running);
             return;
           case "queue-changed":
@@ -376,7 +540,10 @@ export default defineWebPlugin({
           case "turn-ended": {
             const next = trackTurn({ running: running(), ended: endedTurns }, activity);
             endedTurns = next.ended;
-            setRunning(next.running);
+            batch(() => {
+              setRunning(next.running);
+              turnEnded(activity.sessionId, activity.reason);
+            });
             if (activity.sessionId !== activeId()) return;
             noteEnded(finished, activity.turnId);
             updateLive((state) => endTurn(state, activity.turnId));
@@ -711,6 +878,8 @@ export default defineWebPlugin({
         }
       } else id = shown.id;
       setAnswered(undefined);
+      // A prompt sent starts a turn, whose end is the one to hear.
+      heardEnd.delete(id);
       if (!running().includes(id)) setRunning((current) => [...current, id]);
       const prompt = startPrompt(client, id, content, options.turn, {
         whenBusy: options.whenBusy ?? "steer",
@@ -770,6 +939,8 @@ export default defineWebPlugin({
         live,
         running,
         busy,
+        attention,
+        markSeen,
         blank,
         pendingCwd,
         drafts,

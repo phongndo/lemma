@@ -362,6 +362,14 @@ const AgentIcon = (props: GlyphProps) => (
   </Icon>
 );
 
+/** A bell: what tells the person, notifications. */
+const BellIcon = (props: GlyphProps) => (
+  <Icon class={props.class}>
+    <path d="M4.25 10.75V7.5a3.75 3.75 0 017.5 0v3.25l1 1.5h-9.5z" />
+    <path d="M6.75 13.75a1.4 1.4 0 002.5 0" />
+  </Icon>
+);
+
 /** The default icons by name. */
 export const icons: Readonly<Record<IconName, Component<GlyphProps>>> = {
   plus: PlusIcon,
@@ -421,6 +429,7 @@ export const icons: Readonly<Record<IconName, Component<GlyphProps>>> = {
   minimize: MinimizeIcon,
   spinner: Spinner,
   agent: AgentIcon,
+  bell: BellIcon,
 };
 
 /** The default `icon` part. */

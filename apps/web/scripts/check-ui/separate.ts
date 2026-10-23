@@ -182,8 +182,7 @@ export const separate = async (): Promise<string> => {
   await styled.click("[role=radio][aria-label='Check teal']");
   await styled.waitForFunction(() => document.documentElement.style.getPropertyValue("--accent") === "rgb(0, 128, 128)", undefined, { timeout: 5_000 });
   await styled.click("[role=radiogroup][aria-label=Scheme] [role=radio]:has-text('Dark')");
-  await styled.click("button[aria-label='Dark theme']");
-  await styled.click("[role=menuitemradio]:has-text('Check night')");
+  await styled.click("[role=radiogroup][aria-label='Dark theme'] [role=radio][aria-label='Check night']");
   await styled
     .waitForFunction(
       () => document.documentElement.style.getPropertyValue("--bg") === "rgb(10, 20, 30)" && document.documentElement.dataset.theme === "dark",
@@ -198,13 +197,12 @@ export const separate = async (): Promise<string> => {
   assert.match(raised, /rgb\(10, 20, 30\)/, `a theme's surfaces do not derive from its background: --bg-raised is ${raised}`);
   // A light theme's too: its raised surfaces rise from its background, not to plain white.
   await styled.click("[role=radiogroup][aria-label=Scheme] [role=radio]:has-text('Light')");
-  await styled.click("button[aria-label='Light theme']");
-  // A menu open in a settings row stays open when its group is asked for its rows again, as when the host answers a
-  // pick, or here a plugin adds a group ahead of it: a row the group gives again is kept, in its section and in a search.
-  const keepsMenu = async (where: string) => {
-    await styled.waitForSelector("[role=menuitemradio]");
+  // A settings row is kept, not drawn again, when its group is asked for its rows again, as when the host answers a
+  // pick, or here a plugin adds a group ahead of it, so what is open or focused in it stays: in its section and in a search.
+  const keepsRow = async (where: string) => {
+    await styled.waitForSelector("[role=radiogroup][aria-label='Light theme'] [role=radio]");
     await styled.evaluate(async () => {
-      document.querySelector("[role=menuitemradio]")!.setAttribute("data-check-kept", "");
+      document.querySelector("[role=radiogroup][aria-label='Light theme'] [role=radio]")!.setAttribute("data-check-kept", "");
       const { SettingsGroups, SectionIds } = (await import("/src/ui/api.ts" as string)).api.contracts;
       (window as any).removeLookGroup = (window as any).lookSlots.add(SettingsGroups, {
         id: "check-recompute",
@@ -215,20 +213,19 @@ export const separate = async (): Promise<string> => {
       });
     });
     await drawn(styled);
-    assert.equal(await styled.locator("[role=menuitemradio][data-check-kept]").count(), 1, `a menu open in a settings row closed ${where}`);
+    assert.equal(await styled.locator("[role=radio][data-check-kept]").count(), 1, `a settings row was drawn again ${where}`);
     await styled.evaluate(() => (window as any).removeLookGroup());
     await drawn(styled);
   };
-  await keepsMenu("as its section's groups were asked again");
-  await styled.click("[role=menuitemradio]:has-text('Check day')");
+  await keepsRow("as its section's groups were asked again");
+  await styled.click("[role=radiogroup][aria-label='Light theme'] [role=radio][aria-label='Check day']");
   await styled.waitForFunction(() => document.documentElement.style.getPropertyValue("--bg") === "rgb(250, 240, 220)", undefined, { timeout: 5_000 });
   const day = await styled.evaluate(async () => (await import("/src/ui/api.ts" as string)).api.look.tokenColor("--bg-raised"));
   const [red, , blue] = [1, 3, 5].map((at) => Number.parseInt(day.slice(at, at + 2), 16)) as [number, number, number];
   assert(day !== "#ffffff" && red - blue > 15, `a light theme's raised surface does not follow its background: ${day}`);
   await styled.fill("[aria-label='Search settings']", "light theme palette");
-  await styled.click(".settings-result button[aria-label='Light theme']");
-  await keepsMenu("in a search result as its section's groups were asked again");
-  await styled.keyboard.press("Escape");
+  await styled.waitForSelector(".settings-result [role=radiogroup][aria-label='Light theme']");
+  await keepsRow("in a search result as its section's groups were asked again");
   await styled.fill("[aria-label='Search settings']", "");
   // The look changes with a stylesheet too (a web half's), once a linked one has loaded: what renderers redraw on.
   await styled.evaluate(async () => {
