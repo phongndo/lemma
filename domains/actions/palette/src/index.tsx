@@ -8,7 +8,7 @@ import { formatKeys, listKey, matchesKeys, quickKey } from "@lemma/web/keys";
 import { createQuickHold } from "@lemma/web/quick-pick";
 import { loadStrings, save } from "@lemma/web/storage";
 import { relativeTime, tildePath } from "@lemma/web/format";
-import { parseQuery, rank, remember } from "@lemma/web/match";
+import { rank, remember } from "@lemma/web/match";
 import type { Searchable } from "@lemma/web/match";
 import { isBlank, sessionTitle, Threads, ThreadWaits, waitingOn } from "@lemma/threads";
 import { SessionChannels } from "@lemma/sessions";
@@ -17,10 +17,23 @@ import { Commands } from "@lemma/commands/web";
 import { Dialogs, Layers } from "@lemma/frame";
 import { Client, Interactions, Slots, WebPlugins, defineWebPlugin, Isolated, Highlighted, usePlugin } from "@lemma/web";
 import { Workspace } from "@lemma/workspace/web";
-import type { PaletteItem, PaletteSource } from "@lemma/actions";
+import type { PaletteItem, PalettePage, PaletteSource } from "@lemma/actions";
 import type { DialogsService } from "@lemma/frame";
 import type { InteractionsService, SlotsService } from "@lemma/web";
-import { ChatIcon, CheckIcon, ChevronIcon, CommandIcon, FolderIcon, GitBranchIcon, KeyIcon, PuzzleIcon, RefreshIcon, SearchIcon, Spinner } from "@lemma/look";
+import {
+  ArrowLeftIcon,
+  ChatIcon,
+  CheckIcon,
+  ChevronIcon,
+  CommandIcon,
+  FolderIcon,
+  GitBranchIcon,
+  KeyIcon,
+  PuzzleIcon,
+  RefreshIcon,
+  SearchIcon,
+  Spinner,
+} from "@lemma/look";
 import styles from "./palette.css?inline";
 
 const DIALOG = "palette";
@@ -33,8 +46,6 @@ interface Deps {
   readonly slots: SlotsService;
   /** An action to ask for at once when the palette opens: its keys were pressed and it needs a value. Taken once read. */
   readonly takeRequested: () => string | undefined;
-  /** What the search starts with when the palette opens (a source's prefix). Taken once read. */
-  readonly takeQuery: () => string | undefined;
   /** The keys that open it, and close it while it shows: its own, or what the user bound it to. Reactive. */
   readonly closeKeys: () => readonly string[];
 }
@@ -55,8 +66,13 @@ interface Asking {
   readonly dismiss: () => void;
 }
 
+/** A page opened above the top level, and how the list it was opened from was left: what was typed, the row chosen. */
+interface Opened {
+  readonly page: PalettePage;
+  readonly from: { readonly query: string; readonly active: number; readonly key: string | undefined };
+}
+
 const RECENT_KEY = "lemma.palette.recent";
-const SESSIONS_BROWSED = 8;
 const RESULTS = 60;
 /** A source's `search` is asked once this many letters are typed, and typing has paused this long (ms). */
 const SEARCH_MIN = 2;
@@ -112,15 +128,19 @@ const CONFIRM: readonly Item[] = [
 /**
  * Cmd+K (Ctrl+K on Windows and Linux): search everything the app can do or
  * open. Every plugin's actions, the host's commands, threads, and projects
- * share one ranked list; `>`, `@`, and `#` narrow it. While open, the palette
- * shows the host's questions in place of the question dialog, so a command
- * that asks (which branch? what name?) continues here.
+ * share one ranked list; an item with a `page` opens a list of its own in its
+ * place. While open, the palette shows the host's questions in place of the
+ * question dialog, so a command that asks (which branch? what name?)
+ * continues here.
  */
 function Palette(props: { deps: Deps }) {
   const { interactions, dialogs, slots } = props.deps;
   const [query, setQuery] = createSignal("");
   const [filter, setFilter] = createSignal("");
   const [active, setActive] = createSignal(0);
+  const [opened, setOpened] = createSignal<readonly Opened[]>([]);
+  /** The page showing, if not the top level. */
+  const page = () => opened().at(-1)?.page;
   const [running, setRunning] = createSignal<Item | undefined>();
   const [local, setLocal] = createSignal<Asking | undefined>();
   const [recent, setRecent] = createSignal(loadRecent());
@@ -138,6 +158,7 @@ function Palette(props: { deps: Deps }) {
     const next = remember(recent(), item.key);
     setRecent(next);
     save(RECENT_KEY, JSON.stringify(next));
+    if (item.page !== undefined) return openPage(item.page());
     if (item.input !== undefined) return void setLocal(askFor(item, item.input()));
     if (item.keepOpen === true) return void execute(item);
     // Closing puts focus back first, so an item that opens a dialog or focuses the prompt keeps its focus.
@@ -148,6 +169,7 @@ function Palette(props: { deps: Deps }) {
   const execute = async (item: Item) => {
     setRunning(item);
     setQuery("");
+    setActive(0);
     const outcome = await Promise.resolve(item.run?.()).catch(() => false);
     // This palette may have closed while it ran; a palette opened since is not its to close.
     if (disposed || running() !== item) return;
@@ -170,10 +192,40 @@ function Palette(props: { deps: Deps }) {
   });
 
   const sources = () => slots.list(PaletteSources);
-  const prefixes = createMemo(() => sources().flatMap((source) => (source.prefix === undefined ? [] : [source.prefix])));
-  /** What a search looks through: every source, or the one whose prefix leads the query. */
-  const pool = (prefix: string | undefined): Item[] =>
-    (prefix === undefined ? sources() : sources().filter((source) => source.prefix === prefix)).flatMap((source) => [...source.items()]);
+  /** What a search at the top level looks through: every source's items. */
+  const pool = (): Item[] => sources().flatMap((source) => [...source.items()]);
+
+  // ---------------------------------------------------------------- pages
+
+  /**
+   * Shows `next` in place of the list, at its current item if it marks one (the theme showing); the list is kept as it
+   * was left, to go back to.
+   */
+  const openPage = (next: PalettePage) => {
+    setOpened((stack) => [...stack, { page: next, from: { query: query(), active: active(), key: items()[active()]?.item.key } }]);
+    setQuery("");
+    setActive(
+      Math.max(
+        0,
+        items().findIndex((row) => row.item.current === true),
+      ),
+    );
+  };
+  /** Goes back to the list the page showing was opened from, as it was left: at the row chosen, though rows moved. */
+  const back = () => {
+    const top = opened().at(-1);
+    if (top === undefined) return;
+    setOpened((stack) => stack.slice(0, -1));
+    setQuery(top.from.query);
+    const at = items().findIndex((row) => row.item.key === top.from.key);
+    setActive(at === -1 ? Math.min(top.from.active, Math.max(items().length - 1, 0)) : at);
+  };
+  /** What is typed: a question's answer or filter, else the search; either starts again at the first row. */
+  const type = (next: string) => {
+    if (asking() !== undefined) setFilter(next);
+    else setQuery(next);
+    setActive(0);
+  };
 
   // ---------------------------------------------------------------- questions
 
@@ -221,11 +273,14 @@ function Palette(props: { deps: Deps }) {
   const [found, setFound] = createSignal<Found>();
   const plugin = usePlugin();
   createEffect(() => {
-    const { prefix, text } = parseQuery(query(), prefixes());
-    const typed = text.trim();
-    const searching = (prefix === undefined ? sources() : sources().filter((source) => source.prefix === prefix)).flatMap((source) =>
-      source.search === undefined ? [] : [{ label: source.searchLabel ?? source.label, search: source.search }],
-    );
+    const typed = query().trim();
+    const shown = page();
+    // At the top level every source's search; on a page, its own.
+    const lists =
+      shown === undefined
+        ? sources().map((source) => ({ search: source.search, label: source.searchLabel ?? source.label }))
+        : [{ search: shown.search, label: shown.searchLabel ?? shown.title.toLowerCase() }];
+    const searching = lists.flatMap(({ search, label }) => (search === undefined ? [] : [{ label, search }]));
     if (asking() !== undefined || running() !== undefined || typed.length < SEARCH_MIN || searching.length === 0) return void setFound(undefined);
     const labels = searching.map((source) => source.label);
     setFound({ text: typed, labels, groups: [], pending: true });
@@ -263,11 +318,14 @@ function Palette(props: { deps: Deps }) {
       return rank(options, filter()).map((ranked, index) => ({ type: "item", item: ranked.item, matches: ranked.matches, index }));
     }
     if (running() !== undefined) return [];
-    const { prefix, text } = parseQuery(query(), prefixes());
+    const shown = page();
+    const text = query();
     let index = 0;
     const item = (entry: { item: Item; matches: readonly number[] }): Row => ({ type: "item", ...entry, index: index++ });
     if (text.trim() !== "") {
-      const ranked = rank(pool(prefix), text, recent()).slice(0, RESULTS).map(item);
+      const ranked = rank(shown === undefined ? pool() : [...shown.items()], text, recent())
+        .slice(0, RESULTS)
+        .map(item);
       // Then what the sources found elsewhere (`search`), but for what is listed already.
       const more = found();
       if (more === undefined || more.text !== text.trim()) return ranked;
@@ -286,15 +344,15 @@ function Palette(props: { deps: Deps }) {
         }),
       ];
     }
-    if (prefix !== undefined) return pool(prefix).map((entry) => item({ item: entry, matches: [] }));
-    // Browsing: recent choices, then each source in order (commands, the latest threads, projects, and what plugins add).
-    const all = pool(undefined);
-    const byKey = new Map(all.map((entry) => [entry.key, entry]));
+    if (shown !== undefined) return shown.items().map((entry) => item({ item: entry, matches: [] }));
+    // Browsing: recent choices, then each source in order, up to its `browse` (the commands, and what plugins add;
+    // threads and projects show as a search finds them).
+    const byKey = new Map(pool().map((entry) => [entry.key, entry]));
     const recentItems = recent()
       .map((key) => byKey.get(key))
       .filter((entry): entry is Item => entry !== undefined)
       .slice(0, 5);
-    const shown = new Set(recentItems.map((entry) => entry.key));
+    const listed = new Set(recentItems.map((entry) => entry.key));
     // A source without a heading (commands) leads; the others are named so the switch from actions to places is visible.
     const section = (label: string | undefined, items: readonly Item[]): Row[] =>
       items.length === 0
@@ -307,7 +365,7 @@ function Palette(props: { deps: Deps }) {
           source.heading,
           source
             .items()
-            .filter((entry) => !shown.has(entry.key))
+            .filter((entry) => !listed.has(entry.key))
             .slice(0, source.browse ?? Number.POSITIVE_INFINITY),
         ),
       ),
@@ -316,9 +374,9 @@ function Palette(props: { deps: Deps }) {
 
   const items = createMemo(() => rows().filter((row): row is Extract<Row, { type: "item" }> => row.type === "item"));
 
-  createEffect(on([query, filter], () => setActive(0), { defer: true }));
+  // The row chosen stays in view, and so does the one a page goes back to.
   createEffect(
-    on(active, (index) => {
+    on([active, page], ([index]) => {
       list?.querySelector(`[data-index="${index}"]`)?.scrollIntoView({ block: "nearest" });
     }),
   );
@@ -379,11 +437,15 @@ function Palette(props: { deps: Deps }) {
       const current = asking();
       // Dismissing a command's question cancels the command; the palette stays for the next thing.
       if (current !== undefined) current.dismiss();
-      else if (running() === undefined && query() !== "") setQuery("");
+      else if (running() === undefined && query() !== "") type("");
+      else if (running() === undefined && page() !== undefined) back();
       else close();
     } else if (event.key === "Backspace" && local() !== undefined && filter() === "") {
       event.preventDefault();
       setLocal(undefined);
+    } else if (event.key === "Backspace" && asking() === undefined && running() === undefined && page() !== undefined && query() === "") {
+      event.preventDefault();
+      back();
     } else if (event.key === "Tab") {
       event.preventDefault();
     }
@@ -391,10 +453,9 @@ function Palette(props: { deps: Deps }) {
 
   onMount(() => {
     const requested = props.deps.takeRequested();
-    const start = props.deps.takeQuery();
-    if (start !== undefined) setQuery(start);
-    const item = requested === undefined ? undefined : pool(undefined).find((candidate) => candidate.key === `action:${requested}`);
-    if (item?.input !== undefined) setLocal(askFor(item, item.input()));
+    const item = requested === undefined ? undefined : pool().find((candidate) => candidate.key === `action:${requested}`);
+    if (item?.page !== undefined) openPage(item.page());
+    else if (item?.input !== undefined) setLocal(askFor(item, item.input()));
     queueMicrotask(() => input.focus());
   });
   onCleanup(() => {
@@ -405,12 +466,13 @@ function Palette(props: { deps: Deps }) {
   // ---------------------------------------------------------------- view
 
   const value = () => (asking() === undefined ? query() : filter());
-  const setValue = (next: string) => (asking() === undefined ? setQuery(next) : setFilter(next));
   const placeholder = () => {
     const question = asking()?.question;
     if (question?.type === "ask") return question.placeholder ?? "Type an answer";
     if (question !== undefined) return "Filter";
     if (running() !== undefined) return `Running ${running()!.title.replace(/…$/, "")}…`;
+    // A page names itself in the empty field: `Dark theme`.
+    if (page() !== undefined) return page()!.placeholder ?? page()!.title;
     return "Search commands, threads, and projects";
   };
   const heading = () => {
@@ -445,7 +507,23 @@ function Palette(props: { deps: Deps }) {
             <div class="palette-heading">{heading()}</div>
           </Show>
           <div class="palette-input palette-input-text">
-            <Show when={running() !== undefined && asking() === undefined} fallback={<ChevronIcon />}>
+            <Show
+              when={running() !== undefined && asking() === undefined}
+              fallback={
+                <Show when={page() !== undefined && asking() === undefined} fallback={<ChevronIcon />}>
+                  <button
+                    type="button"
+                    class="icon-button palette-back"
+                    aria-label="Back"
+                    data-tip="Back"
+                    onMouseDown={(event) => event.preventDefault()}
+                    onClick={back}
+                  >
+                    <ArrowLeftIcon />
+                  </button>
+                </Show>
+              }
+            >
               <Spinner />
             </Show>
             <input
@@ -455,7 +533,7 @@ function Palette(props: { deps: Deps }) {
               aria-expanded="true"
               aria-controls={listId}
               aria-activedescendant={activeId()}
-              aria-label={asking()?.question.title ?? "Search commands, threads, and projects"}
+              aria-label={asking()?.question.title ?? (page() === undefined ? "Search commands, threads, and projects" : `Filter ${page()!.title}`)}
               autocomplete="off"
               autocapitalize="off"
               spellcheck={false}
@@ -463,7 +541,7 @@ function Palette(props: { deps: Deps }) {
               // Read-only, not disabled, while a command runs: a disabled field drops focus, and with it Esc and typing once the command ends.
               readOnly={asking() === undefined && running() !== undefined}
               value={value()}
-              onInput={(event) => setValue(event.currentTarget.value)}
+              onInput={(event) => type(event.currentTarget.value)}
             />
           </div>
           <Show when={questionDetail()}>{(detail) => <p class="palette-question-detail">{detail()}</p>}</Show>
@@ -511,6 +589,11 @@ function Palette(props: { deps: Deps }) {
                           <CheckIcon />
                         </span>
                       </Show>
+                      <Show when={row.item.page}>
+                        <span class="palette-more" aria-hidden="true">
+                          <ChevronIcon />
+                        </span>
+                      </Show>
                     </div>
                   )
                 }
@@ -518,7 +601,9 @@ function Palette(props: { deps: Deps }) {
             </div>
           </Show>
           <Show when={rows().length === 0 && asking() === undefined && running() === undefined}>
-            <div class="palette-empty">Nothing matches “{parseQuery(query(), prefixes()).text.trim()}”</div>
+            <div class="palette-empty">
+              {query().trim() !== "" ? `Nothing matches “${query().trim()}”` : page() === undefined ? "Nothing to show" : `Nothing in ${page()!.title}`}
+            </div>
           </Show>
           <footer class="palette-foot">
             <Show
@@ -539,17 +624,13 @@ function Palette(props: { deps: Deps }) {
                 <kbd>↓</kbd> move
               </span>
               <span>
-                <kbd>↵</kbd> run
+                <kbd>↵</kbd> {items()[active()]?.item.page === undefined ? "run" : "open"}
               </span>
-              <span>
-                <For each={sources().filter((source) => source.prefix !== undefined)}>
-                  {(source) => (
-                    <>
-                      <kbd>{source.prefix}</kbd> {source.label}{" "}
-                    </>
-                  )}
-                </For>
-              </span>
+              <Show when={page() !== undefined}>
+                <span>
+                  <kbd>esc</kbd> back
+                </span>
+              </Show>
               <Show when={props.deps.closeKeys()[0]}>
                 {(keys) => (
                   <span class="palette-foot-end">
@@ -582,7 +663,6 @@ export default defineWebPlugin({
   setup: (services) => {
     const { client, threads, workspace, commands, dialogs, interactions, webPlugins, slots } = services;
     let requested: string | undefined;
-    let startQuery: string | undefined;
     const deps: Deps = {
       interactions,
       dialogs,
@@ -592,18 +672,12 @@ export default defineWebPlugin({
         requested = undefined;
         return id;
       },
-      takeQuery: () => {
-        const start = startQuery;
-        startQuery = undefined;
-        return start;
-      },
       closeKeys: () => keysFor(ActionIds.palette, CLOSE_KEYS, overridesFrom(webPlugins.list())),
     };
     // Its own sources go through the slot a plugin adds a source to (files, symbols): they are defaults, not built in.
     const source = (id: string, order: number, value: PaletteSource) => slots.add(PaletteSources, { id, order, ...value });
     source("palette.commands", 0, {
       label: "commands",
-      prefix: ">",
       items: () => [
         ...slots
           .list(Actions)
@@ -619,6 +693,7 @@ export default defineWebPlugin({
               shortcut: keys === undefined ? undefined : formatKeys(keys),
               icon: action.icon,
               input: action.input,
+              page: action.page,
               run: (value) => action.run(value),
             };
           }),
@@ -654,32 +729,26 @@ export default defineWebPlugin({
       icon: ChatIcon,
       run: () => void threads.select(session.id),
     });
-    source("palette.threads", 10, {
-      label: "threads",
-      heading: "Threads",
-      prefix: "@",
-      browse: SESSIONS_BROWSED,
-      items: () =>
-        threads
-          .list()
-          .filter((session) => !isBlank(session))
-          .sort((a, b) => b.updatedAt - a.updatedAt)
-          .map((session) => threadItem(session, `${workspace.projectName(session.cwd)} · ${stateOf(session)}`)),
-      // What was said in them, the host's search: each thread its title doesn't already list, with the words around it.
-      searchLabel: "messages",
-      search: async (text, { signal }) => {
-        const matches = await client.channel.call(SessionChannels.search, { query: text }, { signal });
-        const byId = new Map(threads.list().map((session) => [session.id, session]));
-        return matches.flatMap((match) => {
-          const session = byId.get(match.sessionId);
-          return session === undefined ? [] : [threadItem(session, `${match.role === "user" ? "You: " : ""}${match.snippet}`)];
-        });
-      },
-    });
+    const threadItems = () =>
+      threads
+        .list()
+        .filter((session) => !isBlank(session))
+        .sort((a, b) => b.updatedAt - a.updatedAt)
+        .map((session) => threadItem(session, `${workspace.projectName(session.cwd)} · ${stateOf(session)}`));
+    // What was said in them, the host's search: each thread its title doesn't already list, with the words around it.
+    const searchThreads: NonNullable<PaletteSource["search"]> = async (text, { signal }) => {
+      const matches = await client.channel.call(SessionChannels.search, { query: text }, { signal });
+      const byId = new Map(threads.list().map((session) => [session.id, session]));
+      return matches.flatMap((match) => {
+        const session = byId.get(match.sessionId);
+        return session === undefined ? [] : [threadItem(session, `${match.role === "user" ? "You: " : ""}${match.snippet}`)];
+      });
+    };
+    // Threads and projects show as what is typed finds them, not among the commands; Search threads lists the threads.
+    source("palette.threads", 10, { label: "threads", browse: 0, items: threadItems, searchLabel: "messages", search: searchThreads });
     source("palette.projects", 20, {
       label: "projects",
-      heading: "Projects",
-      prefix: "#",
+      browse: 0,
       items: () => {
         return workspace.projects().map((path) => ({
           key: `project:${path}`,
@@ -709,7 +778,7 @@ export default defineWebPlugin({
       // Opens over any other dialog; a question the host asks keeps the screen until answered.
       global: true,
       when: () => dialogs.current() === DIALOG || interactions.open().length === 0,
-      // With an action's id, opens asking for that action's value (the keymap does this for an action that needs one).
+      // With an action's id, opens asking for that action's value (the keymap does this for an action that needs one), or at its page.
       run: (actionId) => {
         if (actionId !== undefined) {
           requested = actionId;
@@ -726,8 +795,10 @@ export default defineWebPlugin({
       keys: "mod+p",
       global: true,
       when: () => interactions.open().length === 0,
+      page: () => ({ title: "Threads", items: threadItems, search: searchThreads, searchLabel: "messages" }),
+      // Its keys open the palette at its page.
       run: () => {
-        startQuery = "@";
+        requested = ActionIds.searchThreads;
         dialogs.open(undefined);
         queueMicrotask(() => dialogs.open(DIALOG));
       },
