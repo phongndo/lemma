@@ -11,9 +11,7 @@ import {
   themeFor,
   themeTokens,
   CheckIcon,
-  ChevronDownIcon,
   Markdown,
-  Popover,
   Segmented,
   SendIcon,
   SettingRow,
@@ -84,23 +82,11 @@ export function SchemePicker(props: { readonly deps: Deps }) {
   );
 }
 
-/** A theme in miniature: its background, and its own accent beside it. */
-function Swatch(props: { readonly scheme: Scheme; readonly theme: SlotItem<Theme> | undefined }) {
-  return (
-    <span
-      data-theme={props.scheme}
-      style={themeTokens(props.theme)}
-      aria-hidden="true"
-      class="tw:flex tw:h-4 tw:w-6 tw:shrink-0 tw:overflow-hidden tw:rounded-xs tw:border tw:border-border-strong"
-    >
-      <span class="tw:flex-1 tw:bg-bg" />
-      <span class="tw:w-2 tw:bg-accent" />
-    </span>
-  );
-}
-
-/** The themes offered for `scheme`, as a menu, each with its swatch. */
-export function ThemeChoice(props: { readonly deps: Deps; readonly scheme: Scheme }) {
+/**
+ * The themes offered for `scheme`, as cards that show each in its own colors: its background and text, a line of code,
+ * and its accent. The one showing is marked in the app's accent.
+ */
+export function ThemeCards(props: { readonly deps: Deps; readonly scheme: Scheme }) {
   const field = props.scheme === "light" ? "lightTheme" : "darkTheme";
   const offered = () => props.deps.choices().themes.filter((theme) => theme.scheme === props.scheme);
   const shown = () => themeFor(props.deps.settings(), props.deps.choices().themes, props.scheme);
@@ -112,45 +98,42 @@ export function ThemeChoice(props: { readonly deps: Deps; readonly scheme: Schem
       ? "Shown in the light scheme, and by day when following the system."
       : "Shown in the dark scheme, and by night when following the system.");
   return (
-    <SettingRow title={title} description={description()}>
-      <Popover
-        label={title}
-        tip={title}
-        placement="bottom-end"
-        triggerClass="field tw:flex tw:h-[30px] tw:w-50 tw:items-center tw:gap-2 tw:text-md tw:text-text"
-        trigger={
-          <>
-            <Swatch scheme={props.scheme} theme={shown()} />
-            <span class="tw:min-w-0 tw:flex-1 tw:truncate tw:text-left">{shown()?.title ?? "None"}</span>
-            <ChevronDownIcon />
-          </>
-        }
-      >
-        {(close) => (
-          <For each={offered()}>
-            {(theme) => (
-              <button
-                class="menu-item"
-                role="menuitemradio"
-                aria-checked={shown()?.id === theme.id}
-                onClick={() => {
-                  props.deps.set(field, theme.id === fallback()?.id ? undefined : theme.id);
-                  close();
-                }}
-              >
-                <span class="menu-check">
-                  <Show when={shown()?.id === theme.id}>
-                    <CheckIcon />
-                  </Show>
+    <div class="theme-setting">
+      <div class="setting-text">
+        <div class="setting-title">{title}</div>
+        <div class="setting-desc">{description()}</div>
+      </div>
+      <div role="radiogroup" aria-label={title} class="theme-cards">
+        <For each={offered()}>
+          {(theme) => (
+            <button
+              type="button"
+              role="radio"
+              class="theme-card"
+              aria-checked={shown()?.id === theme.id}
+              aria-label={theme.title}
+              onClick={() => props.deps.set(field, theme.id === fallback()?.id ? undefined : theme.id)}
+            >
+              <span class="theme-card-sample" data-theme={props.scheme} style={themeTokens(theme)} aria-hidden="true">
+                <span class="theme-card-top">
+                  <span class="theme-card-type">Aa</span>
+                  <span class="theme-card-accent" />
                 </span>
-                <Swatch scheme={props.scheme} theme={theme} />
-                <span class="menu-label">{theme.title}</span>
-              </button>
-            )}
-          </For>
-        )}
-      </Popover>
-    </SettingRow>
+                <span class="theme-card-code">
+                  <span class="theme-card-keyword">let</span> x = <span class="theme-card-string">"lemma"</span>
+                </span>
+              </span>
+              <span class="theme-card-name">
+                {theme.title}
+                <Show when={shown()?.id === theme.id}>
+                  <CheckIcon />
+                </Show>
+              </span>
+            </button>
+          )}
+        </For>
+      </div>
+    </div>
   );
 }
 

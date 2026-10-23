@@ -2,3 +2,115 @@
   /* The swatch for any other accent: every hue, around a circle. */
   --color-wheel: conic-gradient(oklch(0.7 0.18 25), oklch(0.75 0.16 85), oklch(0.72 0.17 150), oklch(0.68 0.15 250), oklch(0.65 0.2 310), oklch(0.7 0.18 25));
 }
+
+/* A theme setting: its name over a card for each theme, which shows it in its own colors. */
+.theme-setting {
+  display: grid;
+  gap: 10px;
+  padding: 12px 0;
+}
+
+.theme-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(118px, 1fr));
+  gap: 10px;
+}
+
+.theme-card {
+  /* The ring around the theme showing, in the app's own accent: read here, before the sample's tokens take over. */
+  --card-ring: var(--accent);
+  --card-hover: var(--border-strong);
+  display: grid;
+  gap: 6px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--text-2);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+/* The theme's own colors: `data-theme` and the theme's tokens on it, as the swatches have them. */
+.theme-card-sample {
+  display: grid;
+  gap: 8px;
+  padding: 10px 11px;
+  border-radius: var(--radius);
+  background: var(--bg);
+  color: var(--text);
+  box-shadow: inset 0 0 0 1px var(--border-strong);
+  outline: 2px solid transparent;
+  outline-offset: 2px;
+  transition: outline-color 120ms ease;
+}
+
+.theme-card:hover .theme-card-sample {
+  outline-color: var(--card-hover);
+}
+
+.theme-card[aria-checked="true"] .theme-card-sample {
+  outline-color: var(--card-ring);
+}
+
+.theme-card:focus-visible {
+  outline: none;
+}
+
+.theme-card:focus-visible .theme-card-sample {
+  outline-color: var(--card-ring);
+}
+
+.theme-card-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.theme-card-type {
+  font-size: calc(18px * var(--text-scale));
+  font-weight: 500;
+  line-height: 1;
+}
+
+.theme-card-accent {
+  width: 18px;
+  height: 10px;
+  border-radius: var(--radius-full);
+  background: var(--accent);
+}
+
+.theme-card-code {
+  overflow: hidden;
+  color: var(--text-2);
+  font-family: var(--font-mono);
+  font-size: calc(10.5px * var(--text-scale));
+  white-space: nowrap;
+}
+
+.theme-card-keyword {
+  color: var(--code-keyword, var(--accent-text));
+}
+
+.theme-card-string {
+  color: var(--code-string, var(--ok));
+}
+
+.theme-card-name {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding-left: 2px;
+  font-size: calc(12.5px * var(--text-scale));
+}
+
+.theme-card[aria-checked="true"] .theme-card-name {
+  color: var(--text);
+  font-weight: 500;
+}
+
+.theme-card-name .icon {
+  width: 12px;
+  height: 12px;
+  color: var(--accent-text);
+}

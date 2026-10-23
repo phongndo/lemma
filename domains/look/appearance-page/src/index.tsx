@@ -18,7 +18,7 @@ import { Actions } from "@lemma/actions";
 import { SectionIds, SettingsGroups, SettingsSections } from "@lemma/settings";
 import { Notify, Slots, WebPlugins, defineWebPlugin } from "@lemma/web";
 import styles from "./appearance-page.css?inline";
-import { AccentPicker, CornersSetting, FontSetting, PluginSwitch, Preview, SchemePicker, TextSizeSetting, ThemeChoice, WidthSetting } from "./views.tsx";
+import { AccentPicker, CornersSetting, FontSetting, PluginSwitch, Preview, SchemePicker, TextSizeSetting, ThemeCards, WidthSetting } from "./views.tsx";
 import type { Choices, Deps } from "./views.tsx";
 
 const isColor = (value: string) => CSS.supports("color", value);
@@ -119,7 +119,7 @@ export default defineWebPlugin({
       get text() {
         return `${scheme === "light" ? "Light" : "Dark"} theme palette ${titles(scheme)}`;
       },
-      view: () => <ThemeChoice deps={deps} scheme={scheme} />,
+      view: () => <ThemeCards deps={deps} scheme={scheme} />,
     });
     const lightRow = themeRow("light");
     const darkRow = themeRow("dark");
