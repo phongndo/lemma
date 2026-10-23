@@ -6,6 +6,7 @@ import { contextSize } from "./context-size.ts";
 import { DEFAULT_THINKING, filterModels, thinkingLevels, Models, LlmActionIds, ModelPickerPart, ProviderLogo, ThinkingPickerPart } from "@lemma/llm/web";
 import type { ModelPickerProps, ThinkingPickerProps } from "@lemma/llm/web";
 import { Actions } from "@lemma/actions";
+import type { PaletteItem } from "@lemma/actions";
 import { SectionIds, SettingsGroups } from "@lemma/settings";
 import { ComposerControls, PromptCommands, ThreadsActionIds } from "@lemma/threads";
 import { Slots, defineWebPlugin } from "@lemma/web";
@@ -534,6 +535,25 @@ export default defineWebPlugin({
         },
       }),
     );
+    const providerOf = (id: string) => models.providers().find((provider) => provider.id === id);
+    /** The models as the palette lists them: starred first, each with its provider's logo and name. */
+    const modelItems = (): PaletteItem[] => {
+      const starred = new Set(models.favorites());
+      const all = models.models();
+      return [...all.filter((model) => starred.has(model.ref)), ...all.filter((model) => !starred.has(model.ref))].map((model) => {
+        const provider = providerOf(model.provider);
+        const name = provider?.name ?? model.provider;
+        return {
+          key: `model:${model.ref}`,
+          title: model.name,
+          detail: name,
+          keywords: [name, model.id, ...(starred.has(model.ref) ? ["starred", "favorite"] : [])],
+          icon: () => <ProviderLogo id={model.provider} name={name} custom={provider?.logo} />,
+          current: models.selected()?.ref === model.ref,
+          run: () => models.choose(model.ref),
+        };
+      });
+    };
     add(
       slots.add(Actions, {
         id: "model-picker.open",
@@ -545,6 +565,8 @@ export default defineWebPlugin({
         // As Codex and T3 Code have it.
         keys: "mod+shift+m",
         when: () => open() !== undefined,
+        // In the palette, a page of the models, starred first; its keys open the composer's picker.
+        page: () => ({ title: "Model", items: modelItems }),
         run: () => open()?.(),
       }),
     );
@@ -559,6 +581,16 @@ export default defineWebPlugin({
         // As T3 Code has it: E for effort.
         keys: "mod+shift+e",
         when: () => openThinking() !== undefined,
+        page: () => ({
+          title: "Reasoning",
+          items: () =>
+            thinkingLevels(models.selected()).map((level): PaletteItem => ({
+              key: `thinking:${level}`,
+              title: LEVEL_LABEL[level],
+              current: level === (models.thinking() ?? DEFAULT_THINKING),
+              run: () => models.chooseThinking(level),
+            })),
+        }),
         run: () => openThinking()?.(),
       }),
     );
