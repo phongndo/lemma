@@ -4,17 +4,23 @@ import {
   APPEARANCE_PLUGIN,
   LEGACY_KEYS,
   LOOK_PLUGINS,
+  SCHEMES,
   decodeSettings,
+  defaultTheme,
   legacySettings,
   resolveLook,
   settingValue,
+  themeFor,
+  themeTokens,
   Accents,
   Fonts,
   Themes,
+  LaptopIcon,
   PaletteIcon,
 } from "@lemma/look";
-import type { AppearanceSettings, Field, Scheme, SchemeChoice } from "@lemma/look";
-import { Actions } from "@lemma/actions";
+import type { Accent, AppearanceSettings, Field, Scheme } from "@lemma/look";
+import { ActionIds, Actions } from "@lemma/actions";
+import type { PaletteItem, PalettePage } from "@lemma/actions";
 import { SectionIds, SettingsGroups, SettingsSections } from "@lemma/settings";
 import { Notify, Slots, WebPlugins, defineWebPlugin } from "@lemma/web";
 import styles from "./appearance-page.css?inline";
@@ -34,7 +40,7 @@ const same = (a: AppearanceSettings, b: AppearanceSettings) => {
 };
 
 /**
- * Settings › Appearance, and the palette's commands for the scheme: an editor
+ * Settings › Appearance, and the palette's Theme page: an editor
  * of the `appearance` plugin's config, which it reads from the plugin list and
  * writes as the Plugins page would, without depending on that plugin, so it
  * stays put while the plugin restarts with each change. Its preview resolves
@@ -255,22 +261,93 @@ export default defineWebPlugin({
       entries: () => switchRows.filter((row) => pluginRow(row.id) !== undefined),
     });
 
-    const schemes: readonly { readonly value: SchemeChoice; readonly title: string }[] = [
-      { value: "light", title: "Use the light scheme" },
-      { value: "dark", title: "Use the dark scheme" },
-      { value: "system", title: "Follow the system scheme" },
-    ];
-    for (const [index, scheme] of schemes.entries()) {
-      slots.add(Actions, {
-        id: `appearance.scheme.${scheme.value}`,
-        order: 200 + index,
-        title: scheme.title,
-        category: "Appearance",
-        icon: PaletteIcon,
-        keywords: ["theme", "dark mode", "light mode"],
-        when: () => (settings().scheme ?? "system") !== scheme.value,
-        run: () => set("scheme", scheme.value),
-      });
-    }
+    // The palette's Theme page: the Theme group's choices, the scheme, each scheme's theme, and the accent, each theme and
+    // accent shown in its own colors.
+    const themeSwatch = (scheme: Scheme, theme: Parameters<typeof themeTokens>[0]) => () => (
+      <span class="appearance-swatch appearance-swatch-theme" data-theme={scheme} style={themeTokens(theme)} />
+    );
+    const accentSwatch = (color: string) => () => <span class="appearance-swatch" style={{ background: color }} />;
+    const colorOf = (accent: Accent) => (typeof accent.color === "string" ? accent.color : accent.color[look().scheme]);
+    const themePage = (scheme: Scheme): PalettePage => {
+      const field = scheme === "light" ? "lightTheme" : "darkTheme";
+      return {
+        title: scheme === "light" ? "Light theme" : "Dark theme",
+        items: () => {
+          const themes = choices().themes;
+          const shown = themeFor(settings(), themes, scheme);
+          const fallback = defaultTheme(themes, scheme);
+          return themes
+            .filter((theme) => theme.scheme === scheme)
+            .map((theme) => ({
+              key: `appearance.theme:${theme.id}`,
+              title: theme.title,
+              icon: themeSwatch(scheme, theme),
+              current: shown?.id === theme.id,
+              run: () => set(field, theme.id === fallback?.id ? undefined : theme.id),
+            }));
+        },
+      };
+    };
+    const accentPage: PalettePage = {
+      title: "Accent",
+      items: () => [
+        {
+          key: "appearance.accent:theme",
+          title: "The theme's own",
+          icon: themeSwatch(look().scheme, themeFor(settings(), choices().themes, look().scheme)),
+          current: settings().accent === undefined,
+          run: () => set("accent", undefined),
+        },
+        ...choices().accents.map((accent) => ({
+          key: `appearance.accent:${accent.id}`,
+          title: accent.title,
+          icon: accentSwatch(colorOf(accent)),
+          current: settings().accent === accent.id,
+          run: () => set("accent", accent.id),
+        })),
+      ],
+    };
+    const themeItems = (): PaletteItem[] => {
+      const scheme = settings().scheme ?? "system";
+      const shownTheme = (each: Scheme) => themeFor(settings(), choices().themes, each);
+      const accent = settings().accent;
+      const preset = choices().accents.find((each) => each.id === accent);
+      return [
+        // Light and dark show their theme; the system's, the computer it follows.
+        ...SCHEMES.map((choice) => ({
+          key: `appearance.scheme:${choice.value}`,
+          category: "Scheme",
+          title: choice.label,
+          keywords: ["mode"],
+          icon: choice.value === "system" ? LaptopIcon : themeSwatch(choice.value, shownTheme(choice.value)),
+          current: scheme === choice.value,
+          run: () => set("scheme", choice.value),
+        })),
+        ...[...(choosingLight() ? (["light"] as const) : []), ...(choosingDark() ? (["dark"] as const) : [])].map((each: Scheme) => ({
+          key: `appearance.${each}-theme`,
+          title: each === "light" ? "Light theme" : "Dark theme",
+          detail: shownTheme(each)?.title,
+          icon: themeSwatch(each, shownTheme(each)),
+          page: () => themePage(each),
+        })),
+        {
+          key: "appearance.accent",
+          title: "Accent",
+          detail: accent === undefined ? "The theme's own" : (preset?.title ?? accent),
+          icon: accent === undefined ? themeSwatch(look().scheme, shownTheme(look().scheme)) : accentSwatch(preset === undefined ? accent : colorOf(preset)),
+          page: () => accentPage,
+        },
+      ];
+    };
+    slots.add(Actions, {
+      id: "appearance.theme",
+      order: 200,
+      title: "Theme…",
+      category: "Appearance",
+      icon: PaletteIcon,
+      keywords: ["scheme", "dark mode", "light mode", "accent", "color", "colour"],
+      page: () => ({ title: "Theme", items: themeItems }),
+      run: () => slots.get(Actions, ActionIds.palette)?.run("appearance.theme"),
+    });
   },
 });

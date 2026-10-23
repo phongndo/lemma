@@ -144,22 +144,44 @@ export const parts = async (): Promise<string> => {
   }
   await page.click(".main-head .card-toggle");
   await page.waitForSelector(".thread-card", { state: "detached", timeout: 5_000 });
-  // A palette source: its items come up in the palette, and its prefix narrows to it.
+  // A palette source: its items come up in the palette as they are searched for.
   await page.evaluate(async () => {
-    const { PaletteSources } = (await import("/src/ui/api.ts" as string)).api.contracts;
-    const remove = (window as any).checkSlots.add(PaletteSources, {
-      id: "check.source",
-      order: 1_000,
-      label: "checks",
-      heading: "Checks",
-      prefix: "!",
-      items: () => [{ key: "check:one", title: "Check item one", run: () => {} }],
-    });
-    ((window as any).removals ??= []).push(remove);
+    const { Actions, PaletteSources } = (await import("/src/ui/api.ts" as string)).api.contracts;
+    const add = (window as any).checkSlots.add;
+    ((window as any).removals ??= []).push(
+      add(PaletteSources, {
+        id: "check.source",
+        order: 1_000,
+        label: "checks",
+        heading: "Checks",
+        items: () => [{ key: "check:one", title: "Check item one", run: () => {} }],
+      }),
+      // An action with a page: picking it opens its list in place of the palette's.
+      add(Actions, {
+        id: "check.paged",
+        title: "Check pages",
+        page: () => ({ title: "Checked", items: () => [{ key: "check:paged", title: "Check page item", run: () => {} }] }),
+        run: () => {},
+      }),
+    );
   });
   await page.keyboard.press("ControlOrMeta+k");
-  await page.fill(".palette-input input", "!");
+  await page.fill(".palette-input input", "check item one");
   await page.waitForSelector(".palette-row >> text=Check item one", { timeout: 5_000 }).catch(() => assert.fail("a palette source's items do not show"));
+  // A page opens in place of the list; going back finds the list as it was left, what was typed and the row chosen.
+  await page.fill(".palette-input input", "check pages");
+  await page
+    .waitForSelector(".palette-row[data-active=true] >> text=Check pages", { timeout: 5_000 })
+    .catch(() => assert.fail("an action with a page is not listed"));
+  await page.keyboard.press("Enter");
+  await page.waitForSelector(".palette-row >> text=Check page item", { timeout: 5_000 }).catch(() => assert.fail("an action's page does not open"));
+  assert.equal(await page.getAttribute(".palette-input input", "placeholder"), "Checked", "a page does not name itself in the field");
+  assert.equal(await page.inputValue(".palette-input input"), "", "a page opens with what was typed before it");
+  await page.keyboard.press("Backspace");
+  await page
+    .waitForSelector(".palette-row[data-active=true] >> text=Check pages", { timeout: 5_000 })
+    .catch(() => assert.fail("Backspace on a page did not go back to its row"));
+  assert.equal(await page.inputValue(".palette-input input"), "check pages", "going back loses what was typed");
   // Escape clears the search, then closes.
   await page.keyboard.press("Escape");
   await page.keyboard.press("Escape");
@@ -963,13 +985,17 @@ export const parts = async (): Promise<string> => {
     .waitForSelector(`${rowOf(pinning)} .thread-state[data-state=waiting]:has-text('Needs input')`, { timeout: 5_000 })
     .catch(() => assert.fail("a thread waiting on the person does not say so"));
   await page.evaluate(() => (window as any).removeWait());
-  // Search floats: the head's button opens the palette's thread search, which finds what was said in threads too.
+  // Search floats: the head's button opens the palette's threads, whose search finds what was said in them too.
   await page.click(".sidebar-head [aria-label='Search threads']");
-  await page.waitForFunction(() => (document.querySelector(".palette input") as HTMLInputElement | null)?.value === "@", undefined, { timeout: 5_000 });
+  await page
+    .waitForSelector(".palette-input input[placeholder='Threads']", { timeout: 5_000 })
+    .catch(() => assert.fail("Search does not open the palette's threads"));
   await page.keyboard.type("depend each");
   await page
     .waitForSelector(".palette-section:has-text('In messages') + .palette-row", { timeout: 5_000 })
     .catch(() => assert.fail("searching threads does not find what was said in them"));
+  // Escape clears the search, goes back to the top level, then closes.
+  await page.keyboard.press("Escape");
   await page.keyboard.press("Escape");
   await page.keyboard.press("Escape");
   await page.waitForSelector(".palette input", { state: "detached" });

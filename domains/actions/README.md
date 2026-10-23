@@ -12,10 +12,10 @@ What a person does with keys and the palette. Its contract is [`@lemma/actions`]
 
 What the contract offers in each of the [five shapes](../../docs/plugins.md#the-five-shapes):
 
-| Shape     | What the contract offers                                                                                                                                                       |
-| --------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Add       | `Actions` (an action, with its default keys; it hears them held but their last, `onHold`), `PaletteSources` (a list the palette searches, and a search of its own: the host's) |
-| Intercept | Nothing: rebinding is the keymap's config                                                                                                                                      |
-| Observe   | Nothing                                                                                                                                                                        |
-| Call      | Run an action by id (`slots.get(Actions, id)?.run()`)                                                                                                                          |
-| Serve     | Nothing                                                                                                                                                                        |
+| Shape     | What the contract offers                                                                                                                                                                                                       |
+| --------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Add       | `Actions` (an action, with its default keys; it hears them held but their last, `onHold`; or a list of its own the palette opens, `page`), `PaletteSources` (a list the palette searches, and a search of its own: the host's) |
+| Intercept | Nothing: rebinding is the keymap's config                                                                                                                                                                                      |
+| Observe   | Nothing                                                                                                                                                                                                                        |
+| Call      | Run an action by id (`slots.get(Actions, id)?.run()`)                                                                                                                                                                          |
+| Serve     | Nothing                                                                                                                                                                                                                        |

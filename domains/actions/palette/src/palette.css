@@ -88,3 +88,18 @@
   color: var(--text-3);
   font-size: calc(12px * var(--text-scale));
 }
+
+/* On a page, its back button takes the prompt's place, its edge where the prompt's icon sits. */
+.palette-back {
+  margin-left: -7px;
+  margin-right: -4px;
+}
+
+/* An item that opens a page. */
+.palette-more {
+  flex: none;
+  display: inline-grid;
+  place-items: center;
+  width: 20px;
+  color: var(--text-3);
+}
