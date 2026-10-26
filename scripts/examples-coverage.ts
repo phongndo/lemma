@@ -7,25 +7,10 @@ import { extensionPoints, walk } from "./sources.ts";
 // handles it, or observes it. Reading a registry or slot, running a hook, publishing an event, and drawing a part are
 // its owner's work, so they do not count. Users are bundled plugins, examples, and contracts' own code (a contract that
 // streams an event to clients observes it), outside tests. A capability is left out: its provider is its user.
-// This fails on a point with no user that `NO_USER` does not name, and on a `NO_USER` entry that has a user or is gone.
+// This fails on a point with no user: use it in a plugin or an example, or remove it.
 // It also reports how many points the examples show, as they are the reference a plugin author reads. `--list` names
 // the examples that import each point, and the points none does. `pnpm check` runs it.
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-
-/** Points with no user yet, each with why. */
-const NO_USER: Readonly<Record<string, string>> = {
-  "context.CompactionHook": "no user yet",
-  "frame.TopRegion": "no user yet",
-  "llm.Providers": "no user yet",
-  "llm.LlmProviderHeadersHook": "no user yet",
-  "llm.LlmProviderResponse": "no user yet",
-  "llm.LlmProviderStreamEvent": "no user yet",
-  "mcp.McpServers": "no user yet",
-  "threads.ComposerFooter": "no user yet",
-  "threads.TrajectoryTabs": "no user yet",
-  "tools.ToolExecuteHook": "no user yet",
-  "tools.ToolExecuted": "no user yet",
-};
 
 /** The calls that take a point first and are its owner's: any other call that does (`add`, `on`, `observe`, `stream`) uses it. */
 const OWNER_CALLS = new Set(["list", "first", "get", "owner", "fail", "items", "changes", "invoke", "publish", "partView"]);
@@ -57,8 +42,7 @@ for (const file of [join(root, "domains"), join(root, "examples")].flatMap(walk)
 }
 const plugged = points.filter((point) => point.kind !== "capability");
 const withUser = plugged.filter((point) => used.has(point.name));
-const unused = plugged.filter((point) => !used.has(point.name) && NO_USER[point.id] === undefined);
-const stale = Object.keys(NO_USER).filter((id) => !plugged.some((point) => point.id === id) || withUser.some((point) => point.id === id));
+const unused = plugged.filter((point) => !used.has(point.name));
 
 /**
  * The names an example imports from each `@lemma/` package (a subpath counts as its package), and under `*` those a
@@ -96,7 +80,7 @@ const rows = points.map((point) => ({
 const shown = rows.filter((row) => row.examples.length > 0);
 
 console.log(
-  `extension points with a user: ${withUser.length} of ${plugged.length} (registries, hooks, events, slots, parts), ${Object.keys(NO_USER).length} in NO_USER; examples show ${shown.length} of ${rows.length}`,
+  `extension points with a user: ${withUser.length} of ${plugged.length} (registries, hooks, events, slots, parts); examples show ${shown.length} of ${rows.length}`,
 );
 if (process.argv.includes("--list")) {
   for (const row of shown) console.log(`  ${row.id}: ${row.examples.join(", ")}`);
@@ -107,12 +91,8 @@ if (process.argv.includes("--list")) {
       .join(", ")}`,
   );
 }
-if (unused.length > 0 || stale.length > 0) {
+if (unused.length > 0) {
   const script = relative(root, fileURLToPath(import.meta.url));
-  if (unused.length > 0)
-    console.error(
-      `Extension points with no user (${script}): ${unused.map((point) => point.id).join(", ")}. Use each in a plugin or an example, or remove it.`,
-    );
-  if (stale.length > 0) console.error(`NO_USER entries that have a user or are gone (${script}): ${stale.join(", ")}. Remove them.`);
+  console.error(`Extension points with no user (${script}): ${unused.map((point) => point.id).join(", ")}. Use each in a plugin or an example, or remove it.`);
   process.exit(1);
 }

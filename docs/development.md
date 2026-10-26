@@ -148,7 +148,8 @@ Its counts are the same on every machine, and they are hard budgets.
   hook, event, slot, or part with no user.
   - A user adds to the point, handles it, or observes it, outside tests. It is
     a bundled plugin, an example, or a contract.
-  - The script's `NO_USER` names the points allowed without a user.
+  - A point with no user is either given one (a plugin, or an example) or
+    removed. There is no list of exceptions.
   - It also reports how many points the examples show. `--list` says which
     examples show each.
 - **Test hygiene.** Tests wait for a condition, never a fixed time. They make
