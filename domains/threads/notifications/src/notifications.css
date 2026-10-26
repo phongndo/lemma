@@ -98,7 +98,7 @@
 
 .thread-notice-title {
   overflow: hidden;
-  font-size: calc(13px * var(--text-scale));
+  font-size: var(--font-size-md);
   font-weight: 500;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -107,7 +107,7 @@
 .thread-notice-detail {
   overflow: hidden;
   color: var(--text-3);
-  font-size: calc(12px * var(--text-scale));
+  font-size: var(--font-size-sm);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -143,7 +143,7 @@
 .notify-grid-head {
   min-height: 32px;
   color: var(--text-3);
-  font-size: calc(12px * var(--text-scale));
+  font-size: var(--font-size-sm);
   font-weight: 500;
 }
 

@@ -52,7 +52,7 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: calc(14px * var(--text-scale));
+  font-size: var(--font-size-base);
   font-weight: 600;
   color: var(--text);
 }
@@ -87,7 +87,7 @@
   height: 24px;
   margin: -3px 0 -3px -8px;
   padding: 0 7px;
-  font-size: calc(13.5px * var(--text-scale));
+  font-size: var(--font-size-md);
   font-weight: 500;
 }
 
@@ -97,7 +97,7 @@
 
 .profiles-dialog-text {
   margin: 10px 0 0;
-  font-size: calc(13px * var(--text-scale));
+  font-size: var(--font-size-md);
   line-height: 1.5;
 }
 

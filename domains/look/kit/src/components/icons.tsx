@@ -266,7 +266,7 @@ const BrainIcon = (props: GlyphProps) => (
     <path d="M6 3a2 2 0 00-2 2 2 2 0 00-1 3.5A2 2 0 005 12a2 2 0 003 .5V3.5A2 2 0 006 3zM10 3a2 2 0 012 2 2 2 0 011 3.5 2 2 0 01-2 3.5 2 2 0 01-3 .5" />
   </Icon>
 );
-const Spinner = (props: GlyphProps) => <span class={`spinner ${props.class ?? ""}`} aria-hidden="true" />;
+const Spinner = (props: GlyphProps) => <span class={`spinner ${props.class ?? ""}`} aria-hidden="true" data-motion />;
 const ChatIcon = (props: GlyphProps) => (
   <Icon class={props.class}>
     <path d="M3 4.5A1.5 1.5 0 014.5 3h7A1.5 1.5 0 0113 4.5v5a1.5 1.5 0 01-1.5 1.5H7l-3 2.5V11h.5A1.5 1.5 0 013 9.5z" />

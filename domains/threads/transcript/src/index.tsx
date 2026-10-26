@@ -638,7 +638,7 @@ const workGroupView = (slots: SlotsService) =>
 function WorkingView(props: ChatWorkingProps) {
   return (
     <div class="chat-working">
-      <span class="pulse" />
+      <span class="pulse" data-motion />
       Working
       <Show when={props.startedAt}>{(started) => <span class="working-time">{formatElapsed(props.now - started())}</span>}</Show>
     </div>

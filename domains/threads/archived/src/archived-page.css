@@ -21,7 +21,7 @@
   flex: none;
   margin-right: 4px;
   color: var(--text-3);
-  font-size: calc(12px * var(--text-scale));
+  font-size: var(--font-size-sm);
   font-variant-numeric: tabular-nums;
 }
 
@@ -54,7 +54,7 @@
 .archived-filter-label {
   min-width: 0;
   overflow: hidden;
-  font-size: calc(12.5px * var(--text-scale));
+  font-size: var(--font-size-sm);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -73,7 +73,7 @@
 
 .archived-chosen {
   margin: 0 6px 0 2px;
-  font-size: calc(12.5px * var(--text-scale));
+  font-size: var(--font-size-sm);
   font-weight: 500;
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
@@ -82,7 +82,7 @@
 .archived-hidden {
   margin-right: 6px;
   color: var(--text-3);
-  font-size: calc(12px * var(--text-scale));
+  font-size: var(--font-size-sm);
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
@@ -176,7 +176,7 @@
   gap: 16px;
   margin: 0 0 2px;
   color: var(--text-3);
-  font-size: calc(12.5px * var(--text-scale));
+  font-size: var(--font-size-sm);
   font-weight: 500;
 }
 
@@ -220,7 +220,7 @@
   min-width: 0;
   overflow: hidden;
   color: var(--text);
-  font-size: calc(13.5px * var(--text-scale));
+  font-size: var(--font-size-md);
   text-decoration: none;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -239,7 +239,7 @@
   column-gap: 10px;
   min-width: 0;
   color: var(--text-3);
-  font-size: calc(12px * var(--text-scale));
+  font-size: var(--font-size-sm);
 }
 
 .archived-meta:empty {
@@ -285,7 +285,7 @@
 
 .archived-time {
   color: var(--text-3);
-  font-size: calc(12px * var(--text-scale));
+  font-size: var(--font-size-sm);
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
@@ -377,7 +377,7 @@
 
 .archived-empty h2 {
   margin: 0;
-  font-size: calc(15px * var(--text-scale));
+  font-size: var(--font-size-lg);
   color: var(--text);
 }
 

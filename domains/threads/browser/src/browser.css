@@ -25,7 +25,7 @@
   border-radius: var(--radius-sm);
   background: var(--bg-sunk);
   color: var(--text-2);
-  font-size: calc(13px * var(--text-scale));
+  font-size: var(--font-size-md);
   outline: none;
 }
 
@@ -93,12 +93,12 @@
   flex-direction: column;
   align-items: center;
   gap: 10px;
-  font-size: calc(13px * var(--text-scale));
+  font-size: var(--font-size-md);
   text-align: center;
 }
 
 .browser-note h2 {
-  font-size: calc(15px * var(--text-scale));
+  font-size: var(--font-size-lg);
   font-weight: 600;
 }
 
@@ -140,5 +140,5 @@ body:has(.resizing) .browser-page {
 
 .browser-search-setting .field {
   height: 30px;
-  font-size: calc(13px * var(--text-scale));
+  font-size: var(--font-size-md);
 }

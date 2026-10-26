@@ -139,6 +139,22 @@ export const typing = (target: EventTarget | null): boolean =>
 export const stepFor = (key: string, index: number, length: number): number | undefined =>
   key === "ArrowDown" ? Math.min(length - 1, index + 1) : key === "ArrowUp" ? Math.max(0, index - 1) : undefined;
 
+/**
+ * Where a key moves the choice in a radio group of `length` options, as ARIA's pattern has it: either arrow along
+ * either axis, wrapping at the ends, and Home and End to the first and last. Undefined for any other key. The group is
+ * one Tab stop (the checked option's `tabindex` 0, the rest -1), and moving checks the option moved to.
+ */
+export const radioStep = (key: string, index: number, length: number): number | undefined =>
+  key === "ArrowRight" || key === "ArrowDown"
+    ? (index + 1) % length
+    : key === "ArrowLeft" || key === "ArrowUp"
+      ? (index - 1 + length) % length
+      : key === "Home"
+        ? 0
+        : key === "End"
+          ? length - 1
+          : undefined;
+
 /** What a key does in a list being searched: moves the active item, or picks one of the first nine at once. */
 export type ListKey = { readonly move: 1 | -1 } | { readonly pick: number };
 

@@ -68,7 +68,7 @@
 }
 
 .theme-card-type {
-  font-size: calc(18px * var(--text-scale));
+  font-size: var(--font-size-xl);
   font-weight: 500;
   line-height: 1;
 }
@@ -84,7 +84,7 @@
   overflow: hidden;
   color: var(--text-2);
   font-family: var(--font-mono);
-  font-size: calc(10.5px * var(--text-scale));
+  font-size: var(--font-size-2xs);
   white-space: nowrap;
 }
 
@@ -101,7 +101,7 @@
   align-items: center;
   gap: 4px;
   padding-left: 2px;
-  font-size: calc(12.5px * var(--text-scale));
+  font-size: var(--font-size-sm);
 }
 
 .theme-card[aria-checked="true"] .theme-card-name {
