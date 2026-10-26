@@ -170,6 +170,8 @@ export default defineWebPlugin({
     };
     /** Its edge from the keys: ← and → narrow and widen it a step, Enter puts it back, as a double-click does. */
     const resizeKeys = (event: KeyboardEvent) => {
+      // With a modifier, an arrow is someone else's (a word, back): only a plain one moves the edge.
+      if (event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
       if (event.key === "Enter") {
         event.preventDefault();
         return resetWidth();
