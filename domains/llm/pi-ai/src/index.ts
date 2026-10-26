@@ -5,24 +5,11 @@ import type { AuthCheck, AuthContext, Provider, SimpleStreamOptions } from "@ear
 import { setOAuthPageRenderer } from "@earendil-works/pi-ai/utils/oauth-page";
 import { builtinProviders } from "@earendil-works/pi-ai/providers/all";
 import { Events, Hooks, Registries, definePlugin } from "@lemma/core";
-import type { Contribution, HandlerStep } from "@lemma/core";
-import { Channels, creditOf, HostControl, inChainOrder, Notice, Paths } from "@lemma/contracts";
+import type { Contribution } from "@lemma/core";
+import { Channels, HostControl, Notice, Paths } from "@lemma/contracts";
 import { Credentials } from "@lemma/credentials";
-import {
-  Llm,
-  LLM_CONTRACT,
-  LlmError,
-  LlmProviderHeadersHook,
-  LlmProviderResponse,
-  LlmProviderStreamEvent,
-  makeSignIns,
-  ModelsChanged,
-  parseModelRef,
-  Providers,
-  serveLlm,
-  streamThroughHook,
-} from "@lemma/llm";
-import type { AuthType, LlmRequest, LoginOptions, ProviderHeaders, ProviderInfo, ProviderSpec, StreamEvent } from "@lemma/llm";
+import { Llm, LLM_CONTRACT, LlmError, makeSignIns, ModelsChanged, parseModelRef, Providers, serveLlm, streamThroughHook } from "@lemma/llm";
+import type { AuthType, LlmRequest, LoginOptions, ProviderInfo, ProviderSpec, StreamEvent } from "@lemma/llm";
 import { accountOf } from "./account.ts";
 import type { Account } from "./account.ts";
 import { credentialStore, runner, signInInteraction } from "./auth.ts";
@@ -80,10 +67,6 @@ const Config = Schema.Struct({
       title: "Prompt cache retention",
       description: "How long providers keep a session's prompt cache: short (about 5 minutes) or long (an hour, where offered; writing it costs more).",
     }),
-  providerEvents: Schema.Boolean.pipe(Schema.withDecodingDefaultType(Effect.sync(() => false))).annotate({
-    title: "Provider events",
-    description: "Publish each event of a provider's stream as it sent it (LlmProviderStreamEvent), for debugging an adapter. Costly; off by default.",
-  }),
 });
 type Config = typeof Config.Type;
 
@@ -93,11 +76,6 @@ const requestIdOf = (headers: Readonly<Record<string, string>>): string | undefi
   const lower = new Map(Object.entries(headers).map(([key, value]) => [key.toLowerCase(), value]));
   return REQUEST_ID_HEADERS.map((name) => lower.get(name)).find((value) => value !== undefined);
 };
-
-type Headers = Readonly<Record<string, string | null>>;
-/** The headers whose values differ between `before` and `after`, by name. */
-const headerChanges = (before: Headers, after: Headers): string[] =>
-  [...new Set([...Object.keys(before), ...Object.keys(after)])].filter((name) => before[name] !== after[name]).sort();
 
 /** What `providerOptions` (`LlmRequest`) pi-ai passes on: a temperature, sampling parameters, and metadata. */
 const passedOn = (options: LlmRequest["providerOptions"]): Pick<SimpleStreamOptions, "temperature" | "samplingParams" | "metadata"> => {
@@ -406,28 +384,8 @@ export function makeLlmPlugin(options: Options = {}) {
           const provider = model === undefined ? undefined : models.getProvider(model.provider);
           if (model === undefined || provider === undefined) return yield* Effect.fail(unknownModel(request.model));
           const reasoning = reasoningFor(model, request.thinking);
-          // Plugins may add, change, or drop headers, over what would be sent (the model's own and Lemma's User-Agent);
-          // who changed which is told back with the answer, values never.
-          const steps: HandlerStep<ProviderHeaders, Headers>[] = [];
-          const headers = yield* hooks
-            .invoke(
-              LlmProviderHeadersHook,
-              { request, provider: model.provider, headers: { ...model.headers, ...identityHeaders(model) } },
-              (input) => Effect.succeed(input.headers),
-              {
-                onStep: (step) => void steps.push(step),
-              },
-            )
-            .pipe(Effect.orDie);
-          const handlers = inChainOrder(steps).map((step) =>
-            creditOf(step, [
-              ...new Set([
-                ...(step.next === undefined ? [] : headerChanges(step.input.headers, step.next.input.headers)),
-                ...(step.output === undefined ? [] : headerChanges(step.next?.output ?? step.input.headers, step.output)),
-              ]),
-            ]),
-          );
-          const where = { ...(request.sessionId === undefined ? {} : { sessionId: request.sessionId }), provider: model.provider, model: request.model };
+          // The model's own headers, and Lemma's User-Agent.
+          const headers = { ...model.headers, ...identityHeaders(model) };
           return Stream.callback<StreamEvent>((queue) =>
             Effect.acquireRelease(
               Effect.sync(() => {
@@ -436,15 +394,9 @@ export function makeLlmPlugin(options: Options = {}) {
                 let closed = false;
                 /** The provider's answer, held until `start` has gone out: a stream begins with `start`. */
                 let answer: StreamEvent | undefined;
-                let told = false;
                 let started = false;
                 const send = (out: StreamEvent[]) => {
                   if (closed || out.length === 0) return;
-                  // A request that failed before the provider answered (refused before its body, or never sent) still says
-                  // who shaped its headers.
-                  if (!told && answer === undefined && handlers.length > 0 && out.some((event) => event.type === "error")) {
-                    answer = { type: "provider", credit: { handlers } };
-                  }
                   // Where in `out` what was held goes: right after its `start`, first once the stream has started, or
                   // before an error that came with no `start`.
                   const startAt = out.findIndex((event) => event.type === "start");
@@ -453,7 +405,6 @@ export function makeLlmPlugin(options: Options = {}) {
                   if (answer !== undefined && at >= 0) {
                     out = [...out.slice(0, at), answer, ...out.slice(at)];
                     answer = undefined;
-                    told = true;
                   }
                   Queue.offerAllUnsafe(queue, out);
                 };
@@ -466,20 +417,11 @@ export function makeLlmPlugin(options: Options = {}) {
                   ...(request.maxTokens === undefined ? {} : { maxTokens: request.maxTokens }),
                   ...(request.sessionId === undefined ? {} : { sessionId: request.sessionId }),
                   ...passedOn(request.providerOptions),
-                  // Before its body: told to the caller, logged with the answer, and published.
+                  // Before its body: told to the caller, and logged with the answer.
                   onResponse: (response) => {
                     const requestId = requestIdOf(response.headers);
-                    answer = {
-                      type: "provider",
-                      status: response.status,
-                      ...(requestId === undefined ? {} : { requestId }),
-                      ...(handlers.length === 0 ? {} : { credit: { handlers } }),
-                    };
-                    Effect.runFork(events.publish(LlmProviderResponse, { ...where, status: response.status, headers: response.headers }));
+                    answer = { type: "provider", status: response.status, ...(requestId === undefined ? {} : { requestId }) };
                   },
-                  ...(config.providerEvents
-                    ? { onProviderStreamEvent: (data: unknown) => void Effect.runFork(events.publish(LlmProviderStreamEvent, { ...where, data })) }
-                    : {}),
                 };
                 const close = (out: StreamEvent[]) => {
                   send(out);

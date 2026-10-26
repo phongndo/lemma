@@ -684,8 +684,8 @@ export function runTurn(services: TurnServices, settings: TurnSettings, input: T
       const startedAt = yield* Clock.currentTimeMillis;
       let firstTokenAt: number | undefined;
       let settled: Extract<StreamEvent, { type: "done" | "error" }> | undefined;
-      /** How the provider answered, before its body, and who shaped the headers: logged with what comes of the call. */
-      let answered: { readonly response?: ProviderAnswer; readonly credit?: ResultCredit } | undefined;
+      /** How the provider answered, before its body: logged with what comes of the call. */
+      let response: ProviderAnswer | undefined;
       const partial = live.startStep(stepId, startedAt);
       state.partial = partial;
       state.partialStartedAt = startedAt;
@@ -694,12 +694,7 @@ export function runTurn(services: TurnServices, settings: TurnSettings, input: T
           Effect.gen(function* () {
             // Not model output: kept for the log, not streamed to clients.
             if (event.type === "provider") {
-              answered = {
-                ...(event.status === undefined
-                  ? {}
-                  : { response: { status: event.status, ...(event.requestId === undefined ? {} : { requestId: event.requestId }) } }),
-                ...(event.credit === undefined ? {} : { credit: event.credit }),
-              };
+              response = { status: event.status, ...(event.requestId === undefined ? {} : { requestId: event.requestId }) };
               return;
             }
             if (firstTokenAt === undefined && isFirstToken(event)) firstTokenAt = yield* Clock.currentTimeMillis;
@@ -715,10 +710,7 @@ export function runTurn(services: TurnServices, settings: TurnSettings, input: T
       // often come together, and the observers of both would otherwise wait for the answer's logging, then its tools.
       yield* Effect.yieldNow;
       const timing = { startedAt, ...(firstTokenAt === undefined ? {} : { firstTokenAt }), endedAt: yield* Clock.currentTimeMillis };
-      const answer = {
-        ...(answered?.response === undefined ? {} : { response: answered.response }),
-        ...(answered?.credit === undefined ? {} : { credit: answered.credit }),
-      };
+      const answer = response === undefined ? {} : { response };
       // A call that failed as the core shut down failed because of it, maybe: asked again when the turn resumes, not logged.
       if (settled === undefined || (settled.type === "error" && settled.message.stopReason !== "aborted")) yield* unlessClosing;
       return yield* Effect.uninterruptible(

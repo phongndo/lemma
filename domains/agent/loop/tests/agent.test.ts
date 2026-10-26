@@ -561,7 +561,6 @@ describe("agent", () => {
         type: "provider" as const,
         status: 200,
         requestId: "req-7",
-        credit: { handlers: [{ source: "tracer", ms: 0.1, changed: ["x-trace"] }] },
       }),
       reply("hi"),
     );
@@ -576,10 +575,7 @@ describe("agent", () => {
         const logged = events.find((event) => event.data.type === "request")!;
         expect(rebuildRequest(branchOf(events, logged.id), logged.id, id)?.providerOptions).toEqual({ temperature: 0.2 });
         const answer = ofType(events, "message").find((data) => data.message.role === "assistant");
-        expect(answer).toMatchObject({
-          response: { status: 200, requestId: "req-7" },
-          credit: { handlers: [{ source: "tracer", changed: ["x-trace"] }] },
-        });
+        expect(answer).toMatchObject({ response: { status: 200, requestId: "req-7" } });
         expect(rec.deltas.map((event) => event.type)).toEqual(["start", "text-delta", "text-delta", "done"]);
       }),
     );

@@ -37,9 +37,8 @@ that put something in it (`pluginShares`). Requires `Threads` and the runtime's
   holds in time order only: a table sorted otherwise is flat.
 - **The pipeline**, from the log: for a model call, the compactions and prompt updates before its
   request, the `AgentRequestHook` handlers (each one's own time and what it
-  changed), the failed attempts and when each was asked again, the answer, the
-  `LlmProviderHeadersHook` handlers, and why the turn went on or stopped
-  (`AgentContinueHook`); for a tool run, the `ToolExecuteHook` handlers, the
+  changed), the failed attempts and when each was asked again, the answer, and
+  why the turn went on or stopped (`AgentContinueHook`); for a tool run, the `ToolExecuteHook` handlers, the
   guards' decisions, and where the registry cut the result.
 - **The context menu** inspects a record's request, copies it as sent (rebuilt
   from the log with `rebuildRequest`), copies the record's payload, result,

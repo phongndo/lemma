@@ -1,8 +1,8 @@
-import { Cause, Context, Data, Deferred, Effect, Equal, Exit, Fiber, Predicate, Result, Schema, Stream } from "effect";
+import { Cause, Context, Data, Deferred, Effect, Equal, Exit, Fiber, Result, Schema, Stream } from "effect";
 import type { Scope } from "effect";
 import { Event, Hook, Registry } from "@lemma/core";
 import type { Events, HandlerStep, Hooks } from "@lemma/core";
-import { defineChannel, eventFeed, inChainOrder, ResultCredit, serveChannel } from "@lemma/contracts";
+import { defineChannel, eventFeed, inChainOrder, serveChannel } from "@lemma/contracts";
 import type { Channel } from "@lemma/contracts";
 
 // Message shapes follow pi-ai's provider-neutral format so opaque provider
@@ -521,15 +521,13 @@ export const StreamEvent = Schema.Union([
   Schema.Struct({ type: Schema.Literal("done"), message: AssistantMessage }),
   /**
    * How the provider answered (sent after `start`, before the body): its HTTP status and its request id, when it
-   * answered with a response it streams, and who shaped what was sent (`LlmProviderHeadersHook`'s handlers: the headers
-   * each changed, never their values), however it went. Not model output. A request it refused, or that never reached
-   * it, has no status: the `error` event after says why.
+   * answered with a response it streams. Not model output. A request it refused, or that never reached it, has none:
+   * the `error` event after says why.
    */
   Schema.Struct({
     type: Schema.Literal("provider"),
-    status: Schema.optional(Schema.Number),
+    status: Schema.Number,
     requestId: Schema.optional(Schema.String),
-    credit: Schema.optional(ResultCredit),
   }),
   /**
    * `message.stopReason` is `error` or `aborted`; `message.errorMessage` explains it, and `failure` classifies an error.
@@ -603,55 +601,6 @@ export const streamThroughHook = (
         );
     }),
   );
-
-/** The HTTP headers a provider is about to send a request with (a `null` value drops a default one), and for what. */
-export interface ProviderHeaders {
-  readonly request: LlmRequest;
-  /** The provider's id. */
-  readonly provider: string;
-  readonly headers: Readonly<Record<string, string | null>>;
-}
-
-/**
- * Around the headers of every request a provider of `Llm` sends: a handler adds, changes, or drops headers (a
- * gateway's key, a trace id), returning what `next` gives it changed. It is handed what would be sent (the model's own
- * headers, and the provider's defaults); the terminal returns them as they are. Who changed which header is told back
- * as the stream's `provider` event, and logged with the answer or the failed attempt; values never are, as headers
- * carry credentials. So headers are the provider's transport, not part of the request the log rebuilds
- * (`rebuildRequest`): what changes the model's behavior goes in `LlmRequest` (its `providerOptions`).
- *
- * @composition a chain: each handler returns the headers `next` gave it, changed (`null` drops one). A handler that
- * fails fails the call before it is sent. Checked: it returns a record of strings and nulls.
- */
-export const LlmProviderHeadersHook = Hook.make<ProviderHeaders, Readonly<Record<string, string | null>>>("lemma/llm.provider-headers", {
-  check: {
-    output: (value) =>
-      Predicate.isObject(value) && Object.values(value).every((header) => header === null || typeof header === "string")
-        ? undefined
-        : "expected headers: { [name]: string | null }",
-  },
-  summary: { input: (input) => ({ provider: input.provider, headers: Object.keys(input.headers).length }) },
-});
-
-/** A provider answered a request with a response it streams: its status and headers, before its body. Published by a provider of `Llm`. */
-export const LlmProviderResponse = Event.make<{
-  readonly sessionId?: string;
-  readonly provider: string;
-  readonly model: ModelRef;
-  readonly status: number;
-  readonly headers: Readonly<Record<string, string>>;
-}>("lemma/llm.provider.response");
-
-/**
- * Each event of a provider's stream as the provider sent it, before it is made a `StreamEvent`: for debugging an
- * adapter. Published only while its provider plugin is told to (`llm.pi-ai`'s `providerEvents`), as it is costly.
- */
-export const LlmProviderStreamEvent = Event.make<{
-  readonly sessionId?: string;
-  readonly provider: string;
-  readonly model: ModelRef;
-  readonly data: unknown;
-}>("lemma/llm.provider.stream-event");
 
 /**
  * What `Llm.providers` and `Llm.models` list changed; clients list them

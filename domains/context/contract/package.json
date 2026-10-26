@@ -2,7 +2,7 @@
   "name": "@lemma/context",
   "version": "0.1.0",
   "private": true,
-  "description": "The context domain's contract: compactions, and the hook around them",
+  "description": "The context domain's contract: its version, as its plugins add to the agent's",
   "type": "module",
   "exports": {
     ".": "./src/index.ts"

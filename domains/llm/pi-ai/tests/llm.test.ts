@@ -11,7 +11,7 @@ import type { ClassifierContext, ClassifierOptions, Provider, SimpleStreamOption
 import { anthropicProvider } from "@earendil-works/pi-ai/providers/anthropic";
 import { typesafeProvider } from "@earendil-works/pi-ai/providers/typesafe";
 import { Events, PluginContext, definePlugin, makeCore } from "@lemma/core";
-import { Llm, LlmError, LlmProviderHeadersHook, LlmProviderResponse, LlmRequest, LlmRequestHook, ModelsChanged, Providers, StreamEvent } from "@lemma/llm";
+import { Llm, LlmError, LlmRequest, LlmRequestHook, ModelsChanged, Providers, StreamEvent } from "@lemma/llm";
 import type { Credential } from "@lemma/credentials";
 import { deviceId } from "../src/device.ts";
 import { credentialStore, makeEventMapper, makeLlmPlugin, runner } from "../src/index.ts";
@@ -1263,10 +1263,9 @@ describe("deviceId", () => {
 });
 
 describe("identity", () => {
-  it("lets a plugin change a request's headers, and tells who changed which, how the provider answered, and what it passed on", async () => {
-    const received: { trace?: string | undefined; body?: unknown } = {};
+  it("tells how the provider answered, and passes on what it was told to", async () => {
+    const received: { body?: unknown } = {};
     const server = createServer((request, response) => {
-      received.trace = request.headers["x-trace"] as string | undefined;
       let body = "";
       request.on("data", (chunk) => (body += String(chunk)));
       request.on("end", () => {
@@ -1280,40 +1279,26 @@ describe("identity", () => {
     await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
     const { port } = server.address() as AddressInfo;
     const providers = [{ id: "local", api: "openai-completions", baseUrl: `http://127.0.0.1:${port}/v1`, apiKey: { value: "sk-test" }, models: [{ id: "m" }] }];
-    const responses: unknown[] = [];
-    const tracer = definePlugin({
-      id: "tracer",
-      layer: Layer.effectDiscard(
-        Effect.gen(function* () {
-          const owner = yield* PluginContext;
-          yield* owner.on(LlmProviderHeadersHook, (input, next) => Effect.map(next(input), (headers) => ({ ...headers, "x-trace": "t-1" })));
-          yield* owner.observe(LlmProviderResponse, (response) => Effect.sync(() => void responses.push(response)));
-        }),
-      ),
-    });
     const { plugins } = setup({ providers: () => [] });
     try {
       const events = await runWith(
-        [...plugins, tracer],
+        plugins,
         collect(new LlmRequest({ model: "local/m", messages: [user("hi")], sessionId: "s1", providerOptions: { temperature: 0.2 } })),
         { "llm.pi-ai": { providers } },
       );
-      expect(received).toMatchObject({ trace: "t-1", body: { temperature: 0.2 } });
-      expect([...events].find((event) => event.type === "provider")).toEqual({
-        type: "provider",
-        status: 200,
-        requestId: "req-7",
-        credit: { handlers: [{ source: "tracer", ms: expect.any(Number), changed: ["x-trace"] }] },
-      });
-      await expect.poll(() => responses.length).toBe(1);
-      expect(responses[0]).toMatchObject({ sessionId: "s1", provider: "local", model: "local/m", status: 200, headers: { "x-request-id": "req-7" } });
+      expect(received).toMatchObject({ body: { temperature: 0.2 } });
+      expect([...events].find((event) => event.type === "provider")).toEqual({ type: "provider", status: 200, requestId: "req-7" });
     } finally {
       server.close();
     }
   });
 
-  it("hands the headers hook the model's own headers, and says who changed which though the provider refused the request", async () => {
-    const server = createServer((_, response) => void response.writeHead(401, { "content-type": "application/json" }).end('{"error":{"message":"bad key"}}'));
+  it("sends the model's own headers, and tells no answer for a request the provider refused", async () => {
+    const received: { team?: string | undefined } = {};
+    const server = createServer((request, response) => {
+      received.team = request.headers["x-team"] as string | undefined;
+      response.writeHead(401, { "content-type": "application/json" }).end('{"error":{"message":"bad key"}}');
+    });
     await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
     const { port } = server.address() as AddressInfo;
     const providers = [
@@ -1326,28 +1311,12 @@ describe("identity", () => {
         models: [{ id: "m" }],
       },
     ];
-    const handed: Record<string, string | null>[] = [];
-    const gateway = definePlugin({
-      id: "gateway",
-      layer: Layer.effectDiscard(
-        Effect.flatMap(PluginContext, (owner) =>
-          owner.on(LlmProviderHeadersHook, (input, next) => {
-            handed.push({ ...input.headers });
-            return Effect.map(next(input), (headers) => ({ ...headers, Authorization: "Bearer gateway" }));
-          }),
-        ),
-      ),
-    });
     const { plugins } = setup({ providers: () => [] });
     try {
-      const events = [
-        ...(await runWith([...plugins, gateway], collect(new LlmRequest({ model: "local/m", messages: [user("hi")] })), { "llm.pi-ai": { providers } })),
-      ];
-      expect(handed).toMatchObject([{ "X-Team": "agents" }]);
-      // No status: it was refused. Who changed the headers is told all the same, before the error.
-      const told = events.findIndex((event) => event.type === "provider");
-      expect(events[told]).toEqual({ type: "provider", credit: { handlers: [{ source: "gateway", ms: expect.any(Number), changed: ["Authorization"] }] } });
-      expect(events.findIndex((event) => event.type === "error")).toBeGreaterThan(told);
+      const events = [...(await runWith(plugins, collect(new LlmRequest({ model: "local/m", messages: [user("hi")] })), { "llm.pi-ai": { providers } }))];
+      expect(received.team).toBe("agents");
+      expect(events.some((event) => event.type === "provider")).toBe(false);
+      expect(events.at(-1)?.type).toBe("error");
     } finally {
       server.close();
     }

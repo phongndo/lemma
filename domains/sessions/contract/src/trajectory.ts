@@ -92,9 +92,8 @@ export interface TrajectoryAttempt {
   readonly failure?: LlmFailure;
   /** Asked again, and when (see the `attempt` event). */
   readonly retry?: { readonly reason: "failure" | "restart"; readonly attempt: number; readonly at: number };
-  /** How the provider answered before the call failed, and who shaped the headers sent. */
+  /** How the provider answered before the call failed. */
   readonly provider?: ProviderAnswer;
-  readonly credit?: ResultCredit;
 }
 
 export interface TrajectoryStep {
@@ -109,9 +108,8 @@ export interface TrajectoryStep {
     readonly eventId: string;
     readonly message: AssistantMessage;
     readonly timing?: Timing;
-    /** How the provider answered, before its body, and who shaped the headers sent (`LlmProviderHeadersHook`). */
+    /** How the provider answered, before its body. */
     readonly provider?: ProviderAnswer;
-    readonly credit?: ResultCredit;
   };
   readonly attempts: readonly TrajectoryAttempt[];
   /**
@@ -530,7 +528,6 @@ function foldTrajectory(whole?: readonly SessionEvent[]): TrajectoryFold {
           ...(data.failure === undefined ? {} : { failure: data.failure }),
           ...(data.retry === undefined ? {} : { retry: data.retry }),
           ...(data.response === undefined ? {} : { provider: data.response }),
-          ...(data.credit === undefined ? {} : { credit: data.credit }),
         });
         turn.usage = addUsage(turn.usage, data.message.usage);
         return;
@@ -552,7 +549,6 @@ function foldTrajectory(whole?: readonly SessionEvent[]): TrajectoryFold {
             message,
             ...(data.timing === undefined ? {} : { timing: data.timing }),
             ...(data.response === undefined ? {} : { provider: data.response }),
-            ...(data.credit === undefined ? {} : { credit: data.credit }),
           };
           step.tools = message.content.filter((block): block is ToolCall => block.type === "toolCall").map((call) => ({ call }));
           turn.usage = addUsage(turn.usage, message.usage);

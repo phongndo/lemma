@@ -1,6 +1,6 @@
 # context
 
-What the model is told beyond the conversation, and how a conversation is kept within its model's window. Its contract is [`@lemma/context`](contract/src/index.ts): the hook around a compaction. Its plugins otherwise add to the agent's ([`@lemma/agent`](../agent/contract/src/agent.ts)), as a plugin of your own would.
+What the model is told beyond the conversation, and how a conversation is kept within its model's window. Its contract, [`@lemma/context`](contract/src/index.ts), holds only its version. Its plugins add to the agent's ([`@lemma/agent`](../agent/contract/src/agent.ts)), as a plugin of your own would.
 
 | Plugin                                       | Halves    | What it does                                                                                                                                                                                   |
 | -------------------------------------------- | --------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -11,10 +11,10 @@ What the model is told beyond the conversation, and how a conversation is kept w
 
 What the contract offers in each of the [five shapes](../../docs/plugins.md#the-five-shapes):
 
-| Shape     | What the contract offers                                                                                                      |
-| --------- | ----------------------------------------------------------------------------------------------------------------------------- |
-| Add       | The agent's `PromptSections`                                                                                                  |
-| Intercept | `CompactionHook`: a compaction about to be made (write its summary, move its cut, or skip it); the agent's `AgentRequestHook` |
-| Observe   | The agent's and the sessions' events                                                                                          |
-| Call      | `Sessions`, `Llm`, and the rest, as any plugin                                                                                |
-| Serve     | Nothing of its own                                                                                                            |
+| Shape     | What the contract offers                                                                          |
+| --------- | ------------------------------------------------------------------------------------------------- |
+| Add       | The agent's `PromptSections`                                                                      |
+| Intercept | The agent's `AgentRequestHook`: a handler in its `fit` phase may append a `compaction` of its own |
+| Observe   | The agent's and the sessions' events                                                              |
+| Call      | `Sessions`, `Llm`, and the rest, as any plugin                                                    |
+| Serve     | Nothing of its own                                                                                |
