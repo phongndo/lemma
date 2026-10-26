@@ -6,7 +6,7 @@ import { Accessibility, AutoScroller, Feedback, PointerActivationConstraints } f
 import { RestrictToVerticalAxis } from "@dnd-kit/abstract/modifiers";
 import { RestrictToElement } from "@dnd-kit/dom/modifiers";
 import type { SessionInfo, SessionMarks } from "@lemma/sessions";
-import { formatKeys, withKeys } from "@lemma/web/keys";
+import { formatKeys, stepFor, withKeys } from "@lemma/web/keys";
 import { loadJson, recordOf, save } from "@lemma/web/storage";
 import { dragEdge } from "@lemma/web/drag";
 import { ActionIds, Actions, shownKeysOf } from "@lemma/actions";
@@ -684,15 +684,14 @@ const keepFocus = (plugin: Pick<WebPluginContext<unknown>, "listen">, list: HTML
   return { focusIn: remember, focusOut: (event: FocusEvent) => forget(event.relatedTarget) };
 };
 
-/** Moves focus between rows with ↑ and ↓. */
+/** Moves focus between rows with ↑ and ↓ (`stepFor`). */
 const rowKeys = (event: KeyboardEvent): void => {
-  const step = event.key === "ArrowUp" ? -1 : event.key === "ArrowDown" ? 1 : 0;
-  if (step === 0) return;
   const rows = [...(event.currentTarget as HTMLElement).querySelectorAll<HTMLElement>("[data-session-row]")];
   const index = rows.indexOf(document.activeElement as HTMLElement);
-  if (index === -1) return;
+  const next = index === -1 ? undefined : stepFor(event.key, index, rows.length);
+  if (next === undefined) return;
   event.preventDefault();
-  rows[Math.max(0, Math.min(rows.length - 1, index + step))]?.focus();
+  rows[next]?.focus();
 };
 
 /**

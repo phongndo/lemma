@@ -2,6 +2,7 @@ import { createMemo, createSignal, createEffect, onCleanup, untrack } from "soli
 import { ComposerCompletions, findCommandLine, findTrigger } from "@lemma/threads";
 import type { ComposerCompletion, ComposerCompletionAnswer, ComposerSuggestion, TriggerMatch } from "@lemma/threads";
 import type { SlotItem, SlotsService } from "@lemma/web";
+import { wrapStep } from "@lemma/web/keys";
 
 /** What one completion source has for the word: its suggestions and note, or why it has none. */
 export interface CompletionGroup {
@@ -142,7 +143,7 @@ export function createCompletion(slots: SlotsService, text: () => string, cursor
     },
     move: (by: number) => {
       const all = items();
-      if (all.length > 0) setChosen(all[(active() + by + all.length) % all.length]!.key);
+      if (all.length > 0) setChosen(all[wrapStep(active(), by, all.length)]!.key);
     },
     dismiss: () => setDismissed(match() === undefined ? undefined : run()),
   };

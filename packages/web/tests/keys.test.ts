@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { bindingOf, formatKeys, holdsKeys, listKey, matchesKeys, quickKey, radioGroupKey, radioStep, typedWithAltGr } from "../src/keys.ts";
+import { bindingOf, formatKeys, holdsKeys, listKey, matchesKeys, quickKey, radioGroupKey, radioStep, stepFor, typedWithAltGr, wrapStep } from "../src/keys.ts";
 
 // Not a Mac here, so `mod` is Ctrl. Node has a `navigator` that reports the host, so pin it.
 vi.hoisted(() => {
@@ -110,6 +110,24 @@ describe("listKey", () => {
     expect(listKey(press("ArrowDown", "ArrowDown", { alt: true }))).toBeUndefined();
     expect(quickKey(0)).toBe("Ctrl+1");
     expect(quickKey(9)).toBeUndefined();
+  });
+});
+
+describe("wrapStep and stepFor", () => {
+  it("go round past either end, as the palette does", () => {
+    expect(wrapStep(1, 1, 3)).toBe(2);
+    expect(wrapStep(2, 1, 3)).toBe(0);
+    expect(wrapStep(0, -1, 3)).toBe(2);
+    expect(stepFor("ArrowDown", 2, 3)).toBe(0);
+    expect(stepFor("ArrowUp", 0, 3)).toBe(2);
+  });
+
+  it("from nothing, go to the first forward and the last back; an empty list has nowhere to go", () => {
+    expect(wrapStep(-1, 1, 3)).toBe(0);
+    expect(wrapStep(-1, -1, 3)).toBe(2);
+    expect(wrapStep(0, 1, 0)).toBe(-1);
+    expect(stepFor("ArrowDown", 0, 0)).toBeUndefined();
+    expect(stepFor("Enter", 0, 3)).toBeUndefined();
   });
 });
 
