@@ -10,12 +10,6 @@
   "scripts": {
     "check": "tsrs --noEmit"
   },
-  "dependencies": {
-    "@lemma/core": "workspace:*",
-    "@lemma/llm": "workspace:*",
-    "@lemma/sessions": "workspace:*",
-    "effect": "4.0.5"
-  },
   "devDependencies": {
     "@types/node": "24.19.2",
     "tsrs": "0.20.0-ts7.1.0-beta"

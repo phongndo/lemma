@@ -1269,19 +1269,6 @@ importers:
         version: 5.0.5(@types/node@24.19.2)(vite@8.3.4(@types/node@24.19.2)(esbuild@0.28.2)(jiti@2.7.0))
 
   domains/context/contract:
-    dependencies:
-      '@lemma/core':
-        specifier: workspace:*
-        version: link:../../../packages/core
-      '@lemma/llm':
-        specifier: workspace:*
-        version: link:../../llm/contract
-      '@lemma/sessions':
-        specifier: workspace:*
-        version: link:../../sessions/contract
-      effect:
-        specifier: 4.0.5
-        version: 4.0.5
     devDependencies:
       '@types/node':
         specifier: 24.19.2
