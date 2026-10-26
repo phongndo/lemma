@@ -187,21 +187,21 @@ export function makeJobs(options: { readonly now?: () => number; readonly newId?
   };
 }
 
-/** Each host's background commands in this process, by the key its plugin's first instance made. */
-const hosts = new Map<string, Jobs>();
+/** Each host's background commands in this process, by its core's `Events`. */
+const hosts = new WeakMap<object, Jobs>();
 
 /**
- * One host's background commands, which each instance of its plugin attaches to by the key the first made and handed
- * to its replacement (`PluginContext.handoff`): kept outside the instance, as the core hands a replacement only what
- * clones and a running process does not, so a reload (a config change) does not stop what runs. Keyed, so two hosts in
- * one process (tests, an embedding application) each hear their own commands' exits, and stop theirs alone. Gone once
- * the last instance detaches.
+ * One host's background commands, which each instance of its plugin attaches to: kept outside the instance, so a
+ * reload (a config change) does not stop what runs. Keyed by `host`, its core's `Events`, which is one object for the
+ * core's life and another core's is another: a replacement finds what its predecessor started, and two hosts in one
+ * process (tests, an embedding application) each hear their own commands' exits, and stop theirs alone. Gone once the
+ * last instance detaches.
  */
-export function hostJobs(key: string): Jobs {
-  let jobs = hosts.get(key);
+export function hostJobs(host: object): Jobs {
+  let jobs = hosts.get(host);
   if (jobs === undefined) {
-    jobs = makeJobs({ idle: () => hosts.delete(key) });
-    hosts.set(key, jobs);
+    jobs = makeJobs({ idle: () => hosts.delete(host) });
+    hosts.set(host, jobs);
   }
   return jobs;
 }

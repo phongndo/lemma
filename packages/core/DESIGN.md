@@ -14,7 +14,7 @@ holds the rationale and constraints.
 1. **Resolve once, at composition time.** Dependencies, config, and handler order are checked when a composition is planned. At call time a capability is a captured value and a hook with no handlers calls straight through. No proxies, no per-call graph walks, no meta-events.
 2. **Typed dependencies.** A plugin declares `requires` and `provides` as Effect tags; the Layer's requirements must match at compile time, and actual exports are checked at activation. Each requirement is met by a plugin or by the application, and planning rejects one that neither meets. Runtime failures can revoke plugins' capabilities, so callers must still handle the resulting failure or interruption.
 3. **Three extension primitives, with explicit rules.** _Hooks_ (interceptors) wrap an operation and fail closed. _Events_ notify and are isolated. _Registries_ collect what plugins offer, owned by the plugin that offered it. See below.
-4. **Failure domains.** A required background task failing stops its plugin and dependents while unrelated plugins keep running. Optional tasks and observers report faults without failing their plugin. There is no automatic restart unless the plugin declares a `restart` schedule, and that schedule persists across failures so a broken plugin can exhaust it. An explicit restart retries the named plugin and its halted dependents; forced, it also replaces a running plugin.
+4. **Failure domains.** A required background task failing stops its plugin and dependents while unrelated plugins keep running. Optional tasks and observers report faults without failing their plugin. A failed plugin stays failed until an explicit restart, which retries the named plugin and its halted dependents; forced, it also replaces a running plugin.
 5. **Staged change.** Replacements activate before the old composition is swapped out. A staging failure preserves the old instances, except for exclusive resources, which require a documented interruption gap.
 6. **Bounded waiting.** Activation, disposal, and the shutdown caller have cooperative deadlines. Event and diagnostic backlogs are bounded; stream delivery can lose entries. A lifecycle deadline is a fault, never a clean stop.
 7. **Errors are data.** Effect's failure, defect, and interruption stay distinct. Lifecycle, observer, and background-work faults carry plugin attribution; hooks retain their error channel and tracing attribution. Ordinary capability functions are not automatically intercepted. Planning diagnostics are serializable and offer suggestions.
@@ -25,7 +25,7 @@ holds the rationale and constraints.
 | Primitive       | Declared by                | Contract                                                                                                                                                                                                                    |
 | --------------- | -------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Capability      | `Context.Service`          | A named service. One provider per composition: a plugin, which can be replaced, or the application.                                                                                                                         |
-| Plugin          | `definePlugin`             | Manifest (`id`, `config` schema, `provides`, `requires`, `exclusive`, `restart`, `deadlines`) plus a `Layer` that receives decoded config and owns resources through its `Scope`.                                           |
+| Plugin          | `definePlugin`             | Manifest (`id`, `config` schema, `provides`, `requires`, `exclusive`, `deadlines`) plus a `Layer` that receives decoded config and owns resources through its `Scope`.                                                      |
 | Hook            | `Hook.make`                | Around middleware on the critical path. Sequential, ordered, awaited. A handler may call `next` at most once. A handler failure fails the operation.                                                                        |
 | Event           | `Event.make`               | Notification with isolated observer failures. Bounded queue, default drop-oldest without waiting; explicit `suspend` applies backpressure.                                                                                  |
 | Registry        | `Registry.make`            | A collection plugins contribute items to (`PluginContext.add`). Ordered, attributed, staged and swapped with its contributor, removed when the contributor's scope closes; work with an item (`Registries.run`) ends first. |
@@ -80,7 +80,7 @@ Workload measurements should guide any future native acceleration.
 
 ```
 pending → activating → active → draining → closed
-                ↘ failed ↗ (restart policy or explicit restart)
+                ↘ failed ↗ (explicit restart)
 ```
 
 Plugins activate in dependency order and dispose in reverse. The application's
@@ -113,13 +113,13 @@ guess how long a replacement takes to start.
 The [loader contract](README.md#loader-and-reload) gives the
 steps and what each failure leaves running.
 
-In-memory state crosses a reload only when the plugin hands it over
-(`handoff`), as a structured clone taken when its replacement starts, not as shared
-mutable state. The old instance keeps serving while the new one stages, so
-anything shared would be written by two instances at once. A failed instance
-hands nothing over, since the failure may have left its state half updated.
-The handoff is a convenience for keeping work across an edit (an application reloading
-code as it is edited); it is not persistence, which stays the application's.
+No in-memory state crosses a reload: a replacement starts as a first start
+does. The old instance keeps serving while the new one stages, so state the two
+shared would be written by both at once. A plugin that keeps something running
+through a reload (a process it started) holds it outside its instances, keyed
+by its core: `Hooks`, `Events`, and `Registries` are each one object for the
+life of a core, and another core's are others. Persistence stays the
+application's.
 
 A change is all or nothing because it has a running composition to keep. The
 first start has none, so refusing it for one failing plugin only takes away the

@@ -24,6 +24,14 @@ describe("writeFileAtomic", () => {
     expect(await readdir(join(dir, "nested"))).toEqual(["file.json"]);
   });
 
+  test("writes bytes as they are, whole", async () => {
+    const path = join(dir, "picture.png");
+    const bytes = Uint8Array.from({ length: 70_000 }, (_, i) => i % 256);
+    expect(await writeFileAtomic(path, bytes)).toBe(true);
+    expect(new Uint8Array(await readFile(path))).toEqual(bytes);
+    expect((await stat(path)).mode & 0o777).toBe(0o600);
+  });
+
   test("exclusive: creates the file once and leaves an existing one as it is", async () => {
     const path = join(dir, "token");
     const results = await Promise.all(Array.from({ length: 8 }, (_, i) => writeFileAtomic(path, `t${i}`, { exclusive: true })));

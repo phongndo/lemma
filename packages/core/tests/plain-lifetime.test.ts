@@ -1,7 +1,8 @@
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
 import { Cause, Context, Effect, Exit, Fiber, Option, Scope, Stream } from "effect";
 import { definePlugin as defineEffectPlugin, Hook, Hooks, PluginContext, PluginFault, PluginStopped, Registry } from "../src/index.ts";
-import { awaitable, definePlugin, fail, followsAwait } from "../src/plain/index.ts";
+import { followsAwait } from "../src/internal/current.ts";
+import { awaitable, definePlugin, fail } from "../src/plain/index.ts";
 import type { Plain } from "../src/plain/index.ts";
 import { testPlugin } from "../src/testing.ts";
 

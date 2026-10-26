@@ -1,4 +1,4 @@
-import { mkdir, readdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, readdir, readFile, rm, stat } from "node:fs/promises";
 import { createServer } from "node:net";
 import { join } from "node:path";
 import { Data, Effect, Schema, Semaphore } from "effect";
@@ -288,12 +288,7 @@ export const writeAvatar = (home: string, change: AvatarChange): Effect.Effect<v
       try: async () => {
         for (const file of Object.values(PICTURES)) if (file !== picture?.file) await rm(join(home, file), { force: true });
         if (change.kind === "default") return void (await rm(avatarFile(home), { force: true }));
-        if (picture !== undefined) {
-          // Whole or not at all, as `writeFileAtomic` writes text.
-          const temp = join(home, `.${picture.file}.${process.pid}.tmp`);
-          await writeFile(temp, picture.bytes, { mode: 0o600 });
-          await rename(temp, join(home, picture.file));
-        }
+        if (picture !== undefined) await writeFileAtomic(join(home, picture.file), picture.bytes);
         const chosen: typeof AvatarFile.Type = change.kind === "pattern" ? { seed: change.seed } : { picture: picture!.file };
         await writeFileAtomic(avatarFile(home), `${JSON.stringify(chosen)}\n`);
       },

@@ -35,14 +35,13 @@ in the background itself (`nohup` and `&`, its output to a file).
   session's running commands, so a turn that compacted its history away, or
   the next one, still knows of them; with none, there is no section.
 - **Kept through a reload.** The jobs are kept outside the plugin instance
-  (`hostJobs`), by a key its first instance makes and hands to each
-  replacement: a reload (a config change) leaves them running and the
-  replacement tells their exits, as the core hands a replacement only what
-  clones, which a running process does not. Two hosts in one process keep
-  theirs apart. When the plugin stops for good (the host stopping, the plugin
-  turned off, or a restart after a failure, which hands nothing over), the last
-  instance kills what still runs, and tells nothing of it; so does a session's
-  deletion, for its own. A host that crashes leaves them running, untold.
+  (`hostJobs`), keyed by the core's `Events`, which stays the same object for
+  the core's life: a reload (a config change) leaves them running, and the
+  replacement tells their exits. Two hosts in one process keep theirs apart.
+  When the plugin stops for good (the host stopping, the plugin turned off, or
+  a failure, which stops it before any restart), the last instance kills what
+  still runs, and tells nothing of it; so does a session's deletion, for its
+  own. A host that crashes leaves them running, untold.
 - **Not started, it says why.** A command that cannot be started (no `bash`, no
   processes left) is an error result with the reason, not a job.
 

@@ -80,7 +80,7 @@ Save this beside it as `~/.lemma/plugins/glossary.web.js`:
 export default ({ defineWebPlugin, contracts: { Icon, Slots, Threads, ToolViews, Views, latestDetails }, solid: { createMemo, For, Show }, html }) =>
   defineWebPlugin({
     id: "glossary",
-    api: 4,
+    api: 5,
     uses: ["lemma/threads@1"],
     styles: `
       .glossary-view { flex: 1; min-height: 0; overflow: auto; padding: 32px 24px; }

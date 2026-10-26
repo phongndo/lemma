@@ -208,20 +208,14 @@ const provider = () => definePlugin({ id: "value", provides: [Value], layer: Lay
 // The promise-based view of services: what plain plugins see.
 const Point = Hook.make<string, number>("types/plain-point");
 export function plainViews() {
-  interface Key<A> {
-    readonly name: string;
-    readonly default: A;
-  }
   class Cache extends Context.Service<
     Cache,
     {
       readonly get: (key: string) => Effect.Effect<string, Error>;
-      readonly typed: <A>(key: Key<A>) => Effect.Effect<A>;
       readonly size: Effect.Effect<number>;
       readonly changes: Stream.Stream<string>;
       readonly local: (key: string) => number;
       readonly settings: { readonly limit: number; readonly when: Date };
-      readonly "~plain"?: { readonly typed: <A>(key: Key<A>) => Promise<A> };
     }
   >()("types/Cache") {}
   definePlainPlugin({
@@ -232,7 +226,6 @@ export function plainViews() {
     setup: async ({ cache, value }, { config, on, signal }) => {
       const text: string = await cache.get("a");
       const size: number = await cache.size();
-      const typed: number = await cache.typed({ name: "n", default: 1 });
       const local: number = cache.local("a");
       const limit: number = cache.settings.limit + config.limit;
       const when: Date = cache.settings.when;
@@ -242,7 +235,7 @@ export function plainViews() {
       on(Point, (input, next) => (input === "" ? 0 : next(input)));
       // @ts-expect-error The handler must return the hook's output.
       on(Point, () => "not a number");
-      void [text, size, typed, local, limit, when, wrong, value.length, signal];
+      void [text, size, local, limit, when, wrong, value.length, signal];
       return { other: 1 };
     },
   });

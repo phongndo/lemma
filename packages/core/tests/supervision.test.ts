@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { Cause, Context, Deferred, Duration, Effect, Exit, Fiber, Layer, Option, Ref, Schedule, Stream } from "effect";
+import { Cause, Context, Deferred, Duration, Effect, Exit, Fiber, Layer, Option, Stream } from "effect";
 import { CoreClosed, DeadlineExceeded, definePlugin, makeCore, PluginContext } from "../src/index.ts";
 import { run, waitFor } from "./support.ts";
 
@@ -170,43 +170,6 @@ describe("supervision", () => {
         expect(yield* core.run(Clock)).toBe(clock);
         yield* Deferred.succeed(release, undefined);
         expect(yield* Fiber.join(task)).toBe(1);
-      }),
-    );
-  });
-
-  test("a restart schedule retries a failed plugin and stops when exhausted", async () => {
-    await run(
-      Effect.gen(function* () {
-        const log: string[] = [];
-        const attempts = yield* Ref.make(0);
-        const always = definePlugin({
-          id: "db",
-          provides: [Db],
-          restart: Schedule.recurs(2),
-          layer: Layer.effect(
-            Db,
-            Effect.gen(function* () {
-              const attempt = yield* Ref.updateAndGet(attempts, (n) => n + 1);
-              log.push(`db+${attempt}`);
-              const owner = yield* PluginContext;
-              yield* owner.background("poll", Effect.fail("down"), { required: true });
-              return { name: "db" };
-            }),
-          ),
-        });
-        const core = yield* makeCore([always]);
-        // Two automatic restarts, then the schedule is exhausted and the plugin stays failed.
-        yield* waitFor(Ref.get(attempts), (n) => n === 3);
-        yield* waitFor(core.inspect, (s) => s.plugins[0]?.state === "failed");
-        yield* Effect.sleep(Duration.millis(20));
-        expect(log).toEqual(["db+1", "db+2", "db+3"]);
-        expect((yield* core.inspect).plugins[0]?.state).toBe("failed");
-        // An explicit restart resets the schedule: two more automatic attempts follow it.
-        yield* core.restart("db");
-        yield* waitFor(Ref.get(attempts), (n) => n === 6);
-        yield* waitFor(core.inspect, (s) => s.plugins[0]?.state === "failed");
-        yield* Effect.sleep(Duration.millis(20));
-        expect(log).toHaveLength(6);
       }),
     );
   });

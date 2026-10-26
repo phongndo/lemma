@@ -60,4 +60,3 @@ export * from "./define.ts";
 export * from "./draw.tsx";
 export { usePlugin } from "./owner.ts";
 export * from "./parts.tsx";
-export * from "./schema.ts";

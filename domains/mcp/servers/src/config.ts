@@ -1,8 +1,8 @@
-import { randomBytes } from "node:crypto";
-import { mkdir, readFile, realpath, rename, rm, writeFile } from "node:fs/promises";
+import { readFile, realpath, stat } from "node:fs/promises";
 import { homedir } from "node:os";
-import { dirname, join } from "node:path";
+import { join } from "node:path";
 import { Schema } from "effect";
+import { writeFileAtomic } from "@lemma/contracts/fs";
 import { McpServerConfig, SERVER_NAME } from "@lemma/mcp";
 import type { Exposure, McpServer, McpServerChange } from "@lemma/mcp";
 import { normalize } from "./form.ts";
@@ -292,13 +292,14 @@ async function updateServers(path: string, change: (servers: Record<string, unkn
   const servers = isObject(json["mcpServers"]) ? { ...json["mcpServers"] } : {};
   change(servers);
   json = { ...json, mcpServers: servers };
-  await mkdir(dirname(target), { recursive: true });
-  const temporary = `${target}.${randomBytes(6).toString("hex")}.tmp`;
+  // As an editor leaves it: the mode the file has (0644 for a new one), and a folder it makes as mkdir makes one.
+  const mode = await stat(target).then(
+    (info) => info.mode & 0o777,
+    () => 0o644,
+  );
   try {
-    await writeFile(temporary, `${JSON.stringify(json, null, 2)}\n`);
-    await rename(temporary, target);
+    await writeFileAtomic(target, `${JSON.stringify(json, null, 2)}\n`, { mode, dirMode: 0o777 });
   } catch (cause) {
-    await rm(temporary, { force: true }).catch(() => {});
     const code = (cause as NodeJS.ErrnoException).code;
     if (target !== path && (code === "EROFS" || code === "EACCES" || code === "EPERM"))
       throw new Error(`${path} links to ${target}, which cannot be written: change it where it is managed`, { cause });

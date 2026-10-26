@@ -1,5 +1,4 @@
-import { Cause, Context, Data, Deferred, Duration, Effect, Exit, Fiber, Layer, Option, Result, Schedule, Scope, Semaphore, Tracer } from "effect";
-import type { Pull } from "effect";
+import { Cause, Context, Data, Deferred, Duration, Effect, Exit, Fiber, Layer, Option, Result, Scope, Semaphore, Tracer } from "effect";
 import type { ApplicationServices, Core, CoreOptions, CoreSnapshot, PluginSnapshot, PluginState } from "../core.ts";
 import { CapabilityMismatch, CompositionError, CoreClosed, DeadlineExceeded, Diagnostic, PluginFault, ReloadError, ShutdownTimeout } from "../errors.ts";
 import { Events } from "../events.ts";
@@ -72,8 +71,6 @@ interface Instance {
   haltedBy?: string;
   /** A fatal fault reported while it was staged: it fails once published. */
   failing?: PluginFault;
-  /** What it hands its replacement (`PluginContext.handoff`). */
-  handoff?: () => unknown;
 }
 
 /** One published composition. In-flight work keeps the environment it entered with. */
@@ -127,7 +124,7 @@ function assemble<E>(
     const application = yield* Scope.make();
     const provided = options.provide === undefined ? Context.empty() : yield* restore(provision(options.provide, builtins, application));
     const base = Context.merge(builtins, provided);
-    /** Owns lifecycle fibers: apply bodies, restart loops, background watchers. */
+    /** Owns lifecycle fibers: apply bodies and background watchers. */
     const supervisor = yield* Scope.make();
     /** Owns core.run fibers. */
     const work = yield* Scope.make();
@@ -217,28 +214,7 @@ function assemble<E>(
         yield* Effect.forkIn(Effect.interruptible(watch), supervisor);
       }).pipe(Effect.asVoid);
 
-    /**
-     * What a running (or draining) instance hands its replacement: a structured
-     * clone of what its `save` returns, so the replacement never shares an
-     * object with it (one that fails to start cannot change the state the old
-     * one keeps serving with). `undefined` when it set nothing, or when `save`
-     * throws or returns what cannot be cloned (a function, a socket): reported
-     * as the old instance's fault.
-     */
-    const takeHandoff = (instance: Instance | undefined): Effect.Effect<unknown> =>
-      Effect.suspend(() => {
-        if (instance?.handoff === undefined || (instance.state !== "active" && instance.state !== "draining")) return Effect.void;
-        const save = instance.handoff;
-        try {
-          return Effect.succeed(structuredClone(save()));
-        } catch (error) {
-          return report(instance, new PluginFault({ pluginId: instance.id, phase: "service", operation: "handoff", cause: Cause.die(error) })).pipe(
-            Effect.as(undefined),
-          );
-        }
-      });
-
-    const activate = (instance: Instance, config: unknown, environment: Context.Context<never>, previous?: unknown): Effect.Effect<void, PluginFault> =>
+    const activate = (instance: Instance, config: unknown, environment: Context.Context<never>): Effect.Effect<void, PluginFault> =>
       Effect.uninterruptibleMask((restore) =>
         Effect.gen(function* () {
           instance.state = "activating";
@@ -264,11 +240,6 @@ function assemble<E>(
               }),
             // The stack a span would capture names this frame, never the plugin's: attributed by its attributes instead.
             trace: (name, effect) => effect.pipe(Effect.withSpan(name, { attributes: attributes(instance.identity) }, { captureStackTrace: false })),
-            previous,
-            handoff: (save) =>
-              Effect.sync(() => {
-                instance.handoff = save;
-              }),
           };
           // Only declared dependencies are visible during activation, not the entire graph.
           const inputs = new Map<string, unknown>([
@@ -415,40 +386,9 @@ function assemble<E>(
             }
             yield* dispose(instance, Exit.fail(fault), "failed");
             instance.state = "failed";
-            if (instance.plugin.restart) yield* Effect.forkIn(Effect.interruptible(restartLoop(instance, instance.plugin.restart, fault)), supervisor);
           }),
         ),
       );
-
-    /**
-     * One schedule driver per plugin id, kept across failures: a plugin that keeps
-     * failing exhausts its schedule instead of restarting forever. An explicit
-     * restart resets it.
-     */
-    const drivers = new Map<string, (input: PluginFault) => Pull.Pull<unknown, never, unknown>>();
-    const restartLoop = (failed: Instance, schedule: Schedule.Schedule<unknown, PluginFault>, fault: PluginFault): Effect.Effect<void> =>
-      Effect.gen(function* () {
-        const id = failed.id;
-        const driver = drivers.get(id) ?? (yield* Schedule.toStepWithSleep(schedule));
-        drivers.set(id, driver);
-        let last = fault;
-        while (true) {
-          // The step fails (with `Done`) once the schedule is exhausted.
-          const step = yield* Effect.result(driver(last));
-          if (Result.isFailure(step)) return;
-          const result = yield* Effect.result(
-            applyLocked(
-              currentMembers(),
-              new Set([id]),
-              { required: new Set([id]) },
-              undefined,
-              () => instances.get(id) === failed && failed.state === "failed" && drivers.get(id) === driver,
-            ),
-          );
-          if (Result.isSuccess(result)) return;
-          last = instances.get(id)?.fault ?? last;
-        }
-      });
 
     const currentMembers = (): Member[] =>
       order.map((id) => {
@@ -467,13 +407,11 @@ function assemble<E>(
       force: ReadonlySet<string>,
       partial?: PartialStart,
       operation?: { committed: boolean },
-      stillNeeded?: () => boolean,
     ): Effect.Effect<ReloadReport, ApplyError> =>
       lock.withPermits(1)(
         Effect.uninterruptibleMask((restore) =>
           Effect.gen(function* () {
             if (state !== "active") return yield* closedPlan();
-            if (stillNeeded && !stillNeeded()) return { started: [], restarted: [], failed: [], stopped: [], unchanged: order, interrupted: 0, faults: [] };
             const planned = planChange(members, { instances, order }, force, providedKeys);
             if (Result.isFailure(planned)) return yield* new PlanError({ errors: planned.failure });
             const { ordered, configs, providers: nextProviders, raw, changed, stops } = planned.success;
@@ -492,15 +430,11 @@ function assemble<E>(
                 for (const dependent of dependentsOf(id)) if (instances.get(dependent)?.state === "active") gapped.add(dependent);
               }
             }
-            // What each running instance hands its replacement: an exclusive one's before it stops, the rest's as theirs stage.
-            const carried = new Map<string, unknown>();
             if (gapped.size) {
               if (operation) operation.committed = true;
               for (const id of gapped) retire(instances.get(id)!);
               const previous = yield* publishRevision;
               interrupted += yield* drain(previous);
-              // An exclusive plugin hands over once its work has drained and before it stops: everything it did is included.
-              for (const id of gapped) carried.set(id, yield* takeHandoff(instances.get(id)));
               for (const id of [...previousOrder].reverse()) if (gapped.has(id)) interrupted += yield* dispose(instances.get(id)!, Exit.void, "closed");
             }
 
@@ -520,8 +454,7 @@ function assemble<E>(
                     inactive.add(plugin.id);
                     continue;
                   }
-                  const previous = carried.has(plugin.id) ? carried.get(plugin.id) : yield* takeHandoff(instances.get(plugin.id));
-                  const exit = yield* Effect.exit(restore(activate(instance, configs.get(plugin.id), environment, previous)));
+                  const exit = yield* Effect.exit(restore(activate(instance, configs.get(plugin.id), environment)));
                   if (Exit.isFailure(exit)) {
                     if (required === undefined || required.has(plugin.id) || Cause.hasInterruptsOnly(exit.cause)) return yield* Effect.failCause(exit.cause);
                     inactive.add(plugin.id);
@@ -722,7 +655,6 @@ function assemble<E>(
           }
           if (instance.state === "active" && !options?.force)
             return Effect.succeed({ started: [], stopped: [], restarted: [], unchanged: [...instances.keys()], failed: [], interrupted: 0, faults: [] });
-          drivers.delete(id);
           return supervised((operation) => applyLocked(currentMembers(), new Set([id]), { required: new Set([id]) }, operation)).pipe(
             Effect.mapError(toReloadError),
           );

@@ -43,8 +43,7 @@ export const readDiscovery = (home: string): Effect.Effect<Discovery | undefined
  * with `LEMMA_TOKEN`, else the environment `LEMMA_ENV` names, else the default
  * of `<home>/environments.json` (`lemma env use` sets it), else the local host
  * its transport.json names. A saved environment never takes the local host's
- * place unless it is made the default. A remote.json an older CLI wrote
- * stands for environments.json until that exists (`readEnvironments`).
+ * place unless it is made the default.
  */
 
 /** The name of the host on this machine, which is never saved: the one whose transport.json is in the home. */
@@ -127,24 +126,12 @@ const readText = (path: string) =>
     catch: (cause) => unusable(path, cause instanceof Error ? cause.message : String(cause)),
   });
 
-/** The name `<home>/remote.json`'s host (from `lemma remote set`, before environments) is saved under. */
-export const LEGACY_REMOTE = "remote";
-
-const decodeLegacy = Schema.decodeUnknownResult(Schema.fromJsonString(SavedEnvironment));
-
-/**
- * environments.json as it is, or empty without the file. Without one, a
- * `<home>/remote.json` that an older `lemma remote set` wrote is read as an
- * environment named `remote` and made the default, so a client set up for a
- * remote host goes on using it rather than this machine's; the first change
- * (`lemma env …`) writes it into environments.json, after which remote.json
- * is not read.
- */
+/** environments.json as it is, or empty without the file. */
 export const readEnvironments = (home: string): Effect.Effect<Environments, TargetError> => {
   const path = environmentsPath(home);
   return readText(path).pipe(
     Effect.flatMap((text) => {
-      if (text === undefined) return readLegacy(home);
+      if (text === undefined) return Effect.succeed({ environments: {} });
       const file = Result.getOrUndefined(decode(text));
       if (file === undefined) return Effect.fail(unusable(path, 'it is not {"default"?: "<name>", "environments": {"<name>": {"url", "token"}}}'));
       for (const [name, saved] of Object.entries(file.environments))
@@ -153,22 +140,6 @@ export const readEnvironments = (home: string): Effect.Effect<Environments, Targ
       return Effect.succeed(file);
     }),
   );
-};
-
-const readLegacy = (home: string): Effect.Effect<Environments, TargetError> => {
-  const path = join(home, "remote.json");
-  return Effect.flatMap(readText(path), (text) => {
-    if (text === undefined) return Effect.succeed({ environments: {} });
-    const saved = Result.getOrUndefined(decodeLegacy(text));
-    if (saved === undefined || normalizeUrl(saved.url) === undefined || saved.token.trim() === "")
-      return Effect.fail(
-        new TargetError({
-          reason: "File",
-          message: `Cannot use ${path}: it is not {"url", "token"}. Save the host with \`lemma env add\`, or remove it to use the local host.`,
-        }),
-      );
-    return Effect.succeed({ default: LEGACY_REMOTE, environments: { [LEGACY_REMOTE]: saved } });
-  });
 };
 
 /** Writes environments.json whole, readable only by this user. */

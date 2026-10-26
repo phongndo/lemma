@@ -19,22 +19,7 @@ export type { Capabilities, Services };
  * Components drawn for the plugin's slot items reach it with `usePlugin`.
  */
 /** What of the promise-based handle a web plugin's context is (its `config` typed apart): one list, for the type and the value. */
-const CONTEXT_KEYS = [
-  "id",
-  "signal",
-  "onCleanup",
-  "background",
-  "task",
-  "after",
-  "every",
-  "listen",
-  "action",
-  "fault",
-  "previous",
-  "handoff",
-  "run",
-  "trace",
-] as const;
+const CONTEXT_KEYS = ["id", "signal", "onCleanup", "background", "task", "after", "every", "listen", "action", "fault", "run", "trace"] as const;
 
 export interface WebPluginContext<Config> extends Pick<PlainSetup<Config>, (typeof CONTEXT_KEYS)[number]> {
   /** Decoded from the plugin's `config` Schema; its row in config.jsonc's `plugins` sets it. */

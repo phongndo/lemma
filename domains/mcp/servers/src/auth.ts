@@ -1,6 +1,5 @@
 import { randomBytes } from "node:crypto";
-import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
-import { dirname } from "node:path";
+import { readFile } from "node:fs/promises";
 import type {
   AuthProvider,
   OAuthClientMetadata,
@@ -9,6 +8,7 @@ import type {
   StoredOAuthClientInformation,
   StoredOAuthTokens,
 } from "@modelcontextprotocol/client";
+import { writeFileAtomic } from "@lemma/contracts/fs";
 import type { McpOAuthConfig } from "@lemma/mcp";
 import { isObject } from "./values.ts";
 import { loadedSdk, loadSdk } from "./sdk.ts";
@@ -78,15 +78,8 @@ export class SignInStore {
   }
 
   private async write(json: string): Promise<void> {
-    await mkdir(dirname(this.path), { recursive: true, mode: 0o700 });
-    const temporary = `${this.path}.${randomBytes(6).toString("hex")}.tmp`;
-    try {
-      await writeFile(temporary, json, { mode: 0o600 });
-      await rename(temporary, this.path);
-    } catch (cause) {
-      await rm(temporary, { force: true }).catch(() => {});
-      throw cause;
-    }
+    // The user's alone: the file 0600, a folder it makes 0700.
+    await writeFileAtomic(this.path, json);
   }
 }
 

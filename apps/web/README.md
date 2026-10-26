@@ -228,11 +228,9 @@ handle with `usePlugin()`; a listener a component adds while it shows is removed
 (`onCleanup(plugin.listen(…))`). Release anything else it holds with `plugin.onCleanup`. Its `Client` is its own:
 what it follows or subscribes to ends when it stops, and a call it made rejects with `PluginStopped` then, rather than
 answer into a plugin that is gone. A
-`config` Schema (from `api.Schema`, Effect 4's Schema with Effect 3's `Literal`,
-`Record`, `between`, `positive`, `nonNegative`, `optionalWith`,
-`propertySignature`, and `.annotations(…)`, so a file written for Effect 3 keeps
-working) becomes the plugin's settings form. `styles` apply while it runs.
-`api: 4` says which version of
+`config` Schema (from `api.Schema`, which is Effect's Schema as it is) becomes
+the plugin's settings form. `styles` apply while it runs.
+`api: 5` says which version of
 the contracts it is written for (`contracts.WEB_API`), so a later incompatible
 version leaves it out, saying so, rather than letting it fail at a call;
 `routes` lists the routes it shows pages at, so their addresses name it while

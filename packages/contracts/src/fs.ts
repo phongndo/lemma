@@ -194,13 +194,20 @@ const openTemp = async (fs: FileSystem, path: string, mode: number): Promise<{ r
   }
 };
 
+/** Writes `data` into a new, empty file: text as UTF-8, bytes as they are, until every one is written. */
+const writeAll = async (handle: FileHandle, data: string | Uint8Array): Promise<void> => {
+  if (typeof data === "string") return handle.writeFile(data);
+  for (let at = 0; at < data.length;) at += (await handle.write(data, at, data.length - at, at)).bytesWritten;
+};
+
 /**
- * Writes `text` to `path` whole or not at all: to a temporary file beside it,
- * then renamed into place (or, `exclusive`, linked, which unlike a rename
- * fails when the name exists), so a reader never sees a partial file. The
- * temporary file never outlives the call, whatever fails. True when written.
+ * Writes `data` (text, or bytes) to `path` whole or not at all: to a temporary
+ * file beside it, then renamed into place (or, `exclusive`, linked, which
+ * unlike a rename fails when the name exists), so a reader never sees a
+ * partial file. The temporary file never outlives the call, whatever fails.
+ * True when written.
  */
-export async function writeFileAtomic(path: string, text: string, options: AtomicWriteOptions = {}): Promise<boolean> {
+export async function writeFileAtomic(path: string, data: string | Uint8Array, options: AtomicWriteOptions = {}): Promise<boolean> {
   const fs = options.fs ?? nodeFileSystem;
   const mode = options.mode ?? 0o600;
   const sync = options.sync === true;
@@ -210,7 +217,7 @@ export async function writeFileAtomic(path: string, text: string, options: Atomi
   try {
     try {
       await handle.chmod(mode);
-      await handle.writeFile(text);
+      await writeAll(handle, data);
       if (sync) await handle.datasync();
     } finally {
       await handle.close();

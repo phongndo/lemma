@@ -42,12 +42,12 @@ See [`examples/hello.ts`](examples/hello.ts) for a capability implementation ext
 
 ## Plugin contract
 
-`definePlugin({ id, version?, config?, provides?, requires?, exclusive?, restart?, deadlines?, setup })` declares a composition member, as does the same with a `layer` in place of `setup` (below):
+`definePlugin({ id, version?, config?, provides?, requires?, exclusive?, deadlines?, setup })` declares a composition member, as does the same with a `layer` in place of `setup` (below):
 
 - `id` uniquely identifies an instance within one core. `version` is optional diagnostic metadata, not a dependency constraint.
 - `uses` and `implements` name the versions of contracts it is written against and implements, each `name@version` with a whole-number version (`"example/store@2"`; `ContractVersions`). Planning refuses a plugin that uses another version of a contract than a plugin in the composition implements, as a `CompositionError` (`IncompatibleContract`) naming both versions and the implementer; a contract no plugin implements constrains nothing, so `uses` is not a dependency and starts nothing. A malformed entry is refused the same way. Write `uses` as a literal: a version read at run time from the contract's own module would always match.
 - `config` is an Effect Schema or, with `setup`, the defaults one is derived from (`configSchema`: each field takes its default's type and decodes to it when absent; nested objects default field by field). `makeCore(plugins, { configs })` decodes every plugin's config before any activation; a missing value decodes as `{}`; an invalid one is a `CompositionError` (`InvalidConfig`) naming the plugin and the failing path. Write the Schema for titles, descriptions, or constraints.
-- `exclusive` marks a plugin that cannot coexist with its replacement (a port, a lock, a unique registration in a retained registry); a reload stops it before starting the new instance. `restart` is an Effect `Schedule` consulted after a runtime failure; without one the plugin stays failed. `deadlines` bound activation and disposal (defaults 30s and 10s, overridable per core).
+- `exclusive` marks a plugin that cannot coexist with its replacement (a port, a lock, a unique registration in a retained registry); a reload stops it before starting the new instance. `deadlines` bound activation and disposal (defaults 30s and 10s, overridable per core).
 - Capabilities are ordinary Effect `Context.Service` keys. Share the keys between consumers and providers; use namespaced key names. Effect identifies capabilities by their key names.
 - `provides` declares exports; `requires` declares dependencies supplied by other plugins or by the application ([below](#capabilities-the-application-provides)): with `setup`, by name (`{ store: Store }`), the names under which `setup` receives and returns them; with `layer`, as a list of tags. `PluginContext`, `Hooks`, `Events`, and `Registries` are available without declaration. The runtime rejects attempts to provide these built-ins or `Scope`.
 - `setup(services, plugin)` runs when the plugin activates, in its scope: an Effect, or a generator function yielding Effects as `Effect.gen` takes. `plugin` is the `PluginContext` with the decoded `config` and a `signal` that aborts when the plugin stops, before its own finalizers run. It returns the provided services by name. TypeScript checks that it uses only what it requires and the built-ins, and returns what it provides.
@@ -145,15 +145,14 @@ export default definePlugin({
   promise of its value, one returning a stream an async iterable, and an Effect
   member becomes a method. A failure rejects with its error, marked so that
   rethrowing it keeps it a typed failure; a defect rejects with the defect. A
-  generic or overloaded method keeps one signature through the mapping; a
-  contract restores it with a phantom `"~plain"` member (see `Plain`).
+  generic or overloaded method keeps one signature through the mapping.
 - **Context.** A call runs in the context of the work that led to it (a hook's
   operation, an event, the activation), so it keeps that work's references and
   trace, and stops when that work is interrupted. It always runs as the plugin
   that makes it, with its own `PluginContext` and `Scope`, whoever's work called
   the code (a guard another plugin runs). Where the runtime has
   `AsyncLocalStorage` (Node.js, found without importing it, so browser bundles
-  are unaffected; `followsAwait` says so) this follows `await` and `.then`;
+  are unaffected) this follows `await` and `.then`;
   elsewhere it holds until the first one, and later calls run in the plugin's
   own context, stopping when it stops. What a plugin registers (a handler, an
   observer, an item, a background task) is its own, not the work's that was
@@ -232,8 +231,6 @@ export default definePlugin({
   records no fault, so a caller logs what is not a refusal. The host installs
   it: a plugin's stray error does not end the process, and one that is
   nobody's does, as Node.js would end it, since the host's state may be broken.
-- **Reloading.** `handoff(() => state)` and `previous` carry state to the
-  replacement, as `PluginContext.handoff` does, checked by `carry` when given.
 - **Nested services.** Objects inside a service are converted as the service
   is, down to four levels below it, and read through: what a view shows is what
   the object holds now. A plain object becomes an object with its keys; a class
@@ -244,14 +241,13 @@ export default definePlugin({
   Event, a Registry), and anything deeper are left as they are. `Plain<S>`
   types them the same way.
 - **Providing.** `setup` returns services as their contracts declare them; it does
-  not convert them. `asEffect(async (…) => …)` turns an async function into one
-  returning an Effect, for a contract whose methods return Effects.
+  not convert them. A method a contract types as returning an Effect can return
+  `awaitable(async () => …)`.
 
 An application with its own way of writing plugins (a UI framework's) builds on
-`definePlugin(definition, { services, run })`. `services: "raw"` hands services
-over as provided, for contracts that are promise-based already, and a function
-gives its own view. `run` wraps the call to setup in a reactive root or an
-error boundary.
+`definePlugin(definition, { services, run })`. `services` is a function that
+gives its own view of the services. `run` wraps the call to setup in a reactive
+root or an error boundary.
 
 ### Callbacks a contract takes
 
@@ -385,7 +381,7 @@ Effect.gen(function* () {
 
 `PluginContext.fault(operation, cause, { fatal })` reports a failure of a plugin's own work that the core does not run, such as a callback another library calls or a view it draws: a `PluginFault` (phase `service`) attributed to the plugin, which with `fatal` fails as a required task's failure fails it, as soon as it is published when it is still starting. A stopped or retired plugin's reports are dropped: its replacement owns the faults.
 
-Recovery is explicit: `core.restart(id)` reactivates the failed plugin and retries the dependents it halted. The named plugin must activate; a dependent that cannot is left failed, and its own dependents halted, without blocking the rest. An active plugin is left alone unless `core.restart(id, { force: true })`, which replaces it and restarts its dependents as a config change would (an `exclusive` plugin stops first). It returns a `ReloadReport`: what it restarted (nothing, for an active plugin left alone) and which dependents it left failed. A plugin with a `restart` schedule is retried automatically; the schedule persists across failures, so one that keeps failing exhausts it rather than restarting forever. An explicit restart resets it.
+Recovery is explicit: a failed plugin stays failed until `core.restart(id)` reactivates it and retries the dependents it halted. The named plugin must activate; a dependent that cannot is left failed, and its own dependents halted, without blocking the rest. An active plugin is left alone unless `core.restart(id, { force: true })`, which replaces it and restarts its dependents as a config change would (an `exclusive` plugin stops first). It returns a `ReloadReport`: what it restarted (nothing, for an active plugin left alone) and which dependents it left failed.
 
 `core.faults` streams `ReportedFault` values (`PluginFault` plus a core-wide,
 monotonically increasing `sequence`). Delivery retains at most 256 queued entries
@@ -424,7 +420,7 @@ turns it on for every plugin's work. Both come from `@lemma/core` and
 
 `loader.affected(next)` answers, changing nothing, which plugins `apply(next)` would start, restart, or stop, by the same comparison step 2 makes (a definition that is not the same object, a config not structurally equal, a dependent of either); with `{ restart: ids }`, what a forced `core.restart` of those ids would restart too. An application that must know what a change touches before making it (whose work a restart would cut off) asks this rather than predicting the loader's answer. It answers for what runs when asked, so one that acts on it makes its changes one at a time.
 
-A replacement can start where its predecessor left off. `PluginContext.handoff(save)` registers what the running instance hands over; `save` runs when the replacement starts staging (an `exclusive` plugin's once its work has drained, just before it stops, so everything it did is included; otherwise changes after that moment are not carried), and a structured clone of its result is the replacement's `PluginContext.previous`. The clone means the two never share an object: a replacement that fails to start cannot change the state the old instance keeps serving with. State must therefore be what `structuredClone` copies (data, `Map`, `Set`, `Date`; not functions or sockets); what it cannot copy is reported as the old instance's fault, and the replacement starts fresh. A first start, a restart after a failure (a failed instance's state is not trusted), and a `save` that throws (reported as the old instance's fault) all start with `previous` undefined. With `setup`, a `carry` Schema checks what arrives first: state whose shape changed in an update fails to decode, is reported as the plugin's fault (`handoff`), and the plugin starts fresh instead of trusting it. The state stays in memory; durable state belongs to the plugin's own storage.
+A replacement starts fresh: no in-memory state crosses a reload. A plugin that keeps something running through one (a process it started) holds it outside its instances, keyed by its core. `Hooks`, `Events`, and `Registries` are each one object for the life of the core, and another core's are other objects, so a replacement finds what its predecessor kept under them. Both instances run while the replacement stages, so both use what they share. Durable state belongs to the plugin's own storage.
 
 Caller cancellation rolls back staging. Once the swap or an exclusive resource interruption has begun, the supervised lifecycle operation finishes even if disposal interrupts its initiating `core.run` caller. A caller that lost the result must inspect the resulting state. Core shutdown still owns and interrupts lifecycle work.
 

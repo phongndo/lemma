@@ -14,7 +14,8 @@ import {
   reportUnhandled,
 } from "../src/index.ts";
 import type { Plugin, Unhandled } from "../src/index.ts";
-import { asEffect, awaitable, definePlugin, fail, followsAwait } from "../src/plain/index.ts";
+import { followsAwait } from "../src/internal/current.ts";
+import { awaitable, definePlugin, fail } from "../src/plain/index.ts";
 import type { PlainSetup } from "../src/plain/index.ts";
 import { testPlugin } from "../src/testing.ts";
 import { run } from "./support.ts";
@@ -81,12 +82,12 @@ describe("a plugin written with promises", () => {
     expect(seen).toEqual(["1", 2, "local x", "a", "b", true]);
   });
 
-  test("provides services to Effect plugins, with asEffect where the contract returns Effects", async () => {
+  test("provides services to Effect plugins, with awaitable where the contract returns Effects", async () => {
     const greeter = definePlugin({
       id: "greeter",
       config: { greeting: "Hello" },
       provides: { greeter: Greeter },
-      setup: (_, { config }) => ({ greeter: { greet: asEffect(async (name: string) => `${config.greeting}, ${name}`) } }),
+      setup: (_, { config }) => ({ greeter: { greet: (name: string) => awaitable(async () => `${config.greeting}, ${name}`) } }),
     });
     const tested = await testPlugin(greeter, { config: { greeting: "Hi" } });
     try {
@@ -731,7 +732,7 @@ describe("a plugin written with promises", () => {
         },
       },
       {
-        services: "raw",
+        services: (services) => services,
         run: (setup, plugin) => {
           log.push(`entering ${plugin.id}`);
           const result = setup();

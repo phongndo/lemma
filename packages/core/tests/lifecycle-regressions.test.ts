@@ -99,32 +99,6 @@ test("core close ends event streams owned by an external scope", async () => {
   );
 });
 
-test("explicit restart invalidates the pending automatic restart", async () => {
-  await run(
-    Effect.gen(function* () {
-      let starts = 0;
-      const trigger = yield* Deferred.make<void>();
-      const plugin = definePlugin({
-        id: "scheduled",
-        restart: Schedule.spaced("100 millis"),
-        layer: Layer.effectDiscard(
-          Effect.gen(function* () {
-            starts++;
-            const owner = yield* PluginContext;
-            if (starts === 1) yield* owner.background("fail", Deferred.await(trigger).pipe(Effect.andThen(Effect.fail("down"))), { required: true });
-          }),
-        ),
-      });
-      const core = yield* makeCore([plugin]);
-      yield* Deferred.succeed(trigger, undefined);
-      yield* waitFor(core.inspect, (s) => s.plugins[0]?.state === "failed");
-      yield* core.restart("scheduled");
-      yield* Effect.sleep("150 millis");
-      expect(starts).toBe(2);
-    }),
-  );
-});
-
 test("a failed plugin does not interrupt work using only an unrelated capability", async () => {
   await run(
     Effect.gen(function* () {

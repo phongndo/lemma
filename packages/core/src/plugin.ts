@@ -1,8 +1,7 @@
-import { Cause, Context, Effect, Layer, Result, Schema as EffectSchema } from "effect";
-import type { Duration, Schedule, Schema, Scope } from "effect";
+import { Context, Effect, Layer } from "effect";
+import type { Duration, Schema, Scope } from "effect";
 import { toConfigSchema } from "./config.ts";
 import type { ConfigInput, ConfigOf } from "./config.ts";
-import type { PluginFault } from "./errors.ts";
 import type { Events } from "./events.ts";
 import { PluginContext } from "./hooks.ts";
 import type { Hooks } from "./hooks.ts";
@@ -38,8 +37,6 @@ export interface Plugin<Provides extends readonly Capability[] = readonly Capabi
   readonly requires: readonly Capability[];
   /** Owns something that cannot exist twice (a port, a lock). Reload stops it before starting its replacement. */
   readonly exclusive: boolean;
-  /** Retry activation after a runtime failure. Absent: stay failed until restarted explicitly. */
-  readonly restart?: Schedule.Schedule<unknown, PluginFault>;
   readonly deadlines?: Deadlines;
   /** Erased only for storage in a heterogeneous composition. Receives decoded config. */
   readonly layer: (config: unknown) => Layer.Layer<never, unknown, unknown>;
@@ -52,17 +49,11 @@ export type PluginLayer<Provides extends readonly Capability[], Requires extends
 >;
 
 /** What `setup` receives besides its services: the `PluginContext` operations, its config, and its stop signal. */
-export interface PluginSetup<Config, Carried = unknown> extends Omit<Context.Service.Shape<typeof PluginContext>, "previous"> {
+export interface PluginSetup<Config> extends Context.Service.Shape<typeof PluginContext> {
   /** Decoded from the plugin's `config`. */
   readonly config: Config;
   /** Aborted when the plugin stops, before its own finalizers run: hand it to promise-based work it starts. */
   readonly signal: AbortSignal;
-  /**
-   * What the instance it replaces handed over (`handoff`), decoded by `carry`
-   * when the plugin has one; undefined on a first start, after a failure, or
-   * when it no longer decodes (reported as the plugin's fault).
-   */
-  readonly previous: Carried | undefined;
 }
 
 /** What `setup` returns: the services it provides, by name (nothing when it provides none). */
@@ -92,24 +83,12 @@ export interface PluginManifest extends ContractVersions {
   readonly id: string;
   readonly version?: string;
   readonly exclusive?: boolean;
-  readonly restart?: Schedule.Schedule<unknown, PluginFault>;
   readonly deadlines?: Deadlines;
 }
 
-export interface SetupDefinition<
-  Requires extends Capabilities,
-  Provides extends Capabilities,
-  C extends ConfigInput | undefined,
-  Carried = unknown,
-> extends PluginManifest {
+export interface SetupDefinition<Requires extends Capabilities, Provides extends Capabilities, C extends ConfigInput | undefined> extends PluginManifest {
   /** A Schema, or the defaults one is derived from (`{ limit: 3 }`; see `configSchema`). */
   readonly config?: C;
-  /**
-   * Checks what a previous instance handed over (`handoff`) before setup sees
-   * it as `previous`: state whose shape changed in an update decodes to a
-   * failure, reported, and the plugin starts fresh rather than trusting it.
-   */
-  readonly carry?: EffectSchema.Codec<Carried, any>;
   /** Capabilities it uses, by the names `setup` receives them under. */
   readonly requires?: Requires;
   /** Capabilities it provides, by the names `setup` returns them under. */
@@ -122,7 +101,7 @@ export interface SetupDefinition<
    */
   readonly setup: (
     services: Services<NoInfer<Requires>>,
-    plugin: PluginSetup<ConfigOf<NoInfer<C>>, NoInfer<Carried>>,
+    plugin: PluginSetup<ConfigOf<NoInfer<C>>>,
   ) => SetupResult<Provided<NoInfer<Provides>>, Context.Service.Identifier<NoInfer<Requires>[keyof Requires]> | BuiltIns>;
 }
 
@@ -161,12 +140,9 @@ export function definePlugin<
  *     },
  *   });
  */
-export function definePlugin<
-  const Requires extends Capabilities = {},
-  const Provides extends Capabilities = {},
-  C extends ConfigInput | undefined = undefined,
-  Carried = unknown,
->(definition: SetupDefinition<Requires, Provides, C, Carried>): Plugin<readonly Provides[keyof Provides][]>;
+export function definePlugin<const Requires extends Capabilities = {}, const Provides extends Capabilities = {}, C extends ConfigInput | undefined = undefined>(
+  definition: SetupDefinition<Requires, Provides, C>,
+): Plugin<readonly Provides[keyof Provides][]>;
 export function definePlugin(
   definition: PluginManifest & {
     readonly config?: ConfigInput;
@@ -174,7 +150,6 @@ export function definePlugin(
     readonly requires?: unknown;
     readonly layer?: unknown;
     readonly setup?: unknown;
-    readonly carry?: EffectSchema.Codec<unknown, any>;
   },
 ): Plugin {
   const isSetup = "setup" in definition && typeof definition.setup === "function";
@@ -185,9 +160,7 @@ export function definePlugin(
   const provides = named?.provides.map(([, tag]) => tag) ?? (definition.provides as readonly Capability[] | undefined) ?? [];
   const requires = named?.requires.map(([, tag]) => tag) ?? (definition.requires as readonly Capability[] | undefined) ?? [];
   const config = definition.config === undefined ? undefined : isSetup ? toConfigSchema(definition.config) : (definition.config as Schema.Codec<any, any>);
-  const layer = isSetup
-    ? setupLayer(definition.setup as SetupFunction, named!, definition.carry)
-    : (definition.layer as Plugin["layer"] | Layer.Layer<never, unknown, unknown>);
+  const layer = isSetup ? setupLayer(definition.setup as SetupFunction, named!) : (definition.layer as Plugin["layer"] | Layer.Layer<never, unknown, unknown>);
   return Object.freeze({
     id: definition.id,
     ...(definition.version === undefined ? {} : { version: definition.version }),
@@ -197,13 +170,12 @@ export function definePlugin(
     provides: Object.freeze([...provides]),
     requires: Object.freeze([...requires]),
     exclusive: definition.exclusive ?? false,
-    ...(definition.restart === undefined ? {} : { restart: definition.restart }),
     ...(definition.deadlines === undefined ? {} : { deadlines: definition.deadlines }),
     layer: (Layer.isLayer(layer) ? () => layer : layer) as Plugin["layer"],
   });
 }
 
-type SetupFunction = (services: Record<string, unknown>, plugin: PluginSetup<unknown, unknown>) => unknown;
+type SetupFunction = (services: Record<string, unknown>, plugin: PluginSetup<unknown>) => unknown;
 interface Named {
   readonly requires: readonly (readonly [string, Capability])[];
   readonly provides: readonly (readonly [string, Capability])[];
@@ -225,7 +197,7 @@ const namedCapabilities = (id: string, requires: unknown, provides: unknown): Na
 
 /** A setup as the Layer the runtime builds: its services in, its exports out, its stop signal tied to its scope. */
 const setupLayer =
-  (setup: SetupFunction, named: Named, carry: EffectSchema.Codec<unknown, any> | undefined) =>
+  (setup: SetupFunction, named: Named) =>
   (config: unknown): Layer.Layer<never, unknown, unknown> =>
     Layer.effectContext(
       Effect.gen(function* () {
@@ -237,18 +209,10 @@ const setupLayer =
           Effect.sync(() => new AbortController()),
           (controller) => Effect.sync(() => controller.abort()),
         );
-        let previous = owner.previous;
-        if (carry !== undefined && previous !== undefined) {
-          const decoded = EffectSchema.decodeUnknownResult(carry)(previous);
-          if (Result.isFailure(decoded)) {
-            yield* owner.fault("handoff", Cause.fail(decoded.failure));
-            previous = undefined;
-          } else previous = decoded.success;
-        }
         // A setup that fails (or throws before returning its Effect) aborts its signal at once, before its finalizers
         // run: one waiting on work it started would otherwise wait for an abort that comes only after it.
         const out = yield* Effect.suspend(() => {
-          const result = setup(services, { ...owner, config, signal: controller.signal, previous });
+          const result = setup(services, { ...owner, config, signal: controller.signal });
           return Effect.isEffect(result) ? result : Effect.gen(() => result as Generator<Effect.Effect<unknown, unknown, unknown>, unknown, any>);
         }).pipe(Effect.onError(() => Effect.sync(() => controller.abort())));
         // The newest finalizer runs first: work started for the plugin stops before the resources it uses are released.

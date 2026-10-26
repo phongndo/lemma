@@ -430,7 +430,7 @@ const find = <Kind extends ChannelKind>(registries: Context.Service.Shape<typeof
   });
 
 /** Whether `error` says a request to `id` was withdrawn (`withdrawnFrom`): its handler stopped for its plugin leaving, or outlived it. */
-const isWithdrawn = (error: unknown, id: string): boolean => error instanceof HostError && error.code === "Withdrawn" && error.subject === id;
+export const isWithdrawn = (error: unknown, id: string): boolean => error instanceof HostError && error.code === "Withdrawn" && error.subject === id;
 
 /**
  * Waits until a channel other than `gone` answers for `id`, or until no change
@@ -439,7 +439,11 @@ const isWithdrawn = (error: unknown, id: string): boolean => error instanceof Ho
  * looks again. `changes` sends what answers when it is subscribed, so nothing
  * published meanwhile is missed.
  */
-const answeredOrSettled = (registries: Context.Service.Shape<typeof Registries>, id: string, gone: Contribution<Channel> | undefined): Effect.Effect<void> =>
+export const answeredOrSettled = (
+  registries: Context.Service.Shape<typeof Registries>,
+  id: string,
+  gone: Contribution<Channel> | undefined,
+): Effect.Effect<void> =>
   Effect.raceFirst(
     registries.changes(Channels).pipe(
       Stream.filter((items) => {
