@@ -17,6 +17,11 @@ use: thread, agent
 You help the user write. Keep their voice; say what you changed and why.
 ```
 
+The frontmatter is read as a skill's is (`@lemma/contracts/frontmatter`): a
+value is plain, quoted, continued on indented lines, or a `>` or `|` block.
+`tools`, `sections`, and `use` are lists, written `a, b` or `[a, b]`, each item
+quoted or not.
+
 - **Where.** Bundled ones (`modes/` here), then those a running plugin's
   package brings (`"resources": { "modes": "./modes" }`, read from
   plugin status), then `~/.lemma/modes/`, then `.lemma/modes/` in the

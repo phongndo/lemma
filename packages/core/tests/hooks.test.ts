@@ -365,6 +365,29 @@ describe("plugin-owned hooks", () => {
     expect(failure(await Effect.runPromiseExit(owner.on(point, (input, next) => next(input))))).toMatchObject({ _tag: "CoreClosed" });
   });
 
+  test("closed says the core has shut its hooks, before it disposes a plugin", async () => {
+    let hooks!: Context.Service.Shape<typeof Hooks>;
+    let atDisposal: boolean | undefined;
+    await run(
+      Effect.gen(function* () {
+        const plugin = definePlugin({
+          id: "watching",
+          layer: Layer.effectDiscard(
+            Effect.gen(function* () {
+              hooks = yield* Hooks;
+              yield* Effect.addFinalizer(() => Effect.map(hooks.closed, (closed) => void (atDisposal = closed)));
+            }),
+          ),
+        });
+        yield* makeCore([plugin]);
+        expect(yield* hooks.closed).toBe(false);
+      }),
+    );
+    expect(atDisposal).toBe(true);
+    expect(await Effect.runPromise(hooks.closed)).toBe(true);
+    expect(failure(await Effect.runPromiseExit(hooks.invoke(point, 1, (input) => Effect.succeed(input))))).toMatchObject({ _tag: "CoreClosed" });
+  });
+
   test("spans attribute plugin work and nest under the invocation, not activation", async () => {
     const spans: Tracer.Span[] = [];
     await Effect.runPromise(

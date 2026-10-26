@@ -38,18 +38,13 @@ divider. Requires `Llm`.
 - **The cut.** The kept part starts at a prompt or a response, never between a
   tool call and its result, and at least one message is summarized. It may fall
   inside the running turn, so a long turn with many tool calls stays in bounds.
-- **Other plugins' say.** Each compaction runs through `CompactionHook`
-  ([`@lemma/context`](../contract/src/index.ts)), whose terminal is this
-  plugin's model writing the summary: a handler writes its own (no model call;
-  the event's `source` is that plugin), moves the cut, reworks the summary, or
-  skips the compaction.
 - **Asking for one.** A prompt of `/compact`, alone or followed by what the
   summary should focus on (`/compact keep the API decisions`), is handled
   rather than sent (`AgentInputHook`): the session's next model call, in the
   running turn or the next one, summarizes whatever the estimate says, once,
   keeping at most a quarter of the conversation word for word. The web half
   offers it in the `/` menu (`PromptCommands`). A notice says
-  when there is nothing to summarize or a handler skipped it. The request is
+  when there is nothing to summarize. The request is
   held in memory, so a restart before that call forgets it.
 - **The summary.** It follows a fixed outline (goal, constraints, progress,
   decisions, next steps, critical context), which asks for exact paths and

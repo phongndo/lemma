@@ -1,5 +1,5 @@
 import { Effect, Schedule, Stream } from "effect";
-import { definePlugin, Hook, Hooks, Registries } from "@lemma/core";
+import { definePlugin, Hooks, Registries } from "@lemma/core";
 import { Paths } from "@lemma/contracts";
 import { AgentRequestHook, PromptSections } from "@lemma/agent";
 import { Llm } from "@lemma/llm";
@@ -13,12 +13,6 @@ import { Journals } from "./journal.ts";
 export { codemodeTool, CodemodeInput } from "./codemode.ts";
 export type { CodemodeBranch, CodemodeDeps } from "./codemode.ts";
 export type { CodemodeCallRecord, CodemodeDetails, CodemodeDisplay } from "./details.ts";
-
-/**
- * Never handled: dispatching it says whether the core still dispatches hooks, which it stops doing as it shuts down.
- * Asked only once a script's call has failed, to tell a failure of shutting down from the call's own.
- */
-const Probe = Hook.make<void, void>("tools.codemode/core-closing");
 
 /** The system prompt's section naming the namespaces of the tools only scripts call. */
 const SECTION = "codemode-namespaces";
@@ -41,13 +35,9 @@ export default definePlugin({
   requires: { runner: ToolRunner, llm: Llm, sessions: Sessions, paths: Paths },
   setup: function* ({ runner, llm, sessions, paths }, owner) {
     const registries = yield* Registries;
-    const hooks = yield* Hooks;
-    const closing = hooks
-      .invoke(Probe, undefined, () => Effect.void)
-      .pipe(
-        Effect.as(false),
-        Effect.catch((error) => Effect.succeed(error._tag === "CoreClosed")),
-      );
+    // Whether the core is shutting down, which shuts its hooks: asked only once a script's call has failed, to tell a
+    // failure of shutting down from the call's own.
+    const closing = (yield* Hooks).closed;
     let namespaces: readonly ToolNamespace[] = (yield* registries.items(ToolNamespaces)).map(({ item }) => item);
     yield* owner.background(
       "namespaces",

@@ -170,7 +170,7 @@ export const EventData = Schema.Union([
     requestId: Schema.optional(Schema.String),
     /**
      * Who shaped it: on a tool result, `ToolExecuteHook`'s handlers, the guards, and the registry's cut; on a user
-     * message, `AgentInputHook`'s handlers; on an answer, `LlmProviderHeadersHook`'s (the headers each changed).
+     * message, `AgentInputHook`'s handlers.
      */
     credit: Schema.optional(ResultCredit),
     /** On an answer: the provider's HTTP status, and its request id when it named one. */
@@ -191,9 +191,8 @@ export const EventData = Schema.Union([
      * counts no failure).
      */
     retry: Schema.optional(Schema.Struct({ reason: Schema.Literals(["failure", "restart"]), attempt: Schema.Number, at: Schema.Number })),
-    /** The provider's answer, when it gave one before the call failed, and who shaped the headers sent. */
+    /** The provider's answer, when it gave one before the call failed. */
     response: Schema.optional(ProviderAnswer),
-    credit: Schema.optional(ResultCredit),
   }),
   /** Replaces the history before `firstKeptId` with `summary` in the model's view; the originals stay in the log. */
   Schema.Struct({

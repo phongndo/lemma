@@ -213,13 +213,6 @@ export function createPipeline({ Section, Facts }: PipelineParts) {
             )}
           </Show>
         </Section>
-        <Show when={step().response?.credit?.handlers ?? step().attempts.find((attempt) => attempt.credit?.handlers !== undefined)?.credit?.handlers}>
-          {(handlers) => (
-            <Section title="Headers" aside="LlmProviderHeadersHook">
-              <Handlers handlers={handlers()} none="No plugin changed the headers sent." />
-            </Section>
-          )}
-        </Show>
         <Show when={then()}>
           {(title) => (
             <Section title={title()} aside="AgentContinueHook">

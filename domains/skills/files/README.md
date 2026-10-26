@@ -18,7 +18,8 @@ the source `skills` (`Skills`) to `ComposerCompletions`. Requires `Paths` and
   `description`, then the instructions. The name is the folder's when the
   frontmatter gives none, and is letters, digits, `_`, `-`, and `.`; a folder
   whose name is none of that is skipped. The frontmatter is read as the flat
-  YAML skills use (a value plain, quoted, continued, or a `>` or `|` block).
+  YAML skills use (a value plain, quoted, continued, or a `>` or `|` block),
+  by `@lemma/contracts/frontmatter`.
 - **Where.** First those a running plugin's package brings
   (`"resources": { "skills": "./skills" }`, read from plugin status). Then the
   user's directories: `~/.lemma/skills` (`Paths.home`), `~/.agents/skills`,

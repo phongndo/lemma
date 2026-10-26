@@ -1,34 +1,42 @@
-import { isDeepStrictEqual } from "node:util";
 import { Clock, Data, Effect, Stream } from "effect";
-import { inChainOrder, Notice } from "@lemma/contracts";
+import { Notice } from "@lemma/contracts";
 import { AgentInputHook, AgentRequestHook } from "@lemma/agent";
-import { CompactionError, CompactionHook, CONTEXT_CONTRACT } from "@lemma/context";
-import type { CompactionRequest, CompactionResult } from "@lemma/context";
+import { CONTEXT_CONTRACT } from "@lemma/context";
 import { addUsage, Llm, LlmRequest } from "@lemma/llm";
 import { deriveHistory, modelEntries, modelView, requestState, SessionRemoved } from "@lemma/sessions";
 import { declaredTools } from "@lemma/tools";
 import type { PromptContent, RequestDraft } from "@lemma/agent";
-import type { AssistantMessage, ModelInfo, StreamEvent, Usage } from "@lemma/llm";
-import { definePlugin, Events, Hooks } from "@lemma/core";
-import type { HandlerStep } from "@lemma/core";
-import {
-  answersAsk,
-  chooseCut,
-  estimateTokens,
-  filesOf,
-  forkAsk,
-  REVIEW_PROMPT,
-  SUMMARY_PROMPT,
-  summaryAsk,
-  transcript,
-  validCut,
-  viewTokens,
-} from "./compact.ts";
+import type { AssistantMessage, ModelInfo, ModelRef, StreamEvent, Usage } from "@lemma/llm";
+import type { SessionEvent } from "@lemma/sessions";
+import { definePlugin, Events } from "@lemma/core";
+import { answersAsk, chooseCut, estimateTokens, filesOf, forkAsk, REVIEW_PROMPT, SUMMARY_PROMPT, summaryAsk, transcript, viewTokens } from "./compact.ts";
 import { Config } from "./config.ts";
 
 export { chooseCut, estimateTokens, measuredTokens, transcript } from "./compact.ts";
 
 class SummaryFailed extends Data.TaggedError("SummaryFailed")<{ readonly message: string }> {}
+
+/** A compaction about to be made, before a model call: what it replaces, and why it runs now. */
+interface CompactionRequest {
+  readonly sessionId: string;
+  /** The model the request asks. */
+  readonly model: ModelRef;
+  /** The request's size as estimated, in tokens. */
+  readonly tokens: number;
+  /**
+   * `threshold`: it would fill more of the window than the plugin's `at`; `overflow`: the model refused the last request
+   * as too long; `requested`: the user asked for one (`/compact`).
+   */
+  readonly reason: "threshold" | "overflow" | "requested";
+  /** The turn's branch, root to its last event. */
+  readonly branch: readonly SessionEvent[];
+  /** Index in `branch` of the first event kept word for word: the summary stands for what the model saw before it. */
+  readonly firstKept: number;
+  /** The summary a compaction before wrote, which this one's replaces. */
+  readonly previous?: string;
+  /** What the user asked the summary to focus on (`/compact <instructions>`). */
+  readonly instructions?: string;
+}
 
 /**
  * Tokens set aside for the framing of what is sent beyond its text (the system prompt and the ask are counted as
@@ -77,7 +85,6 @@ export default definePlugin({
   setup: function* ({ llm }, owner) {
     const config = owner.config;
     const events = yield* Events;
-    const hooks = yield* Hooks;
     /** Per session, the turn in which writing a summary failed: not tried again until the next turn. */
     const failedIn = new Map<string, string>();
     /** Per session, the turn told it summarized `PER_TURN` times and would not again. */
@@ -187,17 +194,13 @@ export default definePlugin({
       });
 
     /**
-     * `CompactionHook`'s terminal: a model (the config's, else the request's) summarizes what comes before the cut. The
-     * request's own model writes it in a fork of its last request, which its provider's cache serves; failing that (an
-     * overflow, another model, a failed call, or an answer cut off, calling a tool, or with no text), a model is sent the
-     * history as a transcript to summarize. A review that fails leaves the summary as it was written.
+     * The summary of what comes before the cut, and what writing it cost: a model (the config's, else the request's)
+     * writes it. The request's own model writes it in a fork of its last request, which its provider's cache serves;
+     * failing that (an overflow, another model, a failed call, or an answer cut off, calling a tool, or with no text), a
+     * model is sent the history as a transcript to summarize. A review that fails leaves the summary as it was written.
      */
-    const write = (asked: CompactionRequest): Effect.Effect<CompactionResult, CompactionError> =>
+    const write = (asked: CompactionRequest) =>
       Effect.gen(function* () {
-        const kept = asked.branch[asked.firstKept];
-        if (kept === undefined) return { kind: "skip", reason: `no event at ${asked.firstKept} to keep from` } as const;
-        // A handler may have moved the cut (`next`): never between a tool call and its result, nor outside the view.
-        if (!validCut(asked.branch, asked.firstKept)) return yield* new SummaryFailed({ message: `the history cannot be kept from event ${asked.firstKept}` });
         // What the model saw before the cut, in the order it was logged.
         const older = modelEntries(asked.branch)
           .filter((entry) => entry.summary !== true && entry.index < asked.firstKept)
@@ -236,8 +239,8 @@ export default definePlugin({
           : undefined;
         const usage: Usage = reviewed === undefined ? written.usage : addUsage(written.usage, reviewed.usage);
         const summary = reviewed?.answers === undefined ? written.summary : `${written.summary}\n\n${reviewed.answers}`;
-        return { kind: "summary", summary, firstKeptId: kept.id, usage } as const;
-      }).pipe(Effect.mapError((error) => new CompactionError({ message: error.message, cause: error })));
+        return { summary, usage };
+      });
 
     const compact = (draft: RequestDraft) =>
       Effect.gen(function* () {
@@ -273,9 +276,7 @@ export default definePlugin({
         const previous = compaction === undefined ? undefined : branch[compaction]!.data;
         const request: CompactionRequest = {
           sessionId: draft.sessionId,
-          turnId: draft.turnId,
           model: draft.model,
-          contextWindow: model.contextWindow,
           tokens,
           reason,
           branch,
@@ -283,31 +284,19 @@ export default definePlugin({
           ...(previous?.type === "compaction" ? { previous: previous.summary } : {}),
           ...(asked?.instructions === undefined ? {} : { instructions: asked.instructions }),
         };
-        const steps: HandlerStep<CompactionRequest, CompactionResult>[] = [];
-        const result = yield* hooks.invoke(CompactionHook, request, write, { onStep: (step) => void steps.push(step) });
-        if (result.kind === "skip") return yield* told(`The earlier conversation was not summarized: ${result.reason}`);
-        // What a handler wrote keeps the history from a place it may be kept from, as the terminal's does.
-        const keptAt = branch.findIndex((event) => event.id === result.firstKeptId);
-        if (!validCut(branch, keptAt))
-          return yield* new CompactionError({ message: `the summary keeps the history from ${result.firstKeptId}, which it cannot be kept from` });
-        // The files the replaced history read and changed, whoever wrote the summary, after the previous summary's.
+        const result = yield* write(request);
+        // The files the replaced history read and changed, after the previous summary's.
         const { start } = modelView(branch);
-        const replaced = branch.slice(start, keptAt).flatMap((event) => (event.data.type === "message" ? [event.data.message] : []));
+        const replaced = branch.slice(start, first).flatMap((event) => (event.data.type === "message" ? [event.data.message] : []));
         const files = filesOf(replaced, previous?.type === "compaction" ? previous.files : undefined);
-        // Written by the outermost handler whose summary is not the one the rest of the chain handed it, or by this
-        // plugin's model (the terminal).
-        const writtenBy =
-          inChainOrder(steps).find(
-            (step) => step.output?.kind === "summary" && (step.next?.output === undefined || !isDeepStrictEqual(step.output, step.next.output)),
-          )?.pluginId ?? owner.id;
         yield* draft.append({
           type: "compaction",
           summary: result.summary,
-          firstKeptId: result.firstKeptId,
+          firstKeptId: branch[first]!.id,
           tokensBefore: tokens,
-          source: writtenBy,
+          source: owner.id,
           turnId: draft.turnId,
-          ...(result.usage === undefined ? {} : { usage: result.usage }),
+          usage: result.usage,
           ...(files.read.length + files.modified.length === 0 ? {} : { files: { read: [...files.read], modified: [...files.modified] } }),
         });
         yield* events.publish(Notice, {

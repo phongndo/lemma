@@ -9,7 +9,7 @@ The agent: the turn loop that asks a model, runs the tools it calls, and logs ea
 | [`agent.titles`](titles/README.md) | host + web | Names threads with the small model: once the first turn titles one from its prompt, and anew when asked             |
 | [`agent.cli`](cli/README.md)       | host       | The `lemma` command's `run` and `agent …`: adds them to `CliCommands`                                               |
 
-A loop of another kind need not start from nothing: `@lemma/agent/kit` is `agent.loop`'s implementation as pieces, from the whole agent shaped by a `TurnPolicy` (`makeAgent`) to one turn over the log (`runTurn`), a restart's resume plan (`planResume`), the journal, the queue's rules, and the live view.
+A loop of another kind need not start from nothing: `makeAgent` in `@lemma/agent/kit` is `agent.loop`'s agent, with its queue, journal, resuming after a restart, and live view. A loop built on it shapes its turns with the hooks below, as [fresh-loop](../../examples/fresh-loop/README.md) does.
 
 A plugin replacing `agent.loop` runs `agentConformance` from `@lemma/agent/testing`: what clients and plugins rely on of an `Agent` (prompts placed once, requests that rebuild from the log, tool calls run once and answered, the busy rules, cancel, withdraw, and the hooks' say), against the contract alone.
 

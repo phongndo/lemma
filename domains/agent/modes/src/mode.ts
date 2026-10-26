@@ -1,4 +1,5 @@
 import { MODES_PLUGIN } from "@lemma/agent";
+import { parseFrontmatter, unquote } from "@lemma/contracts/frontmatter";
 import type { ModeUse } from "@lemma/agent";
 import type { SessionEvent } from "@lemma/sessions";
 
@@ -40,37 +41,21 @@ export interface Mode {
   readonly source: "bundled" | "user" | "project";
 }
 
-const unquote = (value: string) => {
-  const quoted = /^(["'])([\s\S]*)\1$/.exec(value.trim());
-  return quoted === null ? value.trim() : quoted[2]!;
-};
-
 /** A list field: `a, b`, or `[a, b]`, each item quoted or not. */
 const listOf = (value: string): string[] =>
   value
     .trim()
     .replace(/^\[(.*)\]$/, "$1")
     .split(",")
-    .map(unquote)
+    .map((item) => unquote(item.trim()))
     .filter((item) => item !== "");
 
-/** A mode file's fields and body; one with no frontmatter is all body. */
+/** A mode file's fields and body (read as `parseFrontmatter` reads them); one with no frontmatter is all body. */
 export const parseMode = (name: string, text: string, source: Mode["source"]): Mode => {
-  const source_ = text.startsWith("﻿") ? text.slice(1) : text;
-  const block = /^---[ \t]*\r?\n([\s\S]*?)\r?\n---[ \t]*(?:\r?\n|$)/.exec(source_);
-  const fields = new Map<string, string>();
-  if (block !== null) {
-    for (const line of block[1]!.split(/\r?\n/)) {
-      const field = /^([A-Za-z_][\w-]*):[ \t]*(.*)$/.exec(line);
-      if (field !== null) fields.set(field[1]!, field[2]!);
-    }
-  }
-  const text_ = (key: string) => {
-    const value = fields.get(key);
-    return value === undefined || unquote(value) === "" ? undefined : unquote(value);
-  };
+  const { fields, body } = parseFrontmatter(text);
+  const text_ = (key: string) => (fields[key] === undefined || fields[key] === "" ? undefined : fields[key]);
   const list = (key: string) => {
-    const value = fields.get(key);
+    const value = fields[key];
     return value === undefined ? undefined : listOf(value);
   };
   const description = text_("description");
@@ -89,7 +74,7 @@ export const parseMode = (name: string, text: string, source: Mode["source"]): M
     ...(tools === undefined ? {} : { tools }),
     ...(sections === undefined ? {} : { sections }),
     ...(use === undefined ? {} : { use }),
-    prompt: (block === null ? source_ : source_.slice(block[0].length)).trim(),
+    prompt: body,
     source,
   };
 };

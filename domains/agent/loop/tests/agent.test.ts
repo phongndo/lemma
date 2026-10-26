@@ -17,8 +17,8 @@ import type { ToolResultMessage, UserMessage } from "@lemma/llm";
 import type { EventData, SessionEvent } from "@lemma/sessions";
 import type { Tool } from "@lemma/tools";
 import sessions, { makeSessionsPlugin } from "@lemma/sessions-files";
-import { readJournals } from "@lemma/agent/kit";
-import { BRANCHED_CALL, unansweredCalls } from "@lemma/agent/kit";
+import { readJournals } from "../../contract/src/kit/state.ts";
+import { BRANCHED_CALL, unansweredCalls } from "../../contract/src/kit/turn/log.ts";
 import { call, failWith, gated, hang, log, newSession, ofType, reply, runAgent, tempDir, text, types, useTools, waitFor } from "./fakes.ts";
 import type { AgentSetup } from "./fakes.ts";
 
@@ -561,7 +561,6 @@ describe("agent", () => {
         type: "provider" as const,
         status: 200,
         requestId: "req-7",
-        credit: { handlers: [{ source: "tracer", ms: 0.1, changed: ["x-trace"] }] },
       }),
       reply("hi"),
     );
@@ -576,10 +575,7 @@ describe("agent", () => {
         const logged = events.find((event) => event.data.type === "request")!;
         expect(rebuildRequest(branchOf(events, logged.id), logged.id, id)?.providerOptions).toEqual({ temperature: 0.2 });
         const answer = ofType(events, "message").find((data) => data.message.role === "assistant");
-        expect(answer).toMatchObject({
-          response: { status: 200, requestId: "req-7" },
-          credit: { handlers: [{ source: "tracer", changed: ["x-trace"] }] },
-        });
+        expect(answer).toMatchObject({ response: { status: 200, requestId: "req-7" } });
         expect(rec.deltas.map((event) => event.type)).toEqual(["start", "text-delta", "text-delta", "done"]);
       }),
     );

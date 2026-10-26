@@ -85,18 +85,6 @@ const inBranchOrder = (branch: readonly SessionEvent[]) => {
   return { entries, callAt };
 };
 
-/**
- * Whether the history may be kept from `index`: a message in the model's view after one at least (so a summary has
- * something to stand for), neither a tool result nor one after which a result is kept whose call the summary would
- * take from it.
- */
-export const validCut = (branch: readonly SessionEvent[], index: number): boolean => {
-  const { entries, callAt } = inBranchOrder(branch);
-  const at = entries.find((entry) => entry.index === index);
-  if (at === undefined || at.message.role === "toolResult" || !entries.some((entry) => entry.index < index)) return false;
-  return !entries.some((entry) => entry.index > index && entry.message.role === "toolResult" && (callAt.get(entry.message.toolCallId) ?? index) < index);
-};
-
 /** The tokens of the messages in the model's view, about (what a cut divides). */
 export const viewTokens = (branch: readonly SessionEvent[]): number => entriesTokens(modelEntries(branch));
 

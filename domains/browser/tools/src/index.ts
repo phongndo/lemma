@@ -12,7 +12,7 @@ export { browserNamespace, browserTools, htmlPreviewTool, HtmlPreviewInput, Html
  */
 export default definePlugin({
   id: "browser.tools",
-  uses: ["lemma/browser@1", "lemma/llm@2", "lemma/tools@1"],
+  uses: ["lemma/browser@1", "lemma/llm@3", "lemma/tools@1"],
   version: "0.1.0",
   requires: { browser: Browser },
   setup: function* ({ browser }, owner) {

@@ -2,9 +2,9 @@ import { Deferred, Effect, Exit } from "effect";
 import { describe, expect, it } from "vitest";
 import { SimDisk } from "@lemma/testing";
 import type { AgentError, QueuedPrompt } from "@lemma/agent";
-import { admission, itemOf, journalOf, makeQueues, MAX_QUEUED } from "@lemma/agent/kit";
-import type { Item, QueuedTurn, SessionState } from "@lemma/agent/kit";
-import { readJournals } from "@lemma/agent/kit";
+import { admission, itemOf, journalOf, makeQueues, MAX_QUEUED } from "../../contract/src/kit/queue.ts";
+import type { Item, QueuedTurn, SessionState } from "../../contract/src/kit/queue.ts";
+import { readJournals } from "../../contract/src/kit/state.ts";
 
 /*
  * The sessions' queues and turns as the journal records them, on their own: a change the journal cannot record is

@@ -1,11 +1,8 @@
 import * as fs from "node:fs/promises";
-import { Effect, Fiber, Layer, Option, Stream } from "effect";
+import { Effect, Fiber, Option, Stream } from "effect";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { definePlugin, Events, makeCore, PluginContext } from "@lemma/core";
-import type { Handler, Plugin } from "@lemma/core";
-import { CompactionHook } from "@lemma/context";
-import type { CompactionError } from "@lemma/context";
-import type { CompactionRequest, CompactionResult } from "@lemma/context";
+import type { Plugin } from "@lemma/core";
 import { Notice } from "@lemma/contracts";
 import { Agent, AgentRequestHook } from "@lemma/agent";
 import { contentText, emptyUsage } from "@lemma/llm";
@@ -19,7 +16,7 @@ import type { Script } from "../../../agent/loop/tests/fakes.ts";
 import sessions from "@lemma/sessions-files";
 import tools from "@lemma/tools-registry";
 import compaction, { chooseCut, compactAsked, estimateTokens, requestChars, transcript } from "../src/index.ts";
-import { filesOf, REVIEW_PROMPT, SUMMARY_PROMPT, summaryAsk, validCut, viewTokens } from "../src/compact.ts";
+import { filesOf, REVIEW_PROMPT, SUMMARY_PROMPT, summaryAsk, viewTokens } from "../src/compact.ts";
 
 const user = (text: string): Message => ({ role: "user", content: [{ type: "text", text }], timestamp: 1 });
 const answer = (content: AssistantMessage["content"], input = 0, output = 0): Message => ({
@@ -96,8 +93,6 @@ describe("context a plugin told the model", () => {
       message(result("c1", "r".repeat(40))),
       message(answer([{ type: "text", text: "done" }])),
     );
-    expect(validCut(log, 2)).toBe(false);
-    expect(validCut(log, 1)).toBe(true);
     // The last response, 1 token, is enough; for 20, the call with its result and the context after it.
     expect(chooseCut(log, 1)).toBe(4);
     expect(chooseCut(log, 20)).toBe(1);
@@ -233,52 +228,7 @@ const cutOff: Script = Stream.fromIterable<StreamEvent>([
   },
 ]);
 
-/** A plugin whose `CompactionHook` handler answers every compaction with `result` (given the request). */
-const answering = (id: string, result: (request: CompactionRequest) => CompactionResult) =>
-  definePlugin({
-    id,
-    layer: Layer.effectDiscard(Effect.flatMap(PluginContext, (owner) => owner.on(CompactionHook, (request) => Effect.succeed(result(request))))),
-  });
-
 describe("in a session", () => {
-  it("lets a plugin write the summary itself through CompactionHook: no model writes one, and it is credited", async () => {
-    const mine = answering("my-summary", (request) => ({ kind: "summary", summary: "Mine.", firstKeptId: request.branch[request.firstKept]!.id }));
-    const { events, requests } = await twoTurns(reply("b"), [], [mine]);
-    expect(requests.map((request) => isSummary(request))).toEqual([false, false]);
-    expect(events.flatMap((event) => (event.data.type === "compaction" ? [event.data] : []))).toMatchObject([{ summary: "Mine.", source: "my-summary" }]);
-  });
-
-  it("credits the outermost plugin whose summary differs from what it was handed", async () => {
-    const handler = (id: string, order: number, handle: Handler<CompactionRequest, CompactionResult, CompactionError>) =>
-      definePlugin({ id, layer: Layer.effectDiscard(Effect.flatMap(PluginContext, (owner) => owner.on(CompactionHook, handle, { order }))) });
-    // The inner one skips; the outer one writes a summary over the skip.
-    const skips = handler("skips", 1, () => Effect.succeed({ kind: "skip", reason: "not now" }));
-    const writesOver = handler("writes-over", 0, (request, next) =>
-      Effect.map(next(request), (made) =>
-        made.kind === "skip" ? { kind: "summary", summary: "Over.", firstKeptId: request.branch[request.firstKept]!.id } : made,
-      ),
-    );
-    const { events } = await twoTurns(reply("b"), [], [skips, writesOver]);
-    expect(events.flatMap((event) => (event.data.type === "compaction" ? [event.data] : []))).toMatchObject([{ summary: "Over.", source: "writes-over" }]);
-  });
-
-  it("keeps the history only from a place it may be: a summary cut elsewhere fails, and the history stays as it is", async () => {
-    // Its first event: before anything the summary could stand for.
-    const { events, notices } = await twoTurns(
-      reply("b"),
-      [],
-      [answering("bad-cut", (request) => ({ kind: "summary", summary: "Mine.", firstKeptId: request.branch[0]!.id }))],
-    );
-    expect(events.some((event) => event.data.type === "compaction")).toBe(false);
-    expect(notices).toMatchObject([{ level: "warning", source: "context.compaction", message: expect.stringContaining("cannot be kept from") }]);
-  });
-
-  it("lets a plugin skip a compaction, which leaves the history as it is", async () => {
-    const { events, requests } = await twoTurns(reply("b"), [], [answering("keeps-all", () => ({ kind: "skip", reason: "keeps everything" }))]);
-    expect(requests).toHaveLength(2);
-    expect(events.some((event) => event.data.type === "compaction")).toBe(false);
-  });
-
   it("summarizes the earlier conversation before a call that would fill too much of the window", async () => {
     const { id, events, notices, requests, turns } = await twoTurns(reply("They asked about x; it was answered."));
     // The first turn's request, the summary, the second turn's request.
@@ -458,41 +408,17 @@ describe("in a session", () => {
   };
 
   it("summarizes when the user asks with /compact, before the next model call, whatever its estimate, and only once", async () => {
-    const seen: CompactionRequest[] = [];
-    const watching = definePlugin({
-      id: "watching",
-      layer: Layer.effectDiscard(
-        Effect.flatMap(PluginContext, (owner) =>
-          owner.on(CompactionHook, (request, next) =>
-            Effect.andThen(
-              Effect.sync(() => seen.push(request)),
-              next(request),
-            ),
-          ),
-        ),
-      ),
-    });
-    const { events, notice, outcome, requests } = await asking([reply("a"), reply("They asked about x."), reply("b"), reply("c")], [watching]);
+    const { events, notice, outcome, requests } = await asking([reply("a"), reply("They asked about x."), reply("b"), reply("c")]);
     expect(outcome).toMatchObject({ kind: "handled", by: "context.compaction" });
     // The first turn's request, the summary, then the next two turns' requests: no second summary.
     expect(requests.map((request) => isSummary(request))).toEqual([false, true, false, false]);
     expect(JSON.stringify(requests[1]!.messages)).toContain("The user asked the summary to focus on: the x question");
-    expect(seen).toMatchObject([{ reason: "requested", instructions: "the x question" }]);
     // Far shorter than what is kept by default, the conversation is summarized but for its last quarter: the new prompt.
     const prompt = events.find((event) => event.data.type === "message" && JSON.stringify(event.data.message).includes("y".repeat(400)))!;
     expect(events.flatMap((event) => (event.data.type === "compaction" ? [event.data] : []))).toMatchObject([{ firstKeptId: prompt.id }]);
     expect(notice).toMatchObject({ level: "info", message: expect.stringContaining("Summarized the earlier conversation") });
     // The command itself is not logged.
     expect(JSON.stringify(events)).not.toContain("/compact");
-  });
-
-  it("says so when a handler skips a compaction the user asked for", async () => {
-    const { events, notice } = await asking(
-      [reply("a"), reply("b"), reply("c")],
-      [answering("keeps-all", () => ({ kind: "skip", reason: "keeps everything" }))],
-    );
-    expect(events.some((event) => event.data.type === "compaction")).toBe(false);
-    expect(notice).toEqual({ level: "info", source: "context.compaction", message: "The earlier conversation was not summarized: keeps everything" });
   });
 
   it("sizes the request after every other handler has added to it", async () => {
