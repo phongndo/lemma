@@ -3,7 +3,7 @@ import { load, save } from "@lemma/web/storage";
 import { dragEdge } from "@lemma/web/drag";
 import { onLookChange, tokenColor } from "@lemma/web/paint";
 import { Actions } from "@lemma/actions";
-import { Docks, FRAME_CONTRACT, Layers, Layout, MainRegion, SidebarRegion, TopRegion, nothingFocused } from "@lemma/frame";
+import { Docks, FRAME_CONTRACT, Layers, Layout, MainRegion, SidebarRegion, nothingFocused } from "@lemma/frame";
 import { Root, Slots, defineWebPlugin, Contained, Each } from "@lemma/web";
 import { SidebarIcon } from "@lemma/look";
 import styles from "./shell.css?inline";
@@ -192,22 +192,13 @@ export default defineWebPlugin({
       if (controlsOverlay !== undefined) onCleanup(plugin.listen(controlsOverlay, "geometrychange", onGeometry));
       const sidebar = () => slots.first(SidebarRegion);
       const main = () => slots.first(MainRegion);
-      const top = () => slots.first(TopRegion);
       return (
         <div class="frame" ref={frame}>
-          <Show when={top()} keyed>
-            {(region) => (
-              // A bar across the top takes the title bar, so what is under it no longer makes room for the window's controls.
-              <div class="top-slot" data-titlebar={titlebar() ? "" : undefined} inert={drawerOpen() || undefined}>
-                <Contained slot={TopRegion} item={region} component={region.component} />
-              </div>
-            )}
-          </Show>
           <div
             class="app"
             classList={{ "drawer-open": drawer(), "sidebar-collapsed": collapsed() || sidebar() === undefined, resizing: resizing() }}
             style={{ "--sidebar": `${width()}px` }}
-            data-titlebar={titlebar() && top() === undefined ? "" : undefined}
+            data-titlebar={titlebar() ? "" : undefined}
           >
             <Show when={sidebar()} keyed>
               {(region) => (
