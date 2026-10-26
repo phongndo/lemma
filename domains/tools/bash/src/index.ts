@@ -1,4 +1,3 @@
-import { randomUUID } from "node:crypto";
 import { Effect, Schema } from "effect";
 import { definePlugin, Events } from "@lemma/core";
 import { ModelNotice, PromptSections } from "@lemma/agent";
@@ -29,13 +28,9 @@ export default definePlugin({
   id: "tools.bash",
   version: "0.1.0",
   config: BashConfig,
-  // The key to this host's background commands, from the instance replaced.
-  carry: Schema.String,
   setup: function* (_, owner) {
     const events = yield* Events;
-    const key = owner.previous ?? randomUUID();
-    const jobs = hostJobs(key);
-    yield* owner.handoff(() => key);
+    const jobs = hostJobs(events);
     // This instance tells each exit until its replacement attaches; the last to detach stops what still runs.
     const detach = jobs.attach(({ job, text, display }) => {
       Effect.runFork(events.publish(ModelNotice, { sessionId: job.sessionId, id: job.id, source: owner.id, content: [{ type: "text", text }], display }));

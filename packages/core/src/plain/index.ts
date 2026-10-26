@@ -1,5 +1,4 @@
 import { Cause, Context, Deferred, Duration, Effect, Scope, Tracer } from "effect";
-import type { Schema } from "effect";
 import { awaitable, EffectOf, inContext, isExpectedFailure, settle } from "../awaitable.ts";
 import { PluginStopped } from "../errors.ts";
 import type { Awaitable } from "../awaitable.ts";
@@ -63,20 +62,9 @@ export interface TimerOptions {
 }
 
 /** What a promise-based `setup` receives besides its services. */
-export interface PlainSetup<Config, Carried = unknown> extends PluginIdentity {
+export interface PlainSetup<Config> extends PluginIdentity {
   /** Decoded from the plugin's `config`. */
   readonly config: Config;
-  /**
-   * What the instance it replaces handed over (`handoff`), decoded by `carry`
-   * when it has one: state that survives a reload or a config change.
-   * Undefined on a first start, after a failure, or when it no longer decodes.
-   */
-  readonly previous: Carried | undefined;
-  /**
-   * Hands state to this plugin's replacement: `save` runs when a replacement
-   * starts (see `PluginContext.handoff`), and returns its `previous`.
-   */
-  readonly handoff: (save: () => Carried) => void;
   /** Aborted when the plugin stops, before its cleanups run: hand it to work it starts. */
   readonly signal: AbortSignal;
   /** Runs when the plugin stops, after its signal aborts; the last added runs first, and each runs even if another throws. */
@@ -148,16 +136,9 @@ export interface PlainSetup<Config, Carried = unknown> extends PluginIdentity {
   readonly action: <Args extends readonly unknown[]>(name: string, fn: (...args: Args) => unknown) => (...args: Args) => void;
 }
 
-export interface PlainDefinition<
-  Requires extends Capabilities,
-  Provides extends Capabilities,
-  C extends ConfigInput | undefined,
-  Carried = unknown,
-> extends PluginManifest {
+export interface PlainDefinition<Requires extends Capabilities, Provides extends Capabilities, C extends ConfigInput | undefined> extends PluginManifest {
   /** A Schema, or the defaults one is derived from (`{ limit: 3 }`). */
   readonly config?: C;
-  /** Checks what a previous instance handed over before setup sees it as `previous` (see `SetupDefinition.carry`). */
-  readonly carry?: Schema.Codec<Carried, any>;
   /** Capabilities it uses, by the names `setup` receives them under. */
   readonly requires?: Requires;
   /** Capabilities it provides, by the names `setup` returns them under. */
@@ -170,7 +151,7 @@ export interface PlainDefinition<
    */
   readonly setup: (
     services: PlainServices<NoInfer<Requires>>,
-    plugin: PlainSetup<ConfigOf<NoInfer<C>>, NoInfer<Carried>>,
+    plugin: PlainSetup<ConfigOf<NoInfer<C>>>,
   ) => Provided<NoInfer<Provides>> | PromiseLike<Provided<NoInfer<Provides>>>;
 }
 
@@ -257,22 +238,16 @@ class PlainNext<O> implements PromiseLike<O> {
  *     },
  *   });
  */
-export function definePlugin<
-  const Requires extends Capabilities = {},
-  const Provides extends Capabilities = {},
-  C extends ConfigInput | undefined = undefined,
-  Carried = unknown,
->(definition: PlainDefinition<Requires, Provides, C, Carried>, embedding: Embedding = {}): Plugin<readonly Provides[keyof Provides][]> {
+export function definePlugin<const Requires extends Capabilities = {}, const Provides extends Capabilities = {}, C extends ConfigInput | undefined = undefined>(
+  definition: PlainDefinition<Requires, Provides, C>,
+  embedding: Embedding = {},
+): Plugin<readonly Provides[keyof Provides][]> {
   const { setup, ...manifest } = definition;
   return defineSetup({
-    ...(manifest as Omit<PlainDefinition<Requires, Provides, C, Carried>, "setup">),
+    ...(manifest as Omit<PlainDefinition<Requires, Provides, C>, "setup">),
     setup: (
       services: Readonly<Record<string, unknown>>,
-      owner: Omit<Context.Service.Shape<typeof PluginContext>, "previous"> & {
-        readonly config: unknown;
-        readonly signal: AbortSignal;
-        readonly previous: unknown;
-      },
+      owner: Context.Service.Shape<typeof PluginContext> & { readonly config: unknown; readonly signal: AbortSignal },
     ) =>
       Effect.gen(function* () {
         const hooks = yield* Hooks;
@@ -320,7 +295,7 @@ export function definePlugin<
           typeof embedding.services === "function"
             ? embedding.services(raw, owner)
             : Object.fromEntries(Object.entries(raw).map(([name, service]) => [name, plainView(service, bridge, name)]));
-        const run = () => setup(view as PlainServices<Requires>, plugin as PlainSetup<ConfigOf<C>, Carried>);
+        const run = () => setup(view as PlainServices<Requires>, plugin as PlainSetup<ConfigOf<C>>);
         // Setup runs in the plugin's own context (a timer it starts does not trace under an activation long over),
         // recording the calls it makes: it is active once they have settled, and a registration that failed fails it.
         // Work it starts elsewhere (a background task) is not waited for.
@@ -342,7 +317,7 @@ export function definePlugin<
 }
 
 const context = (
-  owner: Omit<Context.Service.Shape<typeof PluginContext>, "previous"> & { readonly config: unknown; readonly signal: AbortSignal; readonly previous: unknown },
+  owner: Context.Service.Shape<typeof PluginContext> & { readonly config: unknown; readonly signal: AbortSignal },
   bridge: Bridge,
   hooks: Context.Service.Shape<typeof Hooks>,
   events: Context.Service.Shape<typeof Events>,
@@ -384,8 +359,6 @@ const context = (
     ...(owner.version === undefined ? {} : { version: owner.version }),
     config: owner.config,
     signal: owner.signal,
-    previous: owner.previous,
-    handoff: (save) => runSync(owner.handoff(save)),
     onCleanup: (cleanup) => void cleanups.push(cleanup),
     on: (hook, handler, options) => {
       const wantsSignal = handler.length >= 3;

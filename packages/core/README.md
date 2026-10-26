@@ -231,8 +231,6 @@ export default definePlugin({
   records no fault, so a caller logs what is not a refusal. The host installs
   it: a plugin's stray error does not end the process, and one that is
   nobody's does, as Node.js would end it, since the host's state may be broken.
-- **Reloading.** `handoff(() => state)` and `previous` carry state to the
-  replacement, as `PluginContext.handoff` does, checked by `carry` when given.
 - **Nested services.** Objects inside a service are converted as the service
   is, down to four levels below it, and read through: what a view shows is what
   the object holds now. A plain object becomes an object with its keys; a class
@@ -422,7 +420,7 @@ turns it on for every plugin's work. Both come from `@lemma/core` and
 
 `loader.affected(next)` answers, changing nothing, which plugins `apply(next)` would start, restart, or stop, by the same comparison step 2 makes (a definition that is not the same object, a config not structurally equal, a dependent of either); with `{ restart: ids }`, what a forced `core.restart` of those ids would restart too. An application that must know what a change touches before making it (whose work a restart would cut off) asks this rather than predicting the loader's answer. It answers for what runs when asked, so one that acts on it makes its changes one at a time.
 
-A replacement can start where its predecessor left off. `PluginContext.handoff(save)` registers what the running instance hands over; `save` runs when the replacement starts staging (an `exclusive` plugin's once its work has drained, just before it stops, so everything it did is included; otherwise changes after that moment are not carried), and a structured clone of its result is the replacement's `PluginContext.previous`. The clone means the two never share an object: a replacement that fails to start cannot change the state the old instance keeps serving with. State must therefore be what `structuredClone` copies (data, `Map`, `Set`, `Date`; not functions or sockets); what it cannot copy is reported as the old instance's fault, and the replacement starts fresh. A first start, a restart after a failure (a failed instance's state is not trusted), and a `save` that throws (reported as the old instance's fault) all start with `previous` undefined. With `setup`, a `carry` Schema checks what arrives first: state whose shape changed in an update fails to decode, is reported as the plugin's fault (`handoff`), and the plugin starts fresh instead of trusting it. The state stays in memory; durable state belongs to the plugin's own storage.
+A replacement starts fresh: no in-memory state crosses a reload. A plugin that keeps something running through one (a process it started) holds it outside its instances, keyed by its core. `Hooks`, `Events`, and `Registries` are each one object for the life of the core, and another core's are other objects, so a replacement finds what its predecessor kept under them. Both instances run while the replacement stages, so both use what they share. Durable state belongs to the plugin's own storage.
 
 Caller cancellation rolls back staging. Once the swap or an exclusive resource interruption has begun, the supervised lifecycle operation finishes even if disposal interrupts its initiating `core.run` caller. A caller that lost the result must inspect the resulting state. Core shutdown still owns and interrupts lifecycle work.
 

@@ -113,13 +113,13 @@ guess how long a replacement takes to start.
 The [loader contract](README.md#loader-and-reload) gives the
 steps and what each failure leaves running.
 
-In-memory state crosses a reload only when the plugin hands it over
-(`handoff`), as a structured clone taken when its replacement starts, not as shared
-mutable state. The old instance keeps serving while the new one stages, so
-anything shared would be written by two instances at once. A failed instance
-hands nothing over, since the failure may have left its state half updated.
-The handoff is a convenience for keeping work across an edit (an application reloading
-code as it is edited); it is not persistence, which stays the application's.
+No in-memory state crosses a reload: a replacement starts as a first start
+does. The old instance keeps serving while the new one stages, so state the two
+shared would be written by both at once. A plugin that keeps something running
+through a reload (a process it started) holds it outside its instances, keyed
+by its core: `Hooks`, `Events`, and `Registries` are each one object for the
+life of a core, and another core's are others. Persistence stays the
+application's.
 
 A change is all or nothing because it has a running composition to keep. The
 first start has none, so refusing it for one failing plugin only takes away the
