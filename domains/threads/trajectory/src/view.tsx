@@ -156,8 +156,10 @@ export function createTrajectory(deps: TrajectoryDeps): () => JSX.Element {
         event.stopPropagation();
         return;
       }
-      // The details keep their own keys (their tabs', a text's selection).
-      if (typing || !(event.target instanceof Element) || event.target.closest(".trj-details") !== null) return;
+      // The details keep their own keys (a text's selection), but on their tabs, whose ← and → are theirs, ↑ and ↓ still
+      // move the selection, as they do from the table.
+      if (typing || !(event.target instanceof Element)) return;
+      if (event.target.closest(".trj-details") !== null && !event.target.matches('[role="tab"]')) return;
       // Enter or Space on a row opens its details, as a click does.
       if ((event.key === "Enter" || event.key === " ") && event.target instanceof HTMLTableRowElement && event.target.dataset.record !== undefined) {
         event.preventDefault();

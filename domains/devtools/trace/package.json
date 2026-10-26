@@ -13,6 +13,7 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@lemma/client": "workspace:*",
     "@lemma/contracts": "workspace:*",
     "@lemma/core": "workspace:*",
     "@lemma/devtools": "workspace:*",

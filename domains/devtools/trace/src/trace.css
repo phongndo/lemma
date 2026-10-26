@@ -22,8 +22,8 @@
   color: var(--text-3);
 }
 
-/* On a selected row's fill, its muted parts (the caret, how many spans are under it) step up a shade, so they still read. */
-.trc .dt-table tbody tr[data-selected="true"] :is(.trc-caret, .dt-muted) {
+/* On a selected row's fill, its caret steps up a shade, as the foundation's muted text (how many spans are under it) does. */
+.trc .dt-table tbody tr[data-selected="true"] .trc-caret {
   color: var(--text-2);
 }
 
@@ -87,10 +87,8 @@
   table-layout: fixed;
 }
 
+/* Every cell a list's (`.dt-wrap`), set at its row's top. */
 .trc-changes td {
-  height: auto;
-  padding-top: 3px;
-  padding-bottom: 3px;
   vertical-align: top;
 }
 

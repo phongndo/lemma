@@ -502,7 +502,9 @@ export function createDetails(view: View) {
     const id = createUniqueId();
     let strip!: HTMLDivElement;
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "ArrowUp" || event.key === "ArrowDown") return;
+      // A tab's own keys: not on the controls beside them (the close button), nor with a modifier (Alt+← is back).
+      if (event.key === "ArrowUp" || event.key === "ArrowDown" || event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
+      if (!(event.target instanceof Element) || !event.target.matches('[role="tab"]')) return;
       const index = radioStep(
         event.key,
         props.tabs.findIndex((candidate) => candidate.id === active()?.id),

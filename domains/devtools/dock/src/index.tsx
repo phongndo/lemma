@@ -75,14 +75,16 @@ export default defineWebPlugin({
         if (by === undefined && event.key !== "Enter") return;
         event.preventDefault();
         // Enter resets it, as a double-click does.
-        if (by === undefined) setHeight(HEIGHT);
+        if (by === undefined) fit(HEIGHT);
         else fit(height() + by);
       };
       // The tabs are one Tab stop, the shown one's; arrows, Home, and End move between them, as a tab list's do.
       const id = createUniqueId();
       let strip!: HTMLDivElement;
       const tabKeys = (event: KeyboardEvent) => {
-        if (event.key === "ArrowUp" || event.key === "ArrowDown") return;
+        // A tab's own keys: not on the close button beside them, nor with a modifier (Alt+← is back).
+        if (event.key === "ArrowUp" || event.key === "ArrowDown" || event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
+        if (!(event.target instanceof Element) || !event.target.matches('[role="tab"]')) return;
         const list = panels();
         const index = radioStep(
           event.key,
@@ -100,14 +102,16 @@ export default defineWebPlugin({
       const findKeys = (event: KeyboardEvent) => {
         const find = event.key === "f" && (event.ctrlKey || event.metaKey) && !event.altKey && !event.shiftKey;
         if (!find && !(event.key === "/" && !typing(event.target))) return;
+        // A panel with no filter (Hooks) leaves them to the app: its find bar, the prompt.
+        const filter = body.querySelector<HTMLInputElement>(".dt-filter input");
+        if (filter === null) return;
         event.preventDefault();
         event.stopPropagation();
-        const filter = body.querySelector<HTMLInputElement>(".dt-filter input");
-        filter?.focus();
-        filter?.select();
+        filter.focus();
+        filter.select();
       };
-      // The dock is not a `.dt-scope`, as each panel is: focus on its edge, tabs, or close button is not focus in a panel's
-      // table (`:focus-within`), whose selected row stays as it is.
+      // The panel's body is the `.dt-scope`, not the whole dock: a panel is drawn in the vocabulary, and focus on the
+      // dock's edge, tabs, or close button is not focus in its table (`:focus-within`), whose selected row stays as it is.
       return (
         <section
           class="devtools"
@@ -127,7 +131,7 @@ export default defineWebPlugin({
             tabindex="0"
             data-tip="Drag to resize · double-click to reset"
             onPointerDown={resize}
-            onDblClick={() => setHeight(HEIGHT)}
+            onDblClick={() => fit(HEIGHT)}
             onKeyDown={resizeKeys}
           />
           <div class="dt-tabs" role="tablist" aria-label="Devtools panels" ref={strip} onKeyDown={tabKeys}>
@@ -157,7 +161,7 @@ export default defineWebPlugin({
             </button>
           </div>
           <div
-            class="devtools-body"
+            class="dt-scope devtools-body"
             role="tabpanel"
             id={`${id}-panel`}
             aria-labelledby={current() === undefined ? undefined : `${id}-${current()!.id}`}

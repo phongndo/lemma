@@ -207,6 +207,14 @@
   animation: pulse 1.4s ease-in-out infinite;
 }
 
+/* The pulse is how a span shows it is still running, so where motion is unwanted it slows (`data-motion`), not stops. */
+@media (prefers-reduced-motion: reduce) {
+  .trj-span[data-running="true"],
+  .trj-wf-bar[data-running="true"] {
+    animation-duration: 2.8s;
+  }
+}
+
 .trj-span[data-dim="true"] {
   opacity: 0.15;
 }

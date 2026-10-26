@@ -59,6 +59,7 @@ export function createTable(view: View) {
               data-kind={props.record.kind}
               data-error={props.span!.error}
               data-running={props.span!.end === undefined}
+              data-motion={props.span!.end === undefined || undefined}
               classList={{ "has-ttft": ttft() !== undefined && !equalDurations() }}
               style={{ left: `${pct(b().from)}%`, width: `max(2px, ${pct(b().to) - pct(b().from)}%)`, "--ttft": `${ttft() ?? 0}%` }}
               data-tip={`${clockTime(props.span!.start)}${props.span!.end === undefined ? " · running" : ` · ${formatDuration(props.span!.end - props.span!.start)}`}${props.span!.ttft === undefined ? "" : ` · TTFT ${formatDuration(props.span!.ttft)}`}`}
@@ -187,13 +188,7 @@ export function createTable(view: View) {
     let wfHeader: HTMLTableCellElement | undefined;
 
     return (
-      <table
-        class="trj-table dt-table"
-        classList={{ compact: props.compact, narrow: !props.compact && level() > 0 }}
-        role="grid"
-        aria-label="Trajectory records"
-        tabindex="0"
-      >
+      <table class="trj-table dt-table" classList={{ compact: props.compact }} role="grid" aria-label="Trajectory records" tabindex="0">
         <colgroup>
           <For each={columns()}>{(column) => <col class={column.class} />}</For>
         </colgroup>

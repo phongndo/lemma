@@ -1,5 +1,6 @@
 import { For, Match, Show, Switch, createMemo, createSignal, onMount } from "solid-js";
 import type { Accessor, JSX } from "solid-js";
+import { formatDuration } from "@lemma/client/format";
 import type { PluginStatus, SpanRecord } from "@lemma/contracts";
 import { PLUGIN_PANEL, clearsOnEscape, rowKeys } from "@lemma/devtools/web";
 import { XIcon } from "@lemma/look";
@@ -27,21 +28,26 @@ const MODES: readonly { readonly id: Mode; readonly label: string }[] = [
 ];
 
 /**
- * A time with its unit, written as the trajectory writes one (`614ms`, `1.82s`): milliseconds below a second, to a
- * hundredth below 10ms and a tenth below 100ms, as a span's time is often a fraction of one; seconds from there.
+ * A time with its unit: from 100ms, as the trajectory writes one (`formatDuration`: `614ms`, `1.8s`, `1m 15s`); below,
+ * finer, as a span's time is often a fraction of a millisecond (`<0.01ms`, `3.46ms`, `45.7ms`).
  */
-const ms = (value: number) =>
-  value <= 0
-    ? "0ms"
-    : value < 0.01
-      ? "<0.01ms"
-      : value < 10
-        ? `${value.toFixed(2)}ms`
-        : value < 100
-          ? `${value.toFixed(1)}ms`
-          : value < 999.5
-            ? `${Math.round(value)}ms`
-            : `${(value / 1000).toFixed(value < 10_000 ? 2 : 1)}s`;
+const ms = (value: number) => {
+  if (!Number.isFinite(value) || value <= 0) return "0ms";
+  if (value >= 99.95) return formatDuration(value);
+  if (value < 0.01) return "<0.01ms";
+  return value < 9.995 ? `${value.toFixed(2)}ms` : `${value.toFixed(1)}ms`;
+};
+/**
+ * Focus goes back to the Spans view's table in the panel `root` (the trace's `.trc`), on the row of `id` when it shows:
+ * where a view or the details that had it went away from (Enter on a plugin, a fault; closing the details).
+ */
+const focusSpans = (root: Element | null | undefined, id?: string) =>
+  queueMicrotask(() => {
+    const table = root?.querySelector<HTMLElement>('table[aria-label="Spans"]');
+    const row = id === undefined ? null : (table?.querySelector<HTMLElement>(`tbody tr[data-key="${CSS.escape(id)}"]`) ?? null);
+    (row ?? table)?.focus();
+  });
+
 const pluginOf = (span: SpanRecord) => (typeof span.attributes["plugin.id"] === "string" ? (span.attributes["plugin.id"] as string) : undefined);
 
 /** What the panel shares between its views: the trace shown, its filter, and the span selected. */
@@ -83,11 +89,27 @@ function SpanDetails(props: { shown: Shown; span: SpanRecord }) {
     props.shown.setQuery(query);
     props.shown.select(undefined);
   };
+  /** Closes the details, focus going back to the span's row. */
+  const close = (from: Element) => {
+    const id = span().id;
+    const root = from.closest(".trc");
+    props.shown.select(undefined);
+    focusSpans(root, id);
+  };
   return (
-    <aside class="dt-details dt-side" aria-label="Span details">
+    <aside
+      class="dt-details dt-side"
+      aria-label="Span details"
+      onKeyDown={(event) => {
+        if (event.key !== "Escape" || event.defaultPrevented) return;
+        event.preventDefault();
+        event.stopPropagation();
+        close(event.currentTarget);
+      }}
+    >
       <div class="dt-details-title">
         <strong class="dt-code trc-title">{span().name}</strong>
-        <button class="dt-close trc-end" aria-label="Close details" data-tip="Close (Esc)" onClick={() => props.shown.select(undefined)}>
+        <button class="dt-close trc-end" aria-label="Close details" data-tip="Close (Esc)" onClick={(event) => close(event.currentTarget)}>
           <XIcon />
         </button>
       </div>
@@ -319,8 +341,11 @@ function PluginsView(props: { shown: Shown }) {
   });
   const [chosen, choose] = createSignal<string>();
   const narrowTo = (plugin: string) => {
+    const root = document.activeElement?.closest(".trc");
     props.shown.setQuery(narrowedBy(props.shown.query(), "plugin", plugin));
     props.shown.setMode("spans");
+    // This view goes, with the row focused: focus goes on to the spans it narrowed to.
+    focusSpans(root);
   };
   return (
     <div class="dt-main" tabindex="-1">
@@ -408,12 +433,12 @@ function ChangesView(props: { shown: Shown }) {
           >
             {(change) => (
               <tr data-row title={change.subjects?.join(", ")}>
-                <td class="dt-muted">{clockTime(change.at)}</td>
-                <td>{change.cause}</td>
+                <td class="dt-muted dt-wrap">{clockTime(change.at)}</td>
+                <td class="dt-wrap">{change.cause}</td>
                 <Show
                   when={change.refused === undefined}
                   fallback={
-                    <td colSpan={4} class="dt-err">
+                    <td colSpan={4} class="dt-err dt-wrap">
                       Refused: {change.refused}
                     </td>
                   }
@@ -451,9 +476,11 @@ function FaultsView(props: { shown: Shown; plugins: Accessor<readonly PluginStat
   const [chosen, choose] = createSignal<string>();
   /** A failed span, in the Spans view: among its turn's, or every failed one's. */
   const showSpan = (span: SpanRecord) => {
+    const root = document.activeElement?.closest(".trc");
     props.shown.setQuery(span.attributes["turn.id"] === undefined ? "status:error" : `turn:${String(span.attributes["turn.id"])}`);
     props.shown.select(span.id);
     props.shown.setMode("spans");
+    focusSpans(root, span.id);
   };
   return (
     <div class="dt-main" tabindex="-1">
