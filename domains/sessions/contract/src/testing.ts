@@ -4,16 +4,7 @@ import { TestClock } from "effect/testing";
 import { describe, expect, test } from "vitest";
 import { definePlugin, makeCore, PluginContext } from "@lemma/core";
 import type { Plugin } from "@lemma/core";
-import {
-  SessionAppended,
-  SessionChanged,
-  SessionCheckedOut,
-  SessionCheckoutHook,
-  SessionError,
-  SessionRemoved,
-  SessionRemoveHook,
-  Sessions,
-} from "./sessions.ts";
+import { SessionAppended, SessionChanged, SessionError, SessionRemoved, Sessions } from "./sessions.ts";
 import type { EventData, SessionEvent } from "./sessions.ts";
 
 type Store = Context.Service.Shape<typeof Sessions>;
@@ -154,31 +145,15 @@ export function sessionsConformance(name: string, compose: (deletions: Deletions
         }),
       ));
 
-    test("checkout moves the leaf, says so (SessionCheckedOut), and the next append follows it", () =>
-      run((store, seen) =>
+    test("checkout moves the leaf, and the next append follows it", () =>
+      run((store) =>
         Effect.gen(function* () {
           const { id } = yield* store.create({ cwd: "/work/a" });
           const root = yield* store.append(id, note("root"));
-          const child = yield* store.append(id, note("child"));
+          yield* store.append(id, note("child"));
           expect((yield* store.checkout(id, root.id)).leaf).toBe(root.id);
           expect(yield* store.branch(id)).toEqual([root]);
           expect((yield* store.append(id, note("sibling"))).parent).toBe(root.id);
-          yield* eventually(() => seen.checkedOut.length > 0);
-          expect(seen.checkedOut).toEqual([{ sessionId: id, from: child.id, to: root.id }]);
-        }),
-      ));
-
-    test("checkout asks SessionCheckoutHook first: a handler's refusal fails it with that error and keeps the leaf", () =>
-      run((store, seen) =>
-        Effect.gen(function* () {
-          const { id } = yield* store.create({ cwd: "/work/a" });
-          const root = yield* store.append(id, note("root"));
-          const child = yield* store.append(id, note("child"));
-          seen.holding.add(id);
-          expect(reason(yield* Effect.result(store.checkout(id, root.id)))).toBe("Busy");
-          expect((yield* store.get(id)).leaf).toBe(child.id);
-          seen.holding.delete(id);
-          expect((yield* store.checkout(id, root.id)).leaf).toBe(root.id);
         }),
       ));
 
@@ -220,23 +195,6 @@ export function sessionsConformance(name: string, compose: (deletions: Deletions
           expect(reason(yield* Effect.result(store.get(id)))).toBe("NotFound");
           expect(reason(yield* Effect.result(store.events(id)))).toBe("NotFound");
           expect(yield* store.list()).toEqual([]);
-        }),
-      ));
-
-    test("remove asks SessionRemoveHook first: a handler's refusal fails it with that error and keeps the session", () =>
-      run((store, seen) =>
-        Effect.gen(function* () {
-          const { id } = yield* store.create({ cwd: "/work/a" });
-          yield* store.append(id, note("one"));
-          seen.around.set(id, () => Effect.fail(new SessionError({ sessionId: id, reason: "Busy", message: `"${id}" is in use` })));
-          expect(reason(yield* Effect.result(store.remove(id)))).toBe("Busy");
-          expect((yield* store.get(id)).lastSeq).toBe(1);
-          expect((yield* store.events(id)).length).toBe(1);
-          expect((yield* store.list()).map((info) => info.id)).toEqual([id]);
-          // Let go, it is removed.
-          seen.around.delete(id);
-          yield* store.remove(id);
-          expect(reason(yield* Effect.result(store.get(id)))).toBe("NotFound");
         }),
       ));
 
@@ -299,32 +257,6 @@ export function sessionsConformance(name: string, compose: (deletions: Deletions
         }),
       ));
 
-    test("a SessionRemoveHook handler that holds the session before calling next has it fail Busy, keeping it; one that holds it after next gets NotFound", () =>
-      run((store, seen) =>
-        Effect.gen(function* () {
-          const { id: kept } = yield* store.create({ cwd: "/work/a" });
-          seen.around.set(kept, (next) => Effect.scoped(Effect.andThen(store.hold(kept), next)));
-          expect(reason(yield* Effect.result(store.remove(kept)))).toBe("Busy");
-          expect((yield* store.get(kept)).id).toBe(kept);
-          // Not held once the handler has let go.
-          seen.around.delete(kept);
-          yield* store.remove(kept);
-
-          const { id: gone } = yield* store.create({ cwd: "/work/a" });
-          let after: string | undefined;
-          seen.around.set(gone, (next) =>
-            Effect.andThen(
-              next,
-              Effect.map(Effect.result(Effect.scoped(store.hold(gone))), (held) => {
-                after = reason(held);
-              }),
-            ),
-          );
-          yield* store.remove(gone);
-          expect(after).toBe("NotFound");
-        }),
-      ));
-
     test("refusals: a missing session or event, an unknown parent", () =>
       run((store) =>
         Effect.gen(function* () {
@@ -362,28 +294,16 @@ interface Seen {
   readonly appended: { readonly sessionId: string; readonly event: SessionEvent }[];
   readonly changed: { readonly id: string; readonly lastSeq: number }[];
   readonly removed: string[];
-  /** By session, what its `SessionRemoveHook` handler does around `next` (the rest of the removal), as a plugin's may. */
-  readonly around: Map<string, <E>(next: Effect.Effect<void, E>) => Effect.Effect<void, E | SessionError>>;
-  readonly checkedOut: { readonly sessionId: string; readonly from: string | undefined; readonly to: string }[];
-  /** Sessions whose checkouts its `SessionCheckoutHook` handler refuses, as a plugin's may. */
-  readonly holding: Set<string>;
 }
 
-/** Another plugin beside the store: it records what the store publishes, and handles the removals it is told to. */
+/** Another plugin beside the store: it records what the store publishes. */
 function recorder(): Seen {
-  const seen: Omit<Seen, "plugin"> = { appended: [], changed: [], removed: [], around: new Map(), checkedOut: [], holding: new Set() };
+  const seen: Omit<Seen, "plugin"> = { appended: [], changed: [], removed: [] };
   const plugin = definePlugin({
     id: "conformance-recorder",
     layer: Layer.effectDiscard(
       Effect.gen(function* () {
         const owner = yield* PluginContext;
-        yield* owner.on(SessionRemoveHook, (input, next) => seen.around.get(input.sessionId)?.(next(input)) ?? next(input));
-        yield* owner.on(SessionCheckoutHook, (input, next) =>
-          seen.holding.has(input.sessionId)
-            ? Effect.fail(new SessionError({ sessionId: input.sessionId, reason: "Busy", message: `"${input.sessionId}" stays on its branch` }))
-            : next(input),
-        );
-        yield* owner.observe(SessionCheckedOut, (payload) => Effect.sync(() => void seen.checkedOut.push(payload)), { buffer: 256 });
         yield* owner.observe(SessionAppended, (payload) => Effect.sync(() => void seen.appended.push(payload)), { buffer: 256 });
         yield* owner.observe(SessionChanged, ({ info }) => Effect.sync(() => void seen.changed.push(info)), { buffer: 256 });
         yield* owner.observe(SessionRemoved, ({ sessionId }) => Effect.sync(() => void seen.removed.push(sessionId)), { buffer: 256 });

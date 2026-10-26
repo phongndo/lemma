@@ -1,6 +1,6 @@
-import { Context, Data, Effect, Predicate, Schema, Stream } from "effect";
+import { Context, Data, Effect, Schema, Stream } from "effect";
 import type { Scope } from "effect";
-import { Event, Hook, schemaCheck } from "@lemma/core";
+import { Event } from "@lemma/core";
 import type { Events } from "@lemma/core";
 import { defineRoute } from "@lemma/router";
 import { defineChannel, eventFeed, HandlerCredit, mapChunks, optionalPayload, ResultCredit, serveChannel } from "@lemma/contracts";
@@ -320,8 +320,7 @@ export type SessionInfo = typeof SessionInfo.Type;
 export class SessionError extends Data.TaggedError("SessionError")<{
   readonly sessionId?: string;
   /**
-   * `Busy`: `remove` or `relocate` refused, as the session is held (`Sessions.hold`) or a `SessionRemoveHook` handler
-   * refused it. `NotEmpty`: `relocate` refused, as something has gone into the session. `ReadOnly`: a write refused, as
+   * `Busy`: `remove` or `relocate` refused, as the session is held (`Sessions.hold`). `NotEmpty`: `relocate` refused, as something has gone into the session. `ReadOnly`: a write refused, as
    * the session's log is damaged (`SessionInfo.damaged`): `fork` it to go on.
    */
   readonly reason: "NotFound" | "Corrupt" | "Io" | "InvalidParent" | "Busy" | "NotEmpty" | "ReadOnly";
@@ -338,58 +337,6 @@ export const SessionAppended = Event.make<{ readonly sessionId: string; readonly
 /** A session created, or its info changed: by an append (its `lastSeq`, `updatedAt` and `leaf`, and `title` for a title event), a checkout (its `leaf`), or its marks. */
 export const SessionChanged = Event.make<{ readonly info: SessionInfo }>("lemma/session.changed");
 export const SessionRemoved = Event.make<{ readonly sessionId: string }>("lemma/session.removed");
-
-/**
- * Around every `Sessions.remove` of a session nothing holds, whoever calls
- * it; the terminal deletes the session, unless a hold was taken meanwhile, when
- * it fails `Busy`. A handler refuses by failing instead of calling `next`, and
- * cleans up after the session only once `next` has succeeded. A provider of
- * `Sessions` runs each removal through it, so a handler's rule holds for every
- * client and every plugin. Work that writes to the session holds it instead
- * (see `Sessions.hold`).
- *
- * @composition a chain: a handler refuses by failing instead of calling `next`, which fails `remove` with its error
- * and keeps the session; one that calls `next` and then fails reports its failure after the session is gone.
- */
-export const SessionRemoveHook = Hook.make<{ readonly sessionId: string }, void, SessionError>("lemma/session.remove");
-
-/** A checkout asked for: the session, the event its leaf moves to, and the leaf it moves from (when it was asked). */
-export interface CheckoutRequest {
-  readonly sessionId: string;
-  readonly eventId: string;
-  readonly from: string | undefined;
-}
-
-/**
- * Around every `Sessions.checkout`, whoever calls it; the terminal moves the leaf. A handler refuses a checkout by
- * failing instead of calling `next` (a plugin keeping a session on its branch while it works there), or acts on one
- * after `next` succeeded. A provider of `Sessions` runs each checkout through it.
- *
- * @composition a chain: a handler refuses by failing instead of calling `next`, which fails `checkout` with its error
- * and leaves the leaf where it was. Checked: what a handler hands on is a checkout request, what it returns a
- * `SessionInfo`.
- */
-export const SessionCheckoutHook = Hook.make<CheckoutRequest, SessionInfo, SessionError>("lemma/session.checkout", {
-  check: {
-    input: (value) =>
-      Predicate.isObject(value) &&
-      typeof value.sessionId === "string" &&
-      typeof value.eventId === "string" &&
-      (value.from === undefined || typeof value.from === "string")
-        ? undefined
-        : "expected a checkout: { sessionId, eventId, from? }, all strings",
-    output: (value) => schemaCheck(SessionInfo)(value),
-  },
-  summary: { input: (request) => ({ session: request.sessionId, to: request.eventId }) },
-});
-
-/**
- * A session's leaf moved (`Sessions.checkout`): later appends branch from `to`. Published by a provider of `Sessions`
- * after the move is durable, before `SessionChanged` for it.
- */
-export const SessionCheckedOut = Event.make<{ readonly sessionId: string; readonly from: string | undefined; readonly to: string }>(
-  "lemma/session.checked-out",
-);
 
 /** A change to how a session is filed; an absent field keeps its value. */
 export interface SessionMarks {
@@ -420,10 +367,7 @@ export class Sessions extends Context.Service<
     readonly events: (sessionId: string, options?: { readonly after?: number }) => Effect.Effect<readonly SessionEvent[], SessionError>;
     /** Root-to-leaf events of the current branch, or of the branch ending at `leaf`. */
     readonly branch: (sessionId: string, options?: { readonly leaf?: string }) => Effect.Effect<readonly SessionEvent[], SessionError>;
-    /**
-     * Point the leaf at an existing event; later appends branch from there. Runs through `SessionCheckoutHook`, and
-     * publishes `SessionCheckedOut` once the leaf has moved.
-     */
+    /** Point the leaf at an existing event; later appends branch from there. */
     readonly checkout: (sessionId: string, eventId: string) => Effect.Effect<SessionInfo, SessionError>;
     /** Pins, archives, or keeps it. None moves the leaf nor `updatedAt`: filing a session is not activity in it. */
     readonly mark: (sessionId: string, marks: SessionMarks) => Effect.Effect<SessionInfo, SessionError>;
@@ -450,20 +394,16 @@ export class Sessions extends Context.Service<
     /**
      * Holds the session while the scope lasts, so it is not removed: work that
      * writes to it holds it from before it starts until it has stopped, as the
-     * agent does for each turn. Not a `SessionRemoveHook` handler, since core
-     * retires a stopping plugin's handlers before its work has stopped. Fails
-     * `NotFound` when it does not exist. Asked for while the session's data is
+     * agent does for each turn. Fails `NotFound` when it does not exist. Asked for while the session's data is
      * being deleted, it waits for that to end: it fails `NotFound` once the
      * session is gone, and holds it if the deletion failed. Any number of holds
      * may exist at once.
      */
     readonly hold: (sessionId: string) => Effect.Effect<void, SessionError, Scope.Scope>;
     /**
-     * Deletes it from disk, for good, through `SessionRemoveHook`, whose
-     * handlers may refuse. Fails `Busy` while any hold exists: checked before
-     * the handlers run, and again in one step with marking the session as
-     * being deleted, after them, so no hold is granted until its data is gone
-     * or the deletion has failed.
+     * Deletes it from disk, for good. Fails `Busy` while any hold exists:
+     * checked in one step with marking the session as being deleted, so no
+     * hold is granted until its data is gone or the deletion has failed.
      */
     readonly remove: (sessionId: string) => Effect.Effect<void, SessionError>;
   }

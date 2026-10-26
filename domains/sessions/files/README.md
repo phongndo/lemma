@@ -219,10 +219,8 @@ costs re-reading the files.
   lines from their heads (above).
 - **Removal.** Holds (`hold`) are counted per session, in memory: the store
   starts with none, as the plugins that held sessions through it restart with
-  it. `remove` of a session nothing holds runs through `SessionRemoveHook`; a
-  handler that refuses keeps the session. Otherwise, holding the session's
-  lock, it checks again that nothing holds the session and marks it as being
-  deleted in one step, deletes the file and closes it, then fsyncs its
+  it. `remove`, holding the session's lock, checks that nothing holds the
+  session and marks it as being deleted in one step, deletes the file and closes it, then fsyncs its
   directory so a power loss does not bring the session back (best effort: on a
   failing disk it may come back, whole). Only then does the mark go, and the
   session, gone from memory and listings, is announced with `SessionRemoved`: a
