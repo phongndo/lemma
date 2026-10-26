@@ -6,8 +6,8 @@ thread's time in three lanes (prompts, model calls, tools), a sortable table
 with a waterfall column, a details panel in tabs, and a status bar with the
 totals of the rows shown. A model call's or tool run's Pipeline tab says what
 shaped it, plugin by plugin. Adds the `trajectory` view to `Views` (order 10,
-without the composer), and draws what plugins add to `TrajectoryTabs` and
-`TrajectoryActions`, and each tool's `ToolViews` body
+without the composer), and draws what plugins add to `TrajectoryActions`, and
+each tool's `ToolViews` body
 ([`@lemma/threads`](../contract/src/threads.ts)). Everything is projected from
 `Threads.branch` with `trajectory` and `ledger`
 ([`@lemma/sessions`](../../sessions/contract/src/ledger.ts)): a row for the

@@ -4,7 +4,7 @@ Where prompts are written: text, images pasted, dropped, or attached,
 completions for the word being typed, and the buttons to send, steer, and
 stop. Adds the composer to `ComposerRegion`, and draws what plugins add to
 `ComposerNotices` (above the box), `ComposerControls` and `ComposerActions`
-(its toolbar), `ComposerFooter` (under it), `ComposerCompletions` (the
+(its toolbar), `ComposerCompletions` (the
 completion menu), `PromptCommands` (it runs those with `run`), and `ComposerTakeovers` (a plugin's banner just above the box, which
 then takes the text box and the send button, or its line above the box), all
 in [`@lemma/threads`](../contract/src/threads.ts). Its own

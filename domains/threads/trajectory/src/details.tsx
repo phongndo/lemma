@@ -8,7 +8,7 @@ import type { AssistantRecord, LedgerRecord, SystemRecord, Timing, TrajectoryReq
 import { inputTokens } from "./scale.ts";
 import { clockTime } from "@lemma/web/format";
 import { radioGroupKey } from "@lemma/web/keys";
-import { ToolViews, TrajectoryTabs, formatThroughput, throughput } from "@lemma/threads";
+import { ToolViews, formatThroughput, throughput } from "@lemma/threads";
 import { CopyIcon, Markdown, XIcon } from "@lemma/look";
 import { Contained, usePlugin } from "@lemma/web";
 import { createPipeline } from "./pipeline.tsx";
@@ -449,50 +449,37 @@ export function createDetails(view: View) {
     }
   }
 
-  /** A tool's own view (its `ToolViews` body), then the tabs plugins add for the record. */
-  function addedTabs(record: LedgerRecord): Tab[] {
+  /** A tool's own view (its `ToolViews` body), as a tab. */
+  function viewTabs(record: LedgerRecord): Tab[] {
     const item = record.kind === "tool" ? deps.slots.get(ToolViews, record.run.call.name) : undefined;
     const view = item?.body;
-    const tool: Tab[] =
-      view === undefined || record.kind !== "tool"
-        ? []
-        : [
-            {
-              id: "view",
-              label: "View",
-              render: () => {
-                const run = record.run;
-                const result = run.result;
-                return (
-                  <Contained
-                    slot={ToolViews}
-                    item={item!}
-                    component={view}
-                    props={{
-                      id: run.call.id,
-                      name: run.call.name,
-                      args: run.call.arguments,
-                      result:
-                        result === undefined
-                          ? undefined
-                          : { eventId: run.eventId ?? record.id, content: result.content, isError: result.isError, details: run.details },
-                      state: result === undefined ? "interrupted" : result.isError ? "error" : "ok",
-                    }}
-                  />
-                );
-              },
-            },
-          ];
+    if (view === undefined || record.kind !== "tool") return [];
     return [
-      ...tool,
-      ...deps.slots
-        .list(TrajectoryTabs)
-        .filter((tab) => tab.when(record))
-        .map((tab): Tab => ({
-          id: `added:${tab.id}`,
-          label: tab.label,
-          render: () => <Contained slot={TrajectoryTabs} item={tab} component={tab.component} props={{ record }} />,
-        })),
+      {
+        id: "view",
+        label: "View",
+        render: () => {
+          const run = record.run;
+          const result = run.result;
+          return (
+            <Contained
+              slot={ToolViews}
+              item={item!}
+              component={view}
+              props={{
+                id: run.call.id,
+                name: run.call.name,
+                args: run.call.arguments,
+                result:
+                  result === undefined
+                    ? undefined
+                    : { eventId: run.eventId ?? record.id, content: result.content, isError: result.isError, details: run.details },
+                state: result === undefined ? "interrupted" : result.isError ? "error" : "ok",
+              }}
+            />
+          );
+        },
+      },
     ];
   }
 
@@ -581,7 +568,7 @@ export function createDetails(view: View) {
           kind: record.kind as LedgerRecord["kind"] | "request",
           name: record.kind === "tool" ? record.run.call.name : "",
           where,
-          tabs: [...recordTabs(record, previousOf(recordRequest(record)?.eventId)), ...addedTabs(record)],
+          tabs: [...recordTabs(record, previousOf(recordRequest(record)?.eventId)), ...viewTabs(record)],
         };
       }
       const assistant = props.records.find(

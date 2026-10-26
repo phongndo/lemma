@@ -11,7 +11,6 @@ import {
   applySuggestion,
   ComposerActions,
   ComposerControls,
-  ComposerFooter,
   ComposerNotices,
   ComposerQueuedPart,
   ComposerRegion,
@@ -800,7 +799,6 @@ function Composer(props: { deps: Deps }) {
           </div>
         </div>
       </form>
-      <Each slot={ComposerFooter} />
     </div>
   );
 }

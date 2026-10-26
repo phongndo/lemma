@@ -519,9 +519,6 @@ export interface TurnOptionSource {
 
 export const TurnOptionSources = defineSlot<TurnOptionSource>("composer.turn-options");
 
-/** Under the composer: the workspace bar. */
-export const ComposerFooter = defineSlot<Region>("composer.footer");
-
 /**
  * Under a new thread's prompt, while nothing is sent: what the thread starts with and keeps (its mode, its project), in
  * one centered line, in order; a menu an item opens goes below it, centered on it (`placement: "bottom"`). Gone once
@@ -625,16 +622,6 @@ export interface ContextView {
 }
 
 export const ContextViews = defineSlot<ContextView>("chat.context");
-
-/** An inspector tab in the trajectory view, for the records `when` picks. */
-export interface TrajectoryTab {
-  readonly label: string;
-  readonly when: (record: LedgerRecord) => boolean;
-  readonly component: Component<{ readonly record: LedgerRecord }>;
-}
-
-/** Tabs added after the trajectory view's own for a selected record. A tool's `ToolViews` body is one already. */
-export const TrajectoryTabs = defineSlot<TrajectoryTab>("trajectory.tabs");
 
 /** An item in a trajectory record's context menu, after the view's own. */
 export interface TrajectoryAction {
