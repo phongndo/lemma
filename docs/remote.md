@@ -73,9 +73,6 @@ does (or `env add --use`). A command goes to the host `--env` names, else the on
 else the default, else this machine's. A host that does not answer fails the
 command rather than falling back to another, which would act on the wrong
 machine. `serve`, `stop`, `logs`, and `service` always act on this machine.
-A `remote.json` that an older `lemma remote set` wrote is read as the default
-environment `remote` until environments.json exists; the first `lemma env`
-change writes it there.
 
 - **Web app.** Open `https://<machine>.<tailnet>.ts.net/?token=<token>`, which
   `lemma open` prints and opens. The page keeps the token for that tab and drops

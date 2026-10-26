@@ -186,19 +186,4 @@ describe("environments: hosts on other machines", () => {
     expect(broken.code).toBe(ExitCode.unavailable);
     expect(JSON.parse(broken.err).error.message).toContain(`Cannot use ${file()}`);
   });
-
-  test("a remote.json an older lemma remote set wrote goes on being used, as the default environment remote, until env writes environments.json", async () => {
-    const legacy = join(other, "remote.json");
-    await writeFile(legacy, JSON.stringify({ url, token }));
-    try {
-      expect(JSON.parse((await invoke(["status", "--json"], other)).out)).toMatchObject({ environment: "remote" });
-      // The first change keeps it: environments.json now holds it, and remote.json is no longer read.
-      expect((await invoke(["env", "use", "local"], other)).code).toBe(ExitCode.ok);
-      expect(await saved()).toEqual({ environments: { remote: { url, token } } });
-      await writeFile(legacy, "not json");
-      expect(JSON.parse((await invoke(["status", "--json"], other)).err).error.code).toBe("NoHost");
-    } finally {
-      await rm(legacy, { force: true });
-    }
-  });
 });
