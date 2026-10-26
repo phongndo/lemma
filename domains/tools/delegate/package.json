@@ -31,7 +31,7 @@
     "@lemma/sessions-files": "workspace:*",
     "@lemma/tools-registry": "workspace:*",
     "@types/node": "24.19.2",
-    "tsrs": "0.18.0-ts7.1.0-dev.20260929",
+    "tsrs": "0.20.0-ts7.1.0-beta",
     "vitest": "5.0.5"
   },
   "lemma": {
