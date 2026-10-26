@@ -901,6 +901,41 @@
     color: var(--text-2);
   }
 
+  /* A list's foot, under it: what its keys do, the keys named as plain text; on a narrow screen, where keys are rarer, none. */
+  .palette-foot {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 4px 14px;
+    padding: 8px 18px;
+    border-top: 1px solid var(--border);
+    font-size: var(--font-size-xs);
+    color: var(--text-3);
+  }
+
+  .palette-foot kbd {
+    padding: 0;
+    border: 0;
+    background: none;
+    color: var(--text-3);
+    font-family: var(--font-ui);
+    font-size: inherit;
+  }
+
+  .palette-foot kbd + kbd {
+    margin-left: 4px;
+  }
+
+  .palette-foot-end {
+    margin-left: auto;
+  }
+
+  @media (max-width: 820px) {
+    .palette-foot {
+      display: none;
+    }
+  }
+
   .palette-empty {
     padding: 22px;
     text-align: center;

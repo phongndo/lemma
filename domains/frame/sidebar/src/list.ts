@@ -1,3 +1,4 @@
+import { ageOf } from "@lemma/web/format";
 import type { SessionInfo, SessionMarks } from "@lemma/sessions";
 
 /**
@@ -7,14 +8,13 @@ import type { SessionInfo, SessionMarks } from "@lemma/sessions";
  * archived first. A running thread does not move.
  */
 
-/** How long ago `at` was, shortly: `now`, `36m`, `3h`, `2d`. */
+/**
+ * How long ago `at` was, shortly: `now`, `36m`, `3h`, `2d`, from `ageOf` (`@lemma/web/format`), as the palette's
+ * `relativeTime` is, so a thread is as old here as there (`4h` and `4h ago`); past a week it goes on counting days.
+ */
 export const shortAge = (at: number, now: number): string => {
-  const minutes = Math.floor((now - at) / 60_000);
-  if (minutes < 1) return "now";
-  if (minutes < 60) return `${minutes}m`;
-  const hours = Math.floor(minutes / 60);
-  if (hours < 24) return `${hours}h`;
-  return `${Math.floor(hours / 24)}d`;
+  const age = ageOf(at, now);
+  return age === undefined ? "now" : `${age.count}${age.unit}`;
 };
 
 /** How long a turn has run, shortly: `12s`, `3m`, `1h 5m`. */

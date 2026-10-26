@@ -1,10 +1,11 @@
 import { For, Show, createEffect, createMemo, createSignal, on, onCleanup, untrack } from "solid-js";
 import type { Component } from "solid-js";
 import { Actions } from "@lemma/actions";
-import { Layers } from "@lemma/frame";
+import { Layers, holdWhileRead } from "@lemma/frame";
 import { SettingsGroups, SettingsSections, Settings } from "@lemma/settings";
 import { sessionTitle, Threads } from "@lemma/threads";
 import { Slots, defineWebPlugin, usePlugin } from "@lemma/web";
+import { radioStep } from "@lemma/web/keys";
 import { loadJson, save } from "@lemma/web/storage";
 import { Workspace } from "@lemma/workspace/web";
 import { AlertIcon, BellIcon, CheckIcon, QuestionIcon, SettingRow, Toggle, XIcon } from "@lemma/look";
@@ -64,22 +65,18 @@ const permissionNow = (): Permission => (typeof Notification === "undefined" ? "
 function NoticeCard(props: { notice: Notice; title: string; project: string; open: () => void; dismiss: () => void }) {
   const plugin = usePlugin();
   let stop: (() => void) | undefined;
-  /** A turn's end goes after a while, the pointer on it holding it; a thread waiting stays until it is answered. */
-  const wait = () => {
+  /** A turn's end goes after a while, held while it is read (`holdWhileRead`); a thread waiting stays until it is answered. */
+  const wait = (held: boolean) => {
     stop?.();
-    if (props.notice.state !== "waiting") stop = plugin.after(NOTICE_MS, () => props.dismiss(), { name: "dismiss notice" });
+    stop = undefined;
+    if (props.notice.state !== "waiting" && !held) stop = plugin.after(NOTICE_MS, () => props.dismiss(), { name: "dismiss notice" });
   };
-  wait();
+  const reading = holdWhileRead(wait);
+  wait(false);
   onCleanup(() => stop?.());
   const Glyph = STATE_ICONS[props.notice.state];
   return (
-    <div
-      class="thread-notice"
-      data-state={props.notice.state}
-      role={props.notice.state === "done" ? "status" : "alert"}
-      onPointerEnter={() => stop?.()}
-      onPointerLeave={wait}
-    >
+    <div class="thread-notice" data-state={props.notice.state} role={props.notice.state === "done" ? "status" : "alert"} {...reading}>
       <button type="button" class="thread-notice-open" onClick={() => props.open()}>
         <span class="thread-notice-icon">
           <Glyph />
@@ -92,7 +89,7 @@ function NoticeCard(props: { notice: Notice; title: string; project: string; ope
           </span>
         </span>
       </button>
-      <button type="button" class="icon-button thread-notice-close" aria-label="Dismiss" onClick={() => props.dismiss()}>
+      <button type="button" class="icon-button thread-notice-close" aria-label="Dismiss" data-tip="Dismiss" onClick={() => props.dismiss()}>
         <XIcon />
       </button>
     </div>
@@ -148,11 +145,18 @@ function ChannelGrid(props: { prefs: () => Prefs; change: (state: Told, channel:
   );
 }
 
-/** Where notices stack, picked on a window in miniature. */
+/** Where notices stack, picked on a window in miniature: one Tab stop, whose arrow keys, Home, and End move the choice. */
 function CornerPicker(props: { corner: () => Corner; pick: (corner: Corner) => void }) {
+  const onKeyDown = (event: KeyboardEvent & { currentTarget: HTMLDivElement }) => {
+    const next = radioStep(event.key, CORNERS.indexOf(props.corner()), CORNERS.length);
+    if (next === undefined) return;
+    event.preventDefault();
+    props.pick(CORNERS[next]!);
+    event.currentTarget.querySelectorAll<HTMLButtonElement>("[role=radio]")[next]?.focus();
+  };
   return (
     <SettingRow title="Where notices show" description={`${CORNER_TITLES[props.corner()]} of the window.`}>
-      <div class="notify-corners" role="radiogroup" aria-label="Where notices show">
+      <div class="notify-corners" role="radiogroup" aria-label="Where notices show" onKeyDown={onKeyDown}>
         <For each={CORNERS}>
           {(corner) => (
             <button
@@ -161,6 +165,7 @@ function CornerPicker(props: { corner: () => Corner; pick: (corner: Corner) => v
               class="notify-corner"
               data-corner={corner}
               aria-checked={props.corner() === corner}
+              tabIndex={props.corner() === corner ? 0 : -1}
               aria-label={CORNER_TITLES[corner]}
               data-tip={CORNER_TITLES[corner]}
               onClick={() => props.pick(corner)}
@@ -365,9 +370,10 @@ export default defineWebPlugin({
 
     // ---------------------------------------------------------------- view
 
+    // After the toasts (100), so at the top right they stack under them (`Layers`).
     slots.add(Layers, {
       id: "thread-notices",
-      order: 90,
+      order: 110,
       component: () => (
         <div class="thread-notices" data-corner={prefs().corner} aria-live="polite">
           <For each={prefs().corner.startsWith("bottom") ? notices() : [...notices()].reverse()}>

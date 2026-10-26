@@ -1,5 +1,5 @@
 import { For, Show, createEffect, createMemo } from "solid-js";
-import { Layers } from "@lemma/frame";
+import { Layers, holdWhileRead } from "@lemma/frame";
 import { Notify, Slots, defineWebPlugin } from "@lemma/web";
 import type { Toast } from "@lemma/web";
 import { AlertIcon, CopyButton, ExternalIcon, XIcon } from "@lemma/look";
@@ -10,9 +10,11 @@ const SHOWS_FOR: Readonly<Record<Toast["level"], number>> = { error: 12_000, war
 /** At most this many show at once; one more dismisses the oldest. */
 const AT_MOST = 6;
 
-function ToastView(props: { toast: Toast; onDismiss: () => void }) {
+function ToastView(props: { toast: Toast; onDismiss: () => void; hold: (held: boolean) => void }) {
+  // Held while it is read (the pointer on it, keyboard focus in it), so it is not dismissed then.
+  const reading = holdWhileRead((held) => props.hold(held));
   return (
-    <div class={`toast toast-${props.toast.level}`} role={props.toast.level === "error" ? "alert" : "status"}>
+    <div class={`toast toast-${props.toast.level}`} role={props.toast.level === "error" ? "alert" : "status"} {...reading}>
       <div class="toast-main">
         <Show when={props.toast.level !== "info"}>
           <AlertIcon />
@@ -26,7 +28,7 @@ function ToastView(props: { toast: Toast; onDismiss: () => void }) {
         <Show when={props.toast.level !== "info"}>
           <CopyButton text={props.toast.message} label="Copy message" />
         </Show>
-        <button class="icon-button" aria-label="Dismiss" onClick={() => props.onDismiss()}>
+        <button class="icon-button" aria-label="Dismiss" data-tip="Dismiss" onClick={() => props.onDismiss()}>
           <XIcon />
         </button>
       </div>
@@ -48,8 +50,9 @@ function ToastView(props: { toast: Toast; onDismiss: () => void }) {
 /**
  * Draws the `Notify` messages in a corner of the page, but those a view
  * claims, and decides how long they stay: each is dismissed when its time is
- * up, and the oldest when too many show. Turning it off leaves the messages
- * undrawn, not lost.
+ * up (counted again from the start once the pointer or focus leaves it), and
+ * the oldest when too many show. Turning it off leaves the messages undrawn,
+ * not lost.
  */
 export default defineWebPlugin({
   id: "frame.toasts",
@@ -57,8 +60,28 @@ export default defineWebPlugin({
   requires: { notify: Notify, slots: Slots },
   setup: ({ notify, slots }, plugin) => {
     const shown = createMemo(() => notify.toasts().filter((item) => !notify.claimed(item)));
-    /** Each message's timer, from when this plugin first saw it; one with links has none. */
+    /** Each message's timer, from when this plugin first saw it; one with links has none, nor one held. */
     const timers = new Map<number, () => void>();
+    /** The messages the pointer or focus is on: their time waits. */
+    const held = new Set<number>();
+    const time = (item: Toast) => {
+      if (timers.has(item.id) || held.has(item.id) || (item.links?.length ?? 0) > 0) return;
+      timers.set(
+        item.id,
+        plugin.after(SHOWS_FOR[item.level], () => notify.dismiss(item.id), { name: "dismiss toast" }),
+      );
+    };
+    const hold = (item: Toast, holding: boolean) => {
+      if (holding === held.has(item.id)) return;
+      if (holding) {
+        held.add(item.id);
+        timers.get(item.id)?.();
+        timers.delete(item.id);
+      } else {
+        held.delete(item.id);
+        time(item);
+      }
+    };
     createEffect(() => {
       const all = notify.toasts();
       for (const [id, cancel] of timers) {
@@ -66,13 +89,8 @@ export default defineWebPlugin({
         cancel();
         timers.delete(id);
       }
-      for (const item of all) {
-        if (timers.has(item.id) || (item.links?.length ?? 0) > 0) continue;
-        timers.set(
-          item.id,
-          plugin.after(SHOWS_FOR[item.level], () => notify.dismiss(item.id), { name: "dismiss toast" }),
-        );
-      }
+      for (const id of held) if (!all.some((item) => item.id === id)) held.delete(id);
+      for (const item of all) time(item);
     });
     createEffect(() => {
       for (const item of shown().slice(0, -AT_MOST)) notify.dismiss(item.id);
@@ -82,7 +100,7 @@ export default defineWebPlugin({
       order: 100,
       component: () => (
         <div class="toasts" aria-live="polite">
-          <For each={shown()}>{(item) => <ToastView toast={item} onDismiss={() => notify.dismiss(item.id)} />}</For>
+          <For each={shown()}>{(item) => <ToastView toast={item} onDismiss={() => notify.dismiss(item.id)} hold={(holding) => hold(item, holding)} />}</For>
         </div>
       ),
     });

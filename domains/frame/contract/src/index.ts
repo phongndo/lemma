@@ -14,6 +14,12 @@ export class Dialogs extends Context.Service<Dialogs, DialogsService>()("lemma-w
 export interface LayoutService {
   /** There is a sidebar, and it is out of view: collapsed, or a closed drawer on a narrow screen. */
   readonly sidebarHidden: Accessor<boolean>;
+  /**
+   * Collapses or brings back the sidebar; on a narrow screen opens or closes it as a drawer, which takes focus while
+   * open and gives it back as it closes. A control that runs it is marked `data-sidebar-toggle` (a DOM convention):
+   * when toggling hides the control that had focus (the sidebar's own toggle as it collapses, a header's as the
+   * sidebar comes back), focus goes to the marked toggle in sight.
+   */
   readonly toggleSidebar: () => void;
   /** On a narrow screen the sidebar is a drawer; picking something in it closes it. */
   readonly closeDrawer: () => void;
@@ -23,7 +29,10 @@ export class Layout extends Context.Service<Layout, LayoutService>()("lemma-web/
 
 /**
  * Mounted over the whole app in order: the browser view's pages (0, each over its place in the pane), dialogs (the
- * bundled ones at orders 10 to 40), questions (50), toasts (100), tooltips (200). Each shows itself when it should.
+ * bundled ones at orders 10 to 40), questions (50), toasts (100), the threads' notices (110), tooltips (200). Each
+ * shows itself when it should. The toasts' stack, at the top right, is the CSS anchor `--toasts`: what else stacks
+ * there goes under it with `top: anchor(--toasts bottom, 56px)`, from an item after it (an anchor comes first in the
+ * page), as the notices do.
  */
 export const Layers = defineSlot<Region>("layers");
 
@@ -71,6 +80,48 @@ export interface MenuAction<Subject, Control = undefined> {
  * own (⌘[ going back).
  */
 export const inDesktop = typeof window !== "undefined" && "lemmaDesktop" in window;
+
+/** Nothing has focus: it rests on the page's body (or nowhere). What the frame's plugins move focus from, when it is lost. */
+export const nothingFocused = (element: Element | null): boolean => element === null || element instanceof HTMLBodyElement;
+
+/** The handlers `holdWhileRead` gives a passing message's element. */
+export interface ReadingHandlers {
+  readonly onPointerEnter: () => void;
+  readonly onPointerLeave: () => void;
+  readonly onFocusIn: (event: FocusEvent) => void;
+  readonly onFocusOut: (event: FocusEvent) => void;
+}
+
+/**
+ * Holds a passing message (a toast, a notice) while it is read: while the pointer is on it, or keyboard focus is in it.
+ * Focus a click leaves on one of its buttons (Copy) does not hold it, so it still goes once the pointer leaves. `held`
+ * hears each change; spread the result on the message's element.
+ */
+export const holdWhileRead = (held: (holding: boolean) => void): ReadingHandlers => {
+  let pointed = false;
+  let focused = false;
+  const tell = () => held(pointed || focused);
+  return {
+    onPointerEnter: () => {
+      pointed = true;
+      tell();
+    },
+    onPointerLeave: () => {
+      pointed = false;
+      tell();
+    },
+    onFocusIn: (event) => {
+      focused = event.target instanceof Element && event.target.matches(":focus-visible");
+      tell();
+    },
+    onFocusOut: (event) => {
+      // Moving within it, the next `focusin` says whether it holds.
+      if (event.currentTarget instanceof Element && event.currentTarget.contains(event.relatedTarget as Node | null)) return;
+      focused = false;
+      tell();
+    },
+  };
+};
 
 export { ActionMenu } from "./menu.tsx";
 export { FRAME_CONTRACT } from "./version.ts";

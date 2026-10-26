@@ -1,26 +1,7 @@
-.palette-into {
-  margin-left: auto;
-  width: 26px;
-  height: 26px;
-  opacity: 0;
-}
-
-.palette-note {
-  padding: 8px 12px;
+.add-project-heading {
+  margin: 0;
+  padding: 10px 16px 0;
   color: var(--text-3);
   font-size: var(--font-size-sm);
-}
-
-.palette-mono {
-  font-family: var(--font-mono);
-  font-size: var(--font-size-sm);
-  color: var(--text-2);
-}
-
-.palette-row[data-active="true"] .palette-into {
-  opacity: 1;
-}
-
-.palette-row[data-active="true"] .palette-mono {
-  color: var(--text);
+  font-weight: 500;
 }

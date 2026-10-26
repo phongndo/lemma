@@ -268,7 +268,7 @@ export default defineWebPlugin({
       return (
         <div class="settings" role="region" aria-label="Settings" ref={main}>
           <header class="settings-head">
-            <button class="icon-button" aria-label="Toggle sidebar" data-tip="Toggle sidebar" onClick={() => layout.toggleSidebar()}>
+            <button class="icon-button" aria-label="Toggle sidebar" data-tip="Toggle sidebar" data-sidebar-toggle onClick={() => layout.toggleSidebar()}>
               <SidebarIcon />
             </button>
             <span class="muted">Settings</span>

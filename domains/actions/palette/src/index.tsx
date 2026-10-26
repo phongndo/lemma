@@ -64,6 +64,8 @@ interface Asking {
   readonly question: Question;
   readonly answer: (value: string) => void;
   readonly dismiss: () => void;
+  /** What Escape does to it, as the footer says: cancels a command's question, goes back from an item's, or closes the palette that opened at it. */
+  readonly escape: "cancel" | "back" | "close";
 }
 
 /** A page opened above the top level, and how the list it was opened from was left: what was typed, the row chosen. */
@@ -141,6 +143,10 @@ function Palette(props: { deps: Deps }) {
   const [opened, setOpened] = createSignal<readonly Opened[]>([]);
   /** The page showing, if not the top level. */
   const page = () => opened().at(-1)?.page;
+  /** How many pages it opened at: one when an action's keys opened it at its page, which is then where it starts. */
+  const [start, setStart] = createSignal(0);
+  /** There is a list to go back to: a page opened from another, not the one it opened at. */
+  const canGoBack = () => opened().length > start();
   const [running, setRunning] = createSignal<Item | undefined>();
   const [local, setLocal] = createSignal<Asking | undefined>();
   const [recent, setRecent] = createSignal(loadRecent());
@@ -179,8 +185,11 @@ function Palette(props: { deps: Deps }) {
 
   // ---------------------------------------------------------------- items
 
-  /** An item that asks for a value first asks here; answering runs it. */
-  const askFor = (item: Item, question: { readonly title: string; readonly placeholder?: string }): Asking => ({
+  /**
+   * An item that asks for a value first asks here; answering runs it. Dismissed, it goes back to the list, or closes the
+   * palette when the item's keys opened it asking (`opening`), as there is no list the person saw to go back to.
+   */
+  const askFor = (item: Item, question: { readonly title: string; readonly placeholder?: string }, opening = false): Asking => ({
     id: `input:${item.key}`,
     question: { type: "ask", title: question.title, placeholder: question.placeholder },
     answer: (value) => {
@@ -188,7 +197,8 @@ function Palette(props: { deps: Deps }) {
       close();
       void item.run?.(value);
     },
-    dismiss: () => setLocal(undefined),
+    dismiss: () => (opening ? close() : setLocal(undefined)),
+    escape: opening ? "close" : "back",
   });
 
   const sources = () => slots.list(PaletteSources);
@@ -246,6 +256,7 @@ function Palette(props: { deps: Deps }) {
               : { type: "select", value },
         ),
       dismiss: () => interactions.dismiss(request.id),
+      escape: "cancel",
     };
   });
 
@@ -438,12 +449,12 @@ function Palette(props: { deps: Deps }) {
       // Dismissing a command's question cancels the command; the palette stays for the next thing.
       if (current !== undefined) current.dismiss();
       else if (running() === undefined && query() !== "") type("");
-      else if (running() === undefined && page() !== undefined) back();
+      else if (running() === undefined && canGoBack()) back();
       else close();
-    } else if (event.key === "Backspace" && local() !== undefined && filter() === "") {
+    } else if (event.key === "Backspace" && local()?.escape === "back" && filter() === "") {
       event.preventDefault();
       setLocal(undefined);
-    } else if (event.key === "Backspace" && asking() === undefined && running() === undefined && page() !== undefined && query() === "") {
+    } else if (event.key === "Backspace" && asking() === undefined && running() === undefined && canGoBack() && query() === "") {
       event.preventDefault();
       back();
     } else if (event.key === "Tab") {
@@ -454,8 +465,11 @@ function Palette(props: { deps: Deps }) {
   onMount(() => {
     const requested = props.deps.takeRequested();
     const item = requested === undefined ? undefined : pool().find((candidate) => candidate.key === `action:${requested}`);
-    if (item?.page !== undefined) openPage(item.page());
-    else if (item?.input !== undefined) setLocal(askFor(item, item.input()));
+    // Opened by an action's keys at its page or its question, it starts there: Escape closes it, not going back to a list never seen.
+    if (item?.page !== undefined) {
+      openPage(item.page());
+      setStart(1);
+    } else if (item?.input !== undefined) setLocal(askFor(item, item.input(), true));
     queueMicrotask(() => input.focus());
   });
   onCleanup(() => {
@@ -493,11 +507,18 @@ function Palette(props: { deps: Deps }) {
   // Unique per instance: the page could show two lists.
   const listId = `palette-list-${createUniqueId()}`;
   const activeId = () => (items()[active()] === undefined ? undefined : `${listId}-${active()}`);
+  /** Rows in a list where some have an icon keep its room without one, so their names line up. */
+  const iconRoom = createMemo(() => items().some((row) => row.item.icon !== undefined));
+  /** And the room of the chevron of a row that opens a page, so their shortcuts end in line. */
+  const moreRoom = createMemo(() => items().some((row) => row.item.page !== undefined));
+  /** A question the palette did not claim (a form) shows over it: it steps out of sight, keeping its field to go back to. */
+  const behind = () => interactions.open().some((request) => !interactions.claimed(request));
 
   return (
     <Portal>
       <div
         class="backdrop palette-backdrop"
+        classList={{ behind: behind() }}
         onMouseDown={(event) => {
           if (event.target === event.currentTarget) close();
         }}
@@ -510,7 +531,7 @@ function Palette(props: { deps: Deps }) {
             <Show
               when={running() !== undefined && asking() === undefined}
               fallback={
-                <Show when={page() !== undefined && asking() === undefined} fallback={<ChevronIcon />}>
+                <Show when={canGoBack() && asking() === undefined} fallback={<ChevronIcon />}>
                   <button
                     type="button"
                     class="icon-button palette-back"
@@ -573,7 +594,9 @@ function Palette(props: { deps: Deps }) {
                         submit();
                       }}
                     >
-                      <Show when={row.item.icon}>{(icon) => <Isolated component={icon()} />}</Show>
+                      <Show when={row.item.icon} fallback={iconRoom() ? <span class="palette-icon-room" aria-hidden="true" /> : undefined}>
+                        {(icon) => <Isolated component={icon()} />}
+                      </Show>
                       <span class="palette-name">
                         <Show when={row.item.category}>
                           <span class="palette-category">{row.item.category}: </span>
@@ -589,7 +612,7 @@ function Palette(props: { deps: Deps }) {
                           <CheckIcon />
                         </span>
                       </Show>
-                      <Show when={row.item.page}>
+                      <Show when={row.item.page} fallback={moreRoom() ? <span class="palette-more" aria-hidden="true" /> : undefined}>
                         <span class="palette-more" aria-hidden="true">
                           <ChevronIcon />
                         </span>
@@ -614,7 +637,7 @@ function Palette(props: { deps: Deps }) {
                     <kbd>↵</kbd> {asking()?.question.type === "ask" ? "submit" : "choose"}
                   </span>
                   <span>
-                    <kbd>esc</kbd> {local() === undefined ? "cancel" : "back"}
+                    <kbd>esc</kbd> {asking()?.escape}
                   </span>
                 </>
               }
@@ -626,17 +649,27 @@ function Palette(props: { deps: Deps }) {
               <span>
                 <kbd>↵</kbd> {items()[active()]?.item.page === undefined ? "run" : "open"}
               </span>
-              <Show when={page() !== undefined}>
+              <Show when={canGoBack()}>
                 <span>
                   <kbd>esc</kbd> back
                 </span>
               </Show>
-              <Show when={props.deps.closeKeys()[0]}>
-                {(keys) => (
+              {/* At the page its keys opened it at, Escape closes it; elsewhere, its own keys do. */}
+              <Show
+                when={page() === undefined || canGoBack()}
+                fallback={
                   <span class="palette-foot-end">
-                    <kbd>{formatKeys(keys())}</kbd> close
+                    <kbd>esc</kbd> close
                   </span>
-                )}
+                }
+              >
+                <Show when={props.deps.closeKeys()[0]}>
+                  {(keys) => (
+                    <span class="palette-foot-end">
+                      <kbd>{formatKeys(keys())}</kbd> close
+                    </span>
+                  )}
+                </Show>
               </Show>
             </Show>
           </footer>

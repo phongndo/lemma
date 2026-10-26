@@ -34,3 +34,14 @@
   font-size: var(--font-size-sm);
   color: var(--text-3);
 }
+
+/* A form's fields, under the dialog's title: no settings page's indent or rule, and no config keys beside the names. */
+.question-form .config-form {
+  margin: 0;
+  padding-top: 0;
+  border-top: 0;
+}
+
+.question-form .config-key {
+  display: none;
+}

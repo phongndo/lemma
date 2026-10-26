@@ -1,8 +1,10 @@
+/* The command running and the question it asks, as a section is named: its text in line with the rows'. */
 .palette-heading {
-  padding: 10px 16px 0;
-  font-size: var(--font-size-sm);
+  padding: 10px 18px 0;
+  font-size: var(--font-size-xs);
   font-weight: 500;
   color: var(--text-3);
+  letter-spacing: 0.01em;
 }
 
 .palette-input-text input {
@@ -11,7 +13,7 @@
 
 .palette-question-detail {
   margin: 0;
-  padding: 10px 16px;
+  padding: 10px 18px;
   border-bottom: 1px solid var(--border);
   color: var(--text-2);
   font-size: var(--font-size-md);
@@ -20,6 +22,22 @@
 
 .palette-category {
   color: var(--text-3);
+}
+
+/* An icon's room, in a row without one among rows with them. */
+.palette-icon-room {
+  flex: none;
+  width: 16px;
+}
+
+/* Under a question it did not claim (a form's dialog): out of sight, its field still there for focus to come back to. */
+.palette-backdrop.behind {
+  background: transparent;
+  pointer-events: none;
+}
+
+.palette-backdrop.behind .palette {
+  opacity: 0;
 }
 
 .palette-hint {
@@ -34,8 +52,7 @@
 }
 
 /* Shortcuts sit on the background as plain text, not in key caps. */
-.palette-kbd,
-.palette-foot kbd {
+.palette-kbd {
   padding: 0;
   border: 0;
   background: none;
@@ -57,34 +74,9 @@
   color: var(--text-2);
 }
 
-.palette-foot {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 4px 14px;
-  padding: 8px 14px;
-  border-top: 1px solid var(--border);
-  font-size: var(--font-size-xs);
-  color: var(--text-3);
-}
-
-.palette-foot kbd + kbd {
-  margin-left: 4px;
-}
-
-.palette-foot-end {
-  margin-left: auto;
-}
-
-@media (max-width: 820px) {
-  .palette-foot {
-    display: none;
-  }
-}
-
 /* A line in the list that is no item: a search still on its way, or why it failed. */
 .palette-note {
-  padding: 8px 16px;
+  padding: 8px 12px;
   color: var(--text-3);
   font-size: var(--font-size-sm);
 }

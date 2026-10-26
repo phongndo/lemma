@@ -1,13 +1,24 @@
-export const relativeTime = (at: number, now: number = Date.now()): string => {
+/**
+ * How long ago `at` was (epoch ms), in the largest unit it counts, rounded to the nearest: `{ count: 4, unit: "h" }`.
+ * Undefined under 45 seconds, which is just now. Every age Lemma shows counts from this, so a thread is as old in one
+ * place as in another.
+ */
+export const ageOf = (at: number, now: number = Date.now()): { readonly count: number; readonly unit: "m" | "h" | "d" } | undefined => {
   const s = Math.round((now - at) / 1_000);
-  if (s < 45) return "just now";
+  if (s < 45) return undefined;
   const m = Math.round(s / 60);
-  if (m < 60) return `${m}m ago`;
+  if (m < 60) return { count: m, unit: "m" };
   const h = Math.round(m / 60);
-  if (h < 24) return `${h}h ago`;
-  const d = Math.round(h / 24);
-  if (d < 7) return `${d}d ago`;
-  return new Date(at).toLocaleDateString(undefined, { month: "short", day: "numeric", ...(d > 300 ? { year: "numeric" } : {}) });
+  if (h < 24) return { count: h, unit: "h" };
+  return { count: Math.round(h / 24), unit: "d" };
+};
+
+/** How long ago `at` was, in words: `just now`, `36m ago`, `4h ago`, `2d ago`; from a week, its date. */
+export const relativeTime = (at: number, now: number = Date.now()): string => {
+  const age = ageOf(at, now);
+  if (age === undefined) return "just now";
+  if (age.unit !== "d" || age.count < 7) return `${age.count}${age.unit} ago`;
+  return new Date(at).toLocaleDateString(undefined, { month: "short", day: "numeric", ...(age.count > 300 ? { year: "numeric" } : {}) });
 };
 
 /** The time of day of `at` (epoch ms) to the millisecond: `14:03:07.042`. */

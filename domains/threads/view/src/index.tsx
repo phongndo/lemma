@@ -296,7 +296,13 @@ export default defineWebPlugin({
     // While the sidebar shows, its own head has the toggle.
     header("thread.sidebar-toggle", 0, "start", () => (
       <Show when={layout.sidebarHidden()}>
-        <button class="icon-button sidebar-toggle" aria-label="Toggle sidebar" data-tip="Toggle sidebar" onClick={() => layout.toggleSidebar()}>
+        <button
+          class="icon-button sidebar-toggle"
+          aria-label="Toggle sidebar"
+          data-tip="Toggle sidebar"
+          data-sidebar-toggle
+          onClick={() => layout.toggleSidebar()}
+        >
           <SidebarIcon />
         </button>
       </Show>

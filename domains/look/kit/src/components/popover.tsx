@@ -40,10 +40,13 @@ const position = (anchor: DOMRect, menu: HTMLElement, placement: Placement) => {
  * A trigger with a floating menu. The menu renders at the document root so no
  * container clips it, and it owns keyboard navigation: arrows move the active
  * item (focus stays in a search field if there is one, which then names the
- * active item to screen readers), as do Ctrl+N/P and Ctrl+J/K; Enter picks it,
- * mod+1 … mod+9 picks the item at that place (labelled while mod is held),
- * a letter an item names as its `aria-keyshortcuts` picks it, typing another
- * letter jumps to a matching item, Escape closes and returns focus.
+ * active item to screen readers, as the menu does without one), as do Ctrl+N/P
+ * and Ctrl+J/K; Enter picks it, mod+1 … mod+9 picks the item at that place
+ * (labelled while mod is held), a letter an item names as its
+ * `aria-keyshortcuts` picks it, typing another letter jumps to a matching item,
+ * Escape closes and returns focus: to the trigger, or to what had it at open
+ * when the menu opened from the keys (`controller.open`) or the trigger can't
+ * take it. Tab closes it and goes on from the trigger, its place in the page.
  *
  * Items are elements with role `menuitem`, `menuitemradio`, or `option`.
  */
@@ -51,6 +54,12 @@ export function Popover(props: PopoverProps) {
   const [open, setOpen] = createSignal(false);
   let trigger!: HTMLButtonElement;
   let menu: HTMLDivElement | undefined;
+  /**
+   * What had focus as the menu opened: it takes focus back when the menu opened from the keys (`controller.open`, the
+   * person typing on), or when the trigger can't (one out of sight, as a row's right-click menu has).
+   */
+  let opener: HTMLElement | undefined;
+  let fromKeys = false;
   let observer: MutationObserver | undefined;
   let typed = "";
   let typedAt = 0;
@@ -67,8 +76,10 @@ export function Popover(props: PopoverProps) {
       item.id ||= `${menuId}-item-${i}`;
     });
     const active = all[index];
-    if (active === undefined) search()?.removeAttribute("aria-activedescendant");
-    else search()?.setAttribute("aria-activedescendant", active.id);
+    // What has focus names the active item: the search field, or the menu.
+    const owner = search() ?? menu;
+    if (active === undefined) owner?.removeAttribute("aria-activedescendant");
+    else owner?.setAttribute("aria-activedescendant", active.id);
     if (scroll) active?.scrollIntoView({ block: "nearest" });
   };
   // While mod is held, the first nine items show the key that picks them.
@@ -90,14 +101,24 @@ export function Popover(props: PopoverProps) {
     if (menu !== undefined) position(trigger.getBoundingClientRect(), menu, props.placement ?? "bottom-end");
   };
 
-  const close = (restoreFocus = true) => {
+  /** `to`: where focus goes back, `"opener"` (what had it at open, from the keys) or `"trigger"` (its place in the page). */
+  const close = (restoreFocus = true, to: "opener" | "trigger" = "opener") => {
     if (!open()) return;
     setOpen(false);
     detach();
-    if (restoreFocus) trigger.focus({ preventScroll: true });
+    const back = opener;
+    opener = undefined;
+    if (!restoreFocus) return;
+    if (to === "opener" && fromKeys && back?.isConnected === true) back.focus({ preventScroll: true });
+    if (document.activeElement === back && back !== undefined) return;
+    trigger.focus({ preventScroll: true });
+    if (document.activeElement !== trigger) back?.focus({ preventScroll: true });
   };
-  const show = () => {
+  const show = (keys = false) => {
     quick = false;
+    fromKeys = keys;
+    // Nothing focused rests on the page's body, which is no place to go back to.
+    opener = document.activeElement instanceof HTMLElement && !(document.activeElement instanceof HTMLBodyElement) ? document.activeElement : undefined;
     props.onOpen?.();
     setOpen(true);
     attach();
@@ -128,7 +149,7 @@ export function Popover(props: PopoverProps) {
 
   props.controller?.({
     open: () => {
-      if (!open() && !props.disabled) show();
+      if (!open() && !props.disabled) show(true);
     },
   });
 
@@ -175,7 +196,8 @@ export function Popover(props: PopoverProps) {
         close();
         return;
       case "Tab":
-        close(false);
+        // Back on the trigger, the menu's place in the page (the menu itself is at its end): the Tab goes on from there.
+        close(true, "trigger");
         return;
       case "Home":
         if (inField) return;

@@ -18,6 +18,38 @@
   cursor: default;
 }
 
+/* Connected, the header shows nothing: a dot that is always on reads as a thread's state. A screen reader still hears it. */
+.connection-compact.connection-connected {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+/*
+ * Above the composer while the host is out of reach: its icon by the first line, room above and below, and what to do
+ * read before the error it quotes.
+ */
+.callout.composer-callout.connection-notice {
+  align-items: flex-start;
+  padding-block: 10px;
+}
+
+.callout.composer-callout.connection-notice > .icon {
+  margin-top: 3px;
+}
+
+.connection-notice-help {
+  color: var(--text-2);
+}
+
+.connection-notice .callout-detail {
+  color: var(--text-3);
+}
+
 /* Read by screen readers, not shown. */
 .connection-hidden {
   position: absolute;
