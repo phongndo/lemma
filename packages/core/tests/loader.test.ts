@@ -438,7 +438,10 @@ describe("loader", () => {
     expect(failed.diagnostics).toHaveLength(1);
     expect(failed.diagnostics[0]?.pluginId).toBeUndefined();
     expect(failed.diagnostics[0]?.message).toMatch(/^The application's services failed to build:\n[^]*db is down/);
-    const reserved = await start({ provides: [Hooks], layer: Layer.succeed(Hooks, { invoke: (_hook, value, end) => end(value) }) });
+    const reserved = await start({
+      provides: [Hooks],
+      layer: Layer.succeed(Hooks, { invoke: (_hook, value, end) => end(value), closed: Effect.succeed(false) }),
+    });
     expect(reserved.diagnostics.map((diagnostic) => [diagnostic.pluginId, diagnostic.message])).toEqual([
       [undefined, `The application cannot provide runtime capability "${Hooks.key}"`],
     ]);

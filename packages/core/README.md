@@ -320,6 +320,7 @@ The hook contract is one mechanism: awaited, sequential around middleware. A han
 - A handler may execute `next` at most once, and only before the handler finishes. Await or join that work; do not detach continuations.
 - A hook may **check** its handlers at run time, for those TypeScript never saw (a plugin written in JavaScript): `Hook.make(name, { check: { input, output } })`, each answering a one-line problem or `undefined`. `input` sees what a handler hands `next`, `output` what it returns; a problem fails the operation with `HookError` (`InvalidInput`, `InvalidOutput`) naming that handler's plugin, so a wrong shape is the plugin's fault where it was made rather than a crash further on. The caller's own input and the terminal's result are not checked, and a hook without a check costs nothing for it.
 - Typed hook failures and defects propagate through the same Effect channels; interruption runs finalizers. `HookError` reports invalid ordering, token collisions, continuation misuse, or a handler's value its hook's check refused.
+- The core shuts its hooks as it shuts down, before it disposes any plugin: every `invoke` fails `CoreClosed` from then on. `hooks.closed` says whether it has, so work that failed can tell a failure of the shutdown from its own.
 - A name identifies one shared hook token within a core. Creating another token with the same name is rejected rather than risking an incompatible handler signature.
 - Registrations are owned by the plugin scope and removed on disposal.
 

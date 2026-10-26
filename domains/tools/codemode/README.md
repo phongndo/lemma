@@ -74,9 +74,8 @@ codemode call's own output (`✓ bash 12ms {"command":"ls"}`), and the result's
   call from then on), or whose tool went with its plugin first, never reached
   its tool: it is held unanswered until the turn stops, and runs when the
   script resumes. Another call that fails then may have failed for that alone,
-  so it is held too. Whether the core is shutting down is asked as the agent
-  asks it (by dispatching a hook nothing handles, which the core refuses once
-  it is), and only once a call fails, so calls that succeed cost nothing.
+  so it is held too. Whether the core is shutting down is asked of the core
+  (`Hooks.closed`), as the agent asks it, and only once a call fails.
 - **Tools only scripts call.** `codemode` `nests`, so a request offering it
   offers a `nested` tool (an MCP server's, a browser's, Lemma's own channels)
   without declaring it to the model, which calls it only from a script: a

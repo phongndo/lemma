@@ -194,5 +194,10 @@ export class Hooks extends Context.Service<
       terminal: (input: I) => Effect.Effect<O, E, R>,
       options?: InvokeOptions<I, O>,
     ) => Effect.Effect<O, E | HookError | CoreClosed, R>;
+    /**
+     * Whether the core has shut its hooks, as it does when it shuts down, before it disposes any plugin: every `invoke`
+     * fails `CoreClosed` from then on. Work that fails then can tell a failure of the shutdown from its own.
+     */
+    readonly closed: Effect.Effect<boolean>;
   }
 >()("@lemma/core/Hooks") {}

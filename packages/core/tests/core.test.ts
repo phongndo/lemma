@@ -125,7 +125,14 @@ describe("composition", () => {
       [[marker, formatter], "MissingCapability"],
       [[marker, definePlugin({ id: " ", layer: Layer.empty })], "InvalidId"],
       [
-        [marker, definePlugin({ id: "reserved", provides: [Hooks], layer: Layer.succeed(Hooks, { invoke: (_hook, value, end) => end(value) }) })],
+        [
+          marker,
+          definePlugin({
+            id: "reserved",
+            provides: [Hooks],
+            layer: Layer.succeed(Hooks, { invoke: (_hook, value, end) => end(value), closed: Effect.succeed(false) }),
+          }),
+        ],
         "ReservedCapability",
       ],
     ];
@@ -598,7 +605,7 @@ describe("capabilities the application provides", () => {
     // Refused before anything is built: merged over the built-ins, it would replace the core's own.
     const hooks = Layer.sync(Hooks, () => {
       built++;
-      return { invoke: (_hook, value, end) => end(value) };
+      return { invoke: (_hook, value, end) => end(value), closed: Effect.succeed(false) };
     });
     const refused = failure(await Effect.runPromiseExit(Effect.scoped(makeCore([marker], { provide: { provides: [Hooks], layer: hooks } }))));
     expect(refused).toMatchObject({ _tag: "CompositionError", reason: "ReservedCapability", plugins: [], capability: Hooks.key });

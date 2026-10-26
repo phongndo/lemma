@@ -1,7 +1,7 @@
 import { isDeepStrictEqual } from "node:util";
 import { Cause, Clock, Effect, Exit, Option, Semaphore, Stream } from "effect";
 import type { Context } from "effect";
-import { assert, CoreClosed, Hook, PluginContext, Verify } from "@lemma/core";
+import { assert, CoreClosed, PluginContext, Verify } from "@lemma/core";
 import type { Events, HandlerStep, Hooks } from "@lemma/core";
 import { AgentContinueHook, AgentError, AgentRequestHook, AssistantDelta, TurnEnded, TurnStarted } from "../agent.ts";
 import { addUsage, emptyUsage } from "@lemma/llm";
@@ -303,9 +303,6 @@ const isCoreClosed = (error: unknown, depth = 0): boolean =>
 const closedCore = (cause: Cause.Cause<unknown>): boolean =>
   cause.reasons.some((reason) => (Cause.isFailReason(reason) && isCoreClosed(reason.error)) || (Cause.isDieReason(reason) && isCoreClosed(reason.defect)));
 
-/** Never handled: dispatching it says whether the core still dispatches hooks. */
-const Probe = Hook.make<void, void>("agent/core-closing");
-
 /**
  * One turn. The log is written as the turn goes: `turn-start`, the user
  * messages, then per step `step-start`, `request`, the assistant `message` (or
@@ -358,17 +355,11 @@ export function runTurn(services: TurnServices, settings: TurnSettings, input: T
   const sessionError = failedAs(sessionId, "Session");
 
   /**
-   * Whether the core is shutting down. It refuses every hook call from the moment it begins (hooks fail closed, so
-   * that no guard is skipped), before it stops the agent: a turn can go no further, and is not over either.
+   * Stops the turn, to be left open, when the core is shutting down. It refuses every hook call from the moment it
+   * begins (`Hooks.closed`: hooks fail closed, so that no guard is skipped), before it stops the agent: a turn can go
+   * no further, and is not over either.
    */
-  const coreClosing = hooks
-    .invoke(Probe, undefined, () => Effect.void)
-    .pipe(
-      Effect.as(false),
-      Effect.catch((error) => Effect.succeed(error._tag === "CoreClosed")),
-    );
-  /** Stops the turn, to be left open, when the core is shutting down. */
-  const unlessClosing = Effect.flatMap(coreClosing, (closing) => (closing ? Effect.die(new CoreClosed()) : Effect.void));
+  const unlessClosing = Effect.flatMap(hooks.closed, (closing) => (closing ? Effect.die(new CoreClosed()) : Effect.void));
 
   /**
    * Uninterruptible so a cancelled turn never loses track of an event that did reach the log. One at a time, so tool
@@ -1151,7 +1142,7 @@ export function runTurn(services: TurnServices, settings: TurnSettings, input: T
   const leftOpen = (exit: Exit.Exit<Ended, AgentError>): Effect.Effect<boolean> => {
     if (Exit.isSuccess(exit)) return Effect.succeed(false);
     if (input.suspended() || closedCore(exit.cause)) return Effect.succeed(true);
-    return Cause.hasInterruptsOnly(exit.cause) ? Effect.succeed(false) : coreClosing;
+    return Cause.hasInterruptsOnly(exit.cause) ? Effect.succeed(false) : hooks.closed;
   };
   /** Set by `finish`: the turn was left open. */
   let open = false;

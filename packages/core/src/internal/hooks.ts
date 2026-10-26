@@ -64,12 +64,14 @@ export interface OwnerHandle {
 export class HookRegistry implements Context.Service.Shape<typeof Hooks> {
   private readonly entries = new Map<string, Entry>();
   private sequence = 0;
-  private closed = false;
+  private shut = false;
 
   close(): void {
-    this.closed = true;
+    this.shut = true;
     this.entries.clear();
   }
+
+  readonly closed: Effect.Effect<boolean> = Effect.sync(() => this.shut);
 
   inspect(): readonly HookSnapshot[] {
     return [...this.entries.values()]
@@ -88,7 +90,7 @@ export class HookRegistry implements Context.Service.Shape<typeof Hooks> {
     const on = <I, O, E, R>(hook: Hook<I, O, E>, handler: Handler<I, O, E, R>, options: HookOptions = {}) =>
       Effect.uninterruptible(
         Effect.gen({ self: this }, function* () {
-          if (this.closed) return yield* new CoreClosed();
+          if (this.shut) return yield* new CoreClosed();
           if (!owner.accepting) return yield* ownerClosed(hook.name, identity.id);
           const order = options.order ?? 0;
           if (!Number.isFinite(order)) {
@@ -173,7 +175,7 @@ export class HookRegistry implements Context.Service.Shape<typeof Hooks> {
   ): Effect.Effect<O, E | HookError | CoreClosed, R> =>
     // One step to look the hook up and read the caller's context: a call through a hook with no handlers costs little more than the terminal.
     Effect.withFiber((fiber): Effect.Effect<O, E | HookError | CoreClosed, R> => {
-      if (this.closed) return Effect.fail(new CoreClosed());
+      if (this.shut) return Effect.fail(new CoreClosed());
       const entry = this.entryOf(hook);
       if (entry instanceof HookError) return Effect.fail(entry);
       const handlers = entry.handlers;
@@ -184,7 +186,7 @@ export class HookRegistry implements Context.Service.Shape<typeof Hooks> {
       const check = hook.check;
       const dispatch = (index: number, value: I): Effect.Effect<O, E | HookError | CoreClosed> =>
         Effect.suspend(() => {
-          if (this.closed) return Effect.fail(new CoreClosed());
+          if (this.shut) return Effect.fail(new CoreClosed());
           const registration = handlers[index];
           if (!registration)
             return Effect.provide(
