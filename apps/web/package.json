@@ -40,8 +40,6 @@
     "@lemma/frame-sidebar": "workspace:*",
     "@lemma/frame-toasts": "workspace:*",
     "@lemma/frame-tooltips": "workspace:*",
-    "@lemma/integrations": "workspace:*",
-    "@lemma/integrations-page": "workspace:*",
     "@lemma/llm": "workspace:*",
     "@lemma/llm-client": "workspace:*",
     "@lemma/llm-model-picker": "workspace:*",

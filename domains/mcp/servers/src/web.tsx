@@ -1,8 +1,7 @@
 import { For, Index, Match, Show, Switch, createEffect, createMemo, createSignal, onCleanup } from "solid-js";
 import { SignInPaste } from "@lemma/credentials/web";
-import { IntegrationKinds } from "@lemma/integrations";
+import { Settings } from "@lemma/settings";
 import { PromptCommands } from "@lemma/threads";
-import type { IntegrationAddProps, IntegrationDetailProps, IntegrationItem, IntegrationStatus } from "@lemma/integrations";
 import { McpChannels } from "@lemma/mcp";
 import type { Exposure, McpAuthStatus, McpServerChange, McpServerConfig, McpServerStatus, McpState, McpToolInfo } from "@lemma/mcp";
 import { Client, Notify, Slots, defineWebPlugin, usePlugin } from "@lemma/web";
@@ -29,9 +28,11 @@ import {
 } from "@lemma/look";
 import { draftOf, entryOf, parsePasted, isImageAddress } from "./form.ts";
 import type { Rows, ServerDraft } from "./form.ts";
+import { statusOf } from "./items.ts";
+import type { ServerItem } from "./items.ts";
+import { addIntegrationsPage } from "./page.tsx";
 import styles from "./mcp.css?inline";
-
-const KIND = "mcp";
+import pageStyles from "./page.css?inline";
 
 const EXPOSURES: readonly { readonly value: Exposure; readonly label: string }[] = [
   { value: "codemode", label: "Code mode" },
@@ -60,24 +61,6 @@ const EXAMPLE = `{
 }`;
 
 const count = (n: number, one: string) => `${n} ${one}${n === 1 ? "" : "s"}`;
-
-const statusOf = (server: McpServerStatus): IntegrationStatus => {
-  const reached = server.tools.filter((tool) => tool.exposure !== "hidden").length;
-  if (server.auth?.state === "signing-in") return { tone: "busy", text: "Signing in…" };
-  switch (server.state) {
-    case "connected":
-      return { tone: "ok", text: `Connected · ${count(reached, "tool")}` };
-    case "connecting":
-      return { tone: "busy", text: "Connecting…" };
-    case "failed":
-      return { tone: "error", text: server.retryIn === undefined ? "Failed" : "Failed · retrying" };
-    // Its tools wait on the person: as much trouble as a failure, and counted with them.
-    case "needs-sign-in":
-      return { tone: "error", text: "Needs sign-in" };
-    case "off":
-      return { tone: "off", text: server.error === undefined ? "Off" : "Off · needs attention" };
-  }
-};
 
 interface Actions {
   readonly state: () => McpState | undefined;
@@ -446,7 +429,7 @@ function ServerForm(props: {
 }
 
 /** Adding a server: by its form, or by pasting another client's JSON. */
-function AddServer(props: IntegrationAddProps & { actions: Actions }) {
+function AddServer(props: { added: (id: string) => void; cancel: () => void; actions: Actions }) {
   const plugin = usePlugin();
   const [mode, setMode] = createSignal<"form" | "json">("form");
   const [text, setText] = createSignal("");
@@ -563,7 +546,7 @@ function AddServer(props: IntegrationAddProps & { actions: Actions }) {
 }
 
 /** One server's details: its state, why it failed, how it is reached, its tools, and editing or removing it. */
-function ServerDetail(props: IntegrationDetailProps & { actions: Actions }) {
+function ServerDetail(props: { id: string; close: () => void; actions: Actions }) {
   const plugin = usePlugin();
   const server = () => props.actions.state()?.servers.find((candidate) => candidate.name === props.id);
   const [editing, setEditing] = createSignal(false);
@@ -713,15 +696,16 @@ function ServerDetail(props: IntegrationDetailProps & { actions: Actions }) {
 }
 
 /**
- * The web half of `mcp.servers`: the MCP servers' part of Settings › Integrations. Every server with its state and
- * switch, its details (why it failed, how it is reached, its tools and how they reach the model), editing and removing
- * it, and adding one by a form or by pasting another client's JSON, written to the user's `mcp.json`. It runs while the host half does.
+ * The web half of `mcp.servers`: Settings › Integrations, every server with its state and switch, its details (why it
+ * failed, how it is reached, its tools and how they reach the model), editing and removing it, and adding one by a form
+ * or by pasting another client's JSON, written to the user's `mcp.json`; and `/mcp` in the prompt. It runs while the
+ * host half does.
  */
 export default defineWebPlugin({
   id: "mcp.servers",
-  requires: { slots: Slots, client: Client, notify: Notify },
-  styles,
-  setup: ({ slots, client, notify }, plugin) => {
+  requires: { slots: Slots, client: Client, notify: Notify, settings: Settings },
+  styles: `${pageStyles}\n${styles}`,
+  setup: ({ slots, client, notify, settings }, plugin) => {
     const [state, setState] = createSignal<McpState>();
     // The state when subscribed, and again after every change: a server connecting, failing, or the file edited.
     plugin.onCleanup(client.follow(McpChannels.changes, undefined, setState));
@@ -741,7 +725,7 @@ export default defineWebPlugin({
       cancelSignIn: (server) => reported(`Stopping the sign-in to ${server}`, () => client.channel.call(McpChannels.cancelSignIn, { server })),
       signOut: (server) => reported(`Signing out of ${server}`, () => client.channel.call(McpChannels.signOut, { server })),
     };
-    const items = createMemo((): readonly IntegrationItem[] =>
+    const items = createMemo((): readonly ServerItem[] =>
       (state()?.servers ?? []).map((server) => ({
         id: server.name,
         title: server.name,
@@ -754,11 +738,7 @@ export default defineWebPlugin({
         keywords: `mcp server ${server.target} ${server.description ?? ""} ${server.tools.map((tool) => tool.name).join(" ")}`,
       })),
     );
-    slots.add(IntegrationKinds, {
-      id: KIND,
-      order: 20,
-      title: "MCP servers",
-      icon: HammerIcon,
+    addIntegrationsPage(slots, settings, {
       items,
       loaded: () => state() !== undefined,
       problem: () => {
@@ -766,11 +746,7 @@ export default defineWebPlugin({
         return error === undefined ? undefined : `${state()!.file}: ${error}`;
       },
       detail: (props) => <ServerDetail {...props} actions={actions} />,
-      add: {
-        label: "Custom MCP server",
-        description: "A local command or a remote URL, or another client's JSON pasted",
-        component: (props) => <AddServer {...props} actions={actions} />,
-      },
+      add: (props) => <AddServer {...props} actions={actions} />,
     });
 
     // `/mcp …`: each subcommand over the servers as they are now, offered by name with their state. Its failures are

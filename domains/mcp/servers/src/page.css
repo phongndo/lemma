@@ -95,7 +95,7 @@
   font: inherit;
 }
 
-/* A mark on its own, flat on the page: a brand's logo, or its kind's icon. */
+/* A mark on its own, flat on the page: the server's icon, or a hammer. */
 .integration-icon {
   flex: none;
   display: inline-flex;
@@ -161,21 +161,13 @@
   padding: 4px 0 32px 28px;
 }
 
-/* The Add dialog: a search leading a list of what to add, as the command palette is. */
+/* The Add dialog: the form adding a server, under its heading. */
 .integrations-add {
   width: min(560px, calc(100vw - 32px));
   max-height: min(600px, 80vh);
   display: flex;
   flex-direction: column;
-}
-
-/*
- * With no header, the body leads, as far from the top as from the divider under its first row. The divider runs the
- * dialog's width, and the search's icon, the headings, and the rows' marks share one inset (the body's, and a row's).
- */
-.integrations-add {
   --add-inset: 18px;
-  --add-row: 8px;
 }
 
 .integrations-add .dialog-body {
@@ -189,133 +181,14 @@
   flex-direction: column;
 }
 
-.integrations-add-search {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  margin: 0 calc(-1 * var(--add-inset));
-  padding: 14px calc(var(--add-inset) + var(--add-row));
-  border-bottom: 1px solid var(--border);
-  color: var(--text-3);
-}
-
-.integrations-add-search input {
-  flex: 1;
-  min-width: 0;
-  border: 0;
-  outline: 0;
-  background: none;
-  color: var(--text);
-  font: inherit;
-  font-size: var(--font-size-base);
-}
-
-.integrations-add-error {
-  margin: 12px var(--add-row) 0;
-}
-
-.integrations-add-list {
-  flex: 1;
-  min-height: 0;
-  overflow-y: auto;
-  padding: 12px 0 0;
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-}
-
-.integrations-add-group {
-  display: flex;
-  flex-direction: column;
-  gap: 1px;
-}
-
-.integrations-add-heading {
-  margin: 0;
-  padding: 0 var(--add-row) 4px;
-  font-size: var(--font-size-xs);
-  font-weight: 500;
-  color: var(--text-3);
-}
-
-.integrations-add-row {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 8px var(--add-row);
-  border: 0;
-  border-radius: var(--radius-sm);
-  background: none;
-  color: inherit;
-  font: inherit;
-  text-align: left;
-  cursor: pointer;
-}
-
-.integrations-add-row.active {
-  background: var(--bg-hover);
-}
-
-.integrations-add-row:disabled {
-  cursor: default;
-  opacity: 0.55;
-}
-
-.integrations-add-text {
-  flex: 1;
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-}
-
-.integrations-add-title {
-  font-weight: 500;
-}
-
-.integrations-add-detail {
-  font-size: var(--font-size-sm);
-  color: var(--text-2);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.integrations-add-state {
-  flex: none;
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  font-size: var(--font-size-sm);
-  color: var(--text-3);
-}
-
-.integrations-add-state svg {
-  width: 13px;
-  height: 13px;
-}
-
-.integrations-add-note {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin: 4px var(--add-row);
-  font-size: var(--font-size-sm);
-  color: var(--text-3);
-}
-
-/* As the search leads the list, the way back leads the form: its arrow on the body's edge. */
+/* The heading leads the form, its divider running the dialog's width. */
 .integrations-add-form-head {
   display: flex;
   align-items: center;
   gap: 6px;
   margin: 0 calc(-1 * var(--add-inset)) 16px;
-  padding: 10px var(--add-inset);
+  padding: 12px var(--add-inset);
   border-bottom: 1px solid var(--border);
-}
-
-/* Its arrow, not its button, on the content's edge. */
-.integrations-add-form-head .icon-button {
-  margin-left: -6px;
 }
 
 .integrations-add-form-head h2 {
@@ -355,7 +228,7 @@
   }
 }
 
-/* The class vocabulary a kind's details are drawn with (see `@lemma/integrations`). */
+/* The class vocabulary a server's details and the form adding one are drawn with. */
 .integration-head {
   display: flex;
   align-items: center;

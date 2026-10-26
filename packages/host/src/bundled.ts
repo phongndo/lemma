@@ -154,7 +154,6 @@ export const bundledWeb: readonly string[] = [
   "frame.sidebar",
   "frame.toasts",
   "frame.tooltips",
-  "integrations.page",
   "llm.client",
   "llm.model-picker",
   "llm.providers",

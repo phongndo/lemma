@@ -1,6 +1,6 @@
 # mcp.servers
 
-Connects [Model Context Protocol](https://modelcontextprotocol.io) servers and adds their tools to the tools registry. Provides `Mcp` (`@lemma/mcp`), serves it as the `mcp.*` channels, and draws them in Settings › Integrations in its web half. Requires `Paths`.
+Connects [Model Context Protocol](https://modelcontextprotocol.io) servers and adds their tools to the tools registry. Provides `Mcp` (`@lemma/mcp`), serves it as the `mcp.*` channels, and draws them in Settings › Integrations in its web half, a section of the settings it adds (`SettingsSections`, at `/settings/integrations`). Requires `Paths`; its web half requires `Settings`.
 
 ## Use
 
@@ -19,7 +19,7 @@ Add servers to `~/.lemma/mcp.json` (`<Paths.home>/mcp.json`), in the `mcpServers
 }
 ```
 
-The file is read again whenever it changes: a server connects as soon as it is saved. Settings › Integrations lists every server with its state and a switch; one opened shows why it failed (and what it printed), how it is reached, and its tools and how they reach the model, and edits its entry or deletes it (its trash button asks once, in place). Add one there by a form, or by pasting JSON from another client or a server's README (a whole config, servers by name, or one server). `lemma channels call mcp.state` prints the same, and `mcp.put` writes an entry.
+The file is read again whenever it changes: a server connects as soon as it is saved. Settings › Integrations lists every server with its state and a switch; one opened shows why it failed (and what it printed), how it is reached, and its tools and how they reach the model, and edits its entry or deletes it (its trash button asks once, in place). Add one there by a form, or by pasting JSON from another client or a server's README (a whole config, servers by name, or one server). The address names the open server (`/settings/integrations?item=github`), and a search of the settings finds each one. `lemma channels call mcp.state` prints the same, and `mcp.put` writes an entry.
 
 A server's icon is its entry's `icon`, else the one it declares about itself (`serverInfo.icons`), with the one it declares for a dark theme besides (`iconDark` in its state). The form takes an SVG file of your own, picked or dropped on the icon, and writes it into the entry as a base64 `data:` URL (a file of at most 32 KB, its comments and the space between tags dropped), or an image's `https:` address.
 

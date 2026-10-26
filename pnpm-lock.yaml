@@ -358,12 +358,6 @@ importers:
       '@lemma/frame-tooltips':
         specifier: workspace:*
         version: link:../../domains/frame/tooltips
-      '@lemma/integrations':
-        specifier: workspace:*
-        version: link:../../domains/integrations/contract
-      '@lemma/integrations-page':
-        specifier: workspace:*
-        version: link:../../domains/integrations/page
       '@lemma/llm':
         specifier: workspace:*
         version: link:../../domains/llm/contract
@@ -1795,53 +1789,6 @@ importers:
         specifier: 5.0.5
         version: 5.0.5(@types/node@24.19.2)(vite@8.3.4(@types/node@24.19.2)(esbuild@0.28.2)(jiti@2.7.0))
 
-  domains/integrations/contract:
-    dependencies:
-      '@lemma/web':
-        specifier: workspace:*
-        version: link:../../../packages/web
-      solid-js:
-        specifier: 1.9.17
-        version: 1.9.17
-    devDependencies:
-      '@types/node':
-        specifier: 24.19.2
-        version: 24.19.2
-      tsrs:
-        specifier: 0.20.0-ts7.1.0-beta
-        version: 0.20.0-ts7.1.0-beta
-      vitest:
-        specifier: 5.0.5
-        version: 5.0.5(@types/node@24.19.2)(vite@8.3.4(@types/node@24.19.2)(esbuild@0.28.2)(jiti@2.7.0))
-
-  domains/integrations/page:
-    dependencies:
-      '@lemma/integrations':
-        specifier: workspace:*
-        version: link:../contract
-      '@lemma/look':
-        specifier: workspace:*
-        version: link:../../look/contract
-      '@lemma/settings':
-        specifier: workspace:*
-        version: link:../../settings/contract
-      '@lemma/web':
-        specifier: workspace:*
-        version: link:../../../packages/web
-      solid-js:
-        specifier: 1.9.17
-        version: 1.9.17
-    devDependencies:
-      '@types/node':
-        specifier: 24.19.2
-        version: 24.19.2
-      tsrs:
-        specifier: 0.20.0-ts7.1.0-beta
-        version: 0.20.0-ts7.1.0-beta
-      vitest:
-        specifier: 5.0.5
-        version: 5.0.5(@types/node@24.19.2)(vite@8.3.4(@types/node@24.19.2)(esbuild@0.28.2)(jiti@2.7.0))
-
   domains/llm/cli:
     dependencies:
       '@lemma/cli':
@@ -2328,9 +2275,6 @@ importers:
       '@lemma/credentials':
         specifier: workspace:*
         version: link:../../credentials/contract
-      '@lemma/integrations':
-        specifier: workspace:*
-        version: link:../../integrations/contract
       '@lemma/llm':
         specifier: workspace:*
         version: link:../../llm/contract
@@ -2340,6 +2284,9 @@ importers:
       '@lemma/mcp':
         specifier: workspace:*
         version: link:../contract
+      '@lemma/settings':
+        specifier: workspace:*
+        version: link:../../settings/contract
       '@lemma/threads':
         specifier: workspace:*
         version: link:../../threads/contract

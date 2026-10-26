@@ -49,7 +49,7 @@ describe("the api a web half receives", () => {
       for (const specifier of importsOf(plugin.web, plugin.dir)) if (web.has(specifier)) imported.add(specifier);
     }
     // What they import today, so a reading that finds nothing cannot pass.
-    expect([...imported]).toEqual(expect.arrayContaining(["@lemma/frame", "@lemma/integrations", "@lemma/llm/web", "@lemma/threads"]));
+    expect([...imported]).toEqual(expect.arrayContaining(["@lemma/frame", "@lemma/settings", "@lemma/llm/web", "@lemma/threads"]));
     const offered = Object.keys(contractModules);
     expect([...imported].filter((module) => !offered.includes(module)).sort(), "contracts the bundled plugins import that a web half is not given").toEqual([]);
   });
