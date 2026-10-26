@@ -61,10 +61,14 @@ border: its color is a token). Each token's default is
 Lemma's own look; customizing only sets tokens over it. Colors start from
 three base colors, `--bg`, `--text`, and `--accent`, and
 [`styles.css`](src/styles.css) derives surfaces, muted text, and the accent's
-tint from them. A plugin's own colors are tokens in its stylesheet:
-`highlight`'s `--code-*` (GitHub's colors until set), `diagrams'`
-`--diagram-*` (the page's colors until set). `--text-scale` sizes every font and
-`--radius-scale` rounds every corner.
+tint from them. Its muted text (`--text-2`, `--text-3`) reads at WCAG AA
+(4.5:1) on Lemma's own colors; a theme whose text and background sit closer
+sets those two itself, as the bundled themes that need it do. A plugin's own
+colors are tokens in its stylesheet: `highlight`'s `--code-*` (GitHub's colors
+until set), `diagrams'` `--diagram-*` (the page's colors until set). Set on the
+page (`<html>`, where the look is painted), `--text-scale` sizes every font and
+`--radius-scale` rounds every corner: the type scale's steps
+(`--font-size-*`) and the radii are worked out there.
 
 The look is the `look.appearance` plugin's config, which it paints on the page:
 

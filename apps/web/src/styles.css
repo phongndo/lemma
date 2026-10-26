@@ -80,7 +80,7 @@
     --content: 780px;
     /* What a disabled control fades to. */
     --disabled-opacity: 0.45;
-    /* How long a control takes to show the pointer over it, and an overlay to come in. Set to 0s, nothing moves. */
+    /* How long a control takes to show the pointer over it, and an overlay to come in. */
     --duration-hover: 0.1s;
     --duration-enter: 0.14s;
     --ease-enter: cubic-bezier(0.2, 0.9, 0.3, 1);
@@ -99,7 +99,10 @@
     --bg-active: rgba(0, 0, 0, 0.075);
     --border: rgba(0, 0, 0, 0.09);
     --border-strong: rgba(0, 0, 0, 0.16);
-    /* Muted text holds WCAG AA (4.5:1) on the surfaces it sits on: the page, a raised surface, and a hovered row. */
+    /*
+     * Muted text holds WCAG AA (4.5:1) on Lemma's own colors, on the surfaces it sits on: the page, a raised surface,
+     * and a hovered row. A theme whose text and background sit closer sets these two itself.
+     */
     --text-2: color-mix(in srgb, var(--text), var(--bg) 20%);
     --text-3: color-mix(in srgb, var(--text), var(--bg) 38%);
     --accent-soft: color-mix(in srgb, var(--accent) 6.61%, transparent);
@@ -153,6 +156,7 @@
     --accent-soft: color-mix(in srgb, var(--accent) 8.68%, transparent);
     --accent-text: oklch(from color-mix(in srgb, var(--accent), var(--bg) 3.11%) max(l, 0.72) c h);
     --accent-fg: oklch(from var(--accent) clamp(0.1495, calc((0.6 - l) * 1000), 1) 0 0);
+    --focus-ring: var(--accent);
     --selection: color-mix(in srgb, var(--accent) 30%, transparent);
 
     --ok: #4cc27f;
@@ -977,6 +981,7 @@
 
   .setting-row {
     display: flex;
+    flex-wrap: wrap;
     align-items: center;
     gap: 16px;
     min-height: 64px;
@@ -1046,12 +1051,6 @@
 
   .setting-row-pick:is(:hover, :has(:focus-visible)) {
     background: var(--bg-hover);
-  }
-
-  @media (max-width: 820px) {
-    .setting-row {
-      flex-wrap: wrap;
-    }
   }
 
   /* Inspectors, laid out like Chrome DevTools: the Trajectory and the devtools' panels share this vocabulary. A view's
@@ -1569,11 +1568,6 @@
    * whose motion shows a state and whose stylesheet slows it instead (a spinner, a working pulse).
    */
   @media (prefers-reduced-motion: reduce) {
-    :root {
-      --duration-hover: 0s;
-      --duration-enter: 0s;
-    }
-
     :not([data-motion]),
     :not([data-motion])::before,
     :not([data-motion])::after {

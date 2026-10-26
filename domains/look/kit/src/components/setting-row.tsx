@@ -17,7 +17,8 @@ export function SettingRow(props: SettingRowProps) {
 
 /**
  * A choice of a few options shown side by side: one Tab stop (the checked option, or the first while none is), whose
- * arrow keys, Home, and End move the choice.
+ * arrow keys, Home, and End move the choice. A key steps from the option focused, not the value, which a choice saved
+ * elsewhere (the host's config) brings back only later.
  */
 export function Segmented(props: SegmentedProps) {
   const checked = () =>
@@ -26,11 +27,13 @@ export function Segmented(props: SegmentedProps) {
       props.options.findIndex((option) => option.value === props.value),
     );
   const onKeyDown = (event: KeyboardEvent & { currentTarget: HTMLDivElement }) => {
-    const next = radioStep(event.key, checked(), props.options.length);
+    const options = [...event.currentTarget.querySelectorAll<HTMLButtonElement>("[role=radio]")];
+    const focused = options.indexOf(document.activeElement as HTMLButtonElement);
+    const next = radioStep(event.key, focused < 0 ? checked() : focused, props.options.length);
     if (next === undefined) return;
     event.preventDefault();
     props.onChange(props.options[next]!.value);
-    event.currentTarget.querySelectorAll<HTMLButtonElement>("[role=radio]")[next]?.focus();
+    options[next]?.focus();
   };
   return (
     <div class="segmented" role="radiogroup" aria-label={props.label} onKeyDown={onKeyDown}>

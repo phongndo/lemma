@@ -31,8 +31,9 @@ export const CodeBlocks = defineSlot<CodeBlockRenderer>("markdown.code");
  * default is Lemma's own look. Colors start from three base colors (`--bg`,
  * `--text`, `--accent`), which `styles.css` derives the rest from; a
  * plugin's own colors are tokens too (`highlight`'s `--code-*`, `diagrams`'
- * `--diagram-*`), and `--text-scale` and `--radius-scale` size every font
- * and corner.
+ * `--diagram-*`), and `--text-scale` and `--radius-scale`, on `<html>`, size
+ * every font and corner. A theme whose text and background sit close sets its
+ * muted text (`--text-2`, `--text-3`) in its `tokens`, so it reads at 4.5:1.
  *
  * The look is the `look.appearance` plugin's config (its row in
  * config.jsonc): a scheme, a theme for each scheme, an accent, fonts, text
