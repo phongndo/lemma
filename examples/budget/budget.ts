@@ -3,13 +3,15 @@ import { definePlugin } from "@lemma/core/plain";
 import { Notice } from "@lemma/contracts";
 import { AgentContinueHook, TurnEnded, TurnStarted } from "@lemma/agent";
 import { LlmRequestHook } from "@lemma/llm";
+import { ToolExecuted } from "@lemma/tools";
 
 /**
  * A token budget for each turn, and a meter. A turn that has used `maxTokens` stops rather than ask the model again
  * (`AgentContinueHook`, after the agent's own decision); when a turn ends, a notice says how long it took, how often it
- * asked the model and for how long, how much text the model wrote, and the tokens it used. It observes the agent's
- * events (`TurnStarted`, `TurnEnded`) and wraps every model call (`LlmRequestHook`), which hands it the stream to
- * time and count.
+ * asked the model and for how long, how many tools it ran and for how long, how much text the model wrote, and the
+ * tokens it used. It observes the agent's events (`TurnStarted`, `TurnEnded`) and each tool's result (`ToolExecuted`,
+ * which carries its duration), and wraps every model call (`LlmRequestHook`), which hands it the stream to time and
+ * count.
  *
  * A folder plugin, written the way a user writes one: copy or link the folder into `~/.lemma/plugins/`. It imports only
  * packages the host supplies, and is written with promises (`@lemma/core/plain`).
@@ -29,6 +31,8 @@ export interface Meter {
   readonly startedAt: number;
   calls: number;
   modelMs: number;
+  toolCalls: number;
+  toolMs: number;
   chars: number;
   tokens: number;
   stopped: boolean;
@@ -42,13 +46,14 @@ export const summary = (meter: Meter, endedAt: number, totalTokens: number, reas
   [
     `Turn ${meter.stopped ? "stopped at its token budget" : reason} after ${seconds(endedAt - meter.startedAt)}:`,
     `${plural(meter.calls, "model call")} taking ${seconds(meter.modelMs)},`,
+    `${plural(meter.toolCalls, "tool call")} taking ${seconds(meter.toolMs)},`,
     `${plural(meter.chars, "character")} written, ${plural(totalTokens, "token")}.`,
   ].join(" ");
 
 export default definePlugin({
   id: "budget",
   version: "0.1.0",
-  uses: ["lemma/agent@2", "lemma/llm@3"],
+  uses: ["lemma/agent@2", "lemma/llm@3", "lemma/tools@2"],
   config: Config,
   setup: (_deps, { config, observe, on, publish }) => {
     /** By session: a session runs one turn at a time. */
@@ -59,7 +64,7 @@ export default definePlugin({
         found.turnId ??= turnId;
         return found;
       }
-      const fresh: Meter = { turnId, startedAt: Date.now(), calls: 0, modelMs: 0, chars: 0, tokens: 0, stopped: false };
+      const fresh: Meter = { turnId, startedAt: Date.now(), calls: 0, modelMs: 0, toolCalls: 0, toolMs: 0, chars: 0, tokens: 0, stopped: false };
       meters.set(sessionId, fresh);
       return fresh;
     };
@@ -77,6 +82,13 @@ export default definePlugin({
         Stream.tap((event) => Effect.sync(() => void (event.type === "text-delta" && (meter.chars += event.delta.length)))),
         Stream.ensuring(Effect.sync(() => void (meter.modelMs += Date.now() - started))),
       );
+    });
+
+    // Every tool call's result, the agent's and a script's alike, with how long it ran.
+    observe(ToolExecuted, ({ invocation, durationMs }) => {
+      const meter = meterOf(invocation.sessionId);
+      meter.toolCalls++;
+      meter.toolMs += durationMs;
     });
 
     // After the agent's decision: a turn going on stops once it has used its budget.

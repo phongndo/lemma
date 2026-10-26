@@ -4061,6 +4061,9 @@ importers:
       '@lemma/llm':
         specifier: workspace:*
         version: link:../../domains/llm/contract
+      '@lemma/tools':
+        specifier: workspace:*
+        version: link:../../domains/tools/contract
       effect:
         specifier: 4.0.5
         version: 4.0.5
@@ -4074,9 +4077,6 @@ importers:
       '@lemma/sessions-files':
         specifier: workspace:*
         version: link:../../domains/sessions/files
-      '@lemma/tools':
-        specifier: workspace:*
-        version: link:../../domains/tools/contract
       '@lemma/tools-registry':
         specifier: workspace:*
         version: link:../../domains/tools/registry

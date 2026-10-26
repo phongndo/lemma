@@ -39,9 +39,11 @@ const wait = definePlugin({
 });
 
 describe("the notice", () => {
-  it("says how long, how many calls, how much written, and the tokens", () => {
-    const meter = { turnId: "t", startedAt: 0, calls: 1, modelMs: 1500, chars: 12, tokens: 15, stopped: false };
-    expect(summary(meter, 2000, 15, "done")).toBe("Turn done after 2.0s: 1 model call taking 1.5s, 12 characters written, 15 tokens.");
+  it("says how long, how many model and tool calls, how much written, and the tokens", () => {
+    const meter = { turnId: "t", startedAt: 0, calls: 1, modelMs: 1500, toolCalls: 2, toolMs: 300, chars: 12, tokens: 15, stopped: false };
+    expect(summary(meter, 2000, 15, "done")).toBe(
+      "Turn done after 2.0s: 1 model call taking 1.5s, 2 tool calls taking 0.3s, 12 characters written, 15 tokens.",
+    );
     expect(summary({ ...meter, stopped: true, calls: 2 }, 2000, 30, "done")).toContain("Turn stopped at its token budget after 2.0s: 2 model calls");
   });
 });
@@ -80,12 +82,14 @@ describe("in a turn", () => {
     // Each answer of the scripted model uses 15 tokens: the second step reaches 20.
     const { requests, notice } = await run(steps, 20);
     expect(requests).toHaveLength(2);
-    expect(notice).toMatch(/^Turn stopped at its token budget after [\d.]+s: 2 model calls taking [\d.]+s, 0 characters written, 30 tokens\.$/);
+    expect(notice).toMatch(
+      /^Turn stopped at its token budget after [\d.]+s: 2 model calls taking [\d.]+s, 2 tool calls taking [\d.]+s, 0 characters written, 30 tokens\.$/,
+    );
   });
 
   it("meters a turn with no budget to its end", async () => {
     const { requests, notice } = await run(steps, 0);
     expect(requests).toHaveLength(3);
-    expect(notice).toMatch(/^Turn done after [\d.]+s: 3 model calls taking [\d.]+s, 12 characters written, 45 tokens\.$/);
+    expect(notice).toMatch(/^Turn done after [\d.]+s: 3 model calls taking [\d.]+s, 2 tool calls taking [\d.]+s, 12 characters written, 45 tokens\.$/);
   });
 });
