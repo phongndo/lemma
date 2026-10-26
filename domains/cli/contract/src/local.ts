@@ -1,8 +1,8 @@
 import { Effect, Stream } from "effect";
 import type { Context } from "effect";
-import type { Registries } from "@lemma/core";
-import { answering, Channels, elementsOf, HostError, resultOf, withChannel, withdrawnFrom } from "@lemma/contracts";
-import type { ChannelDeclaration, ChannelStream } from "@lemma/contracts";
+import type { Contribution, Registries } from "@lemma/core";
+import { answeredOrSettled, elementsOf, isWithdrawn, resultOf, withChannel, withdrawnFrom } from "@lemma/contracts";
+import type { Channel, ChannelDeclaration, ChannelStream } from "@lemma/contracts";
 
 /*
  * A command reaching another domain on the host as a client does, through
@@ -25,22 +25,6 @@ export const callHere = <Payload, Success>(
     resultOf(item, payload, { left, withdrawn: withdrawnFrom(declaration.id, "call") }),
   ) as Effect.Effect<Success, unknown>;
 
-const isWithdrawn = (error: unknown, id: string) => error instanceof HostError && error.code === "Withdrawn" && error.subject === id;
-
-/** Once one answers for `id` that is not `gone`, or no change is under way. */
-const replaced = (registries: Reader, id: string, gone: unknown) =>
-  Effect.raceFirst(
-    registries.changes(Channels).pipe(
-      Stream.filter((items) => {
-        const now = answering(items, id);
-        return now !== undefined && now !== gone;
-      }),
-      Stream.runHead,
-      Effect.asVoid,
-    ),
-    registries.settled,
-  );
-
 /**
  * Reads the stream `declaration` names until it ends, handing each element to
  * `onElement` in turn: opened again with `payload()` (read at each opening)
@@ -55,7 +39,7 @@ export const followHere = <Payload, Success, E>(
   onElement: (element: Success) => Effect.Effect<void, E>,
 ): Effect.Effect<void, unknown> => {
   const id = declaration.id;
-  let gone: unknown;
+  let gone: Contribution<Channel> | undefined;
   const once: Effect.Effect<void, unknown> = withChannel(registries, id, "stream", (contribution, left) => {
     gone = contribution;
     return Effect.raceFirst(
@@ -66,7 +50,7 @@ export const followHere = <Payload, Success, E>(
   const loop: Effect.Effect<void, unknown> = Effect.catchIf(
     once,
     (error) => isWithdrawn(error, id),
-    () => Effect.andThen(replaced(registries, id, gone), loop),
+    () => Effect.andThen(answeredOrSettled(registries, id, gone), loop),
   );
   return loop;
 };
