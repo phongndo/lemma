@@ -1,0 +1,22 @@
+{
+  "name": "@lemma/example-redact",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Keeps secrets a tool came across out of what the model reads, around every tool call",
+  "type": "module",
+  "scripts": {
+    "check": "tsrs --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@lemma/core": "workspace:*",
+    "@lemma/tools": "workspace:*",
+    "effect": "4.0.5"
+  },
+  "devDependencies": {
+    "@lemma/tools-registry": "workspace:*",
+    "@types/node": "24.19.2",
+    "tsrs": "0.20.0-ts7.1.0-beta",
+    "vitest": "5.0.5"
+  }
+}
