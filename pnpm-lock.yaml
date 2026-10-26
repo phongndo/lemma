@@ -1484,6 +1484,9 @@ importers:
       '@lemma/devtools':
         specifier: workspace:*
         version: link:../contract
+      '@lemma/look':
+        specifier: workspace:*
+        version: link:../../look/contract
       '@lemma/sessions':
         specifier: workspace:*
         version: link:../../sessions/contract

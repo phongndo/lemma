@@ -1,10 +1,9 @@
 import { For, Show, createMemo, createSignal } from "solid-js";
 import type { Accessor } from "solid-js";
 import type { ChannelInfo } from "@lemma/contracts";
-import { PLUGIN_PANEL } from "@lemma/devtools/web";
+import { PLUGIN_PANEL, clearsOnEscape, rowKeys } from "@lemma/devtools/web";
 import type { DevtoolsService } from "@lemma/devtools/web";
 import { XIcon } from "@lemma/look";
-import { rowKeys } from "./rows.ts";
 
 /* The Channels panel's view (see `channelsPanel`), loaded the first time the devtools draw one of their own panels. */
 
@@ -35,6 +34,7 @@ export function ChannelsView(props: { devtools: DevtoolsService; channels: Acces
             spellcheck={false}
             value={query()}
             onInput={(event) => setQuery(event.currentTarget.value)}
+            onKeyDown={clearsOnEscape(query, () => setQuery(""))}
           />
         </label>
       </div>
@@ -73,7 +73,7 @@ export function ChannelsView(props: { devtools: DevtoolsService; channels: Acces
                     <td class="dt-muted">{channel.kind}</td>
                     <td>
                       <button
-                        class="dt-link"
+                        class="dt-link dt-code"
                         onClick={(event) => {
                           event.stopPropagation();
                           props.devtools.show(PLUGIN_PANEL, `host:${channel.source}`);

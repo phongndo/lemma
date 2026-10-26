@@ -4,7 +4,9 @@ import type { Accessor, Component } from "solid-js";
 
 /**
  * A panel in the devtools (`mod+shift+d`): the router, slots, and
- * capabilities are the bundled ones, and any plugin adds its own.
+ * capabilities are the bundled ones, and any plugin adds its own. Its
+ * toolbar's filter (the first `.dt-filter` input it draws) is what "/" and
+ * Ctrl/Cmd+F focus while the devtools hold the focus.
  */
 export interface DevtoolsPanel {
   readonly title: string;
@@ -44,3 +46,4 @@ export class Devtools extends Context.Service<Devtools, DevtoolsService>()("lemm
 /** Actions other plugins run by id (`slots.get(Actions, id)?.run()`), so a replacement keeps the id and what calls it keeps working. */
 export const DevtoolsActionIds = { eventLog: "event-log.open" } as const;
 export { DEVTOOLS_CONTRACT } from "../version.ts";
+export { clearsOnEscape, rowKeys } from "./keys.ts";
