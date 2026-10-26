@@ -280,7 +280,8 @@ paths for the archive's 15,000 files, and runs out of memory. A patch
 through it, as osx-sign 2 does
 ([osx-sign#372](https://github.com/electron/osx-sign/pull/372)); it goes when
 electron-builder signs with osx-sign 2. Only the Nightly workflow builds the
-macOS app.
+macOS app: to try a change to it before merging, run Nightly on the branch
+without publishing (below).
 
 Every build is a release, and stable is the one marked latest:
 
@@ -295,7 +296,12 @@ Every build is a release, and stable is the one marked latest:
   and publishes them as a GitHub prerelease with its installer and Homebrew's
   formula and cask (`lemma.rb`, `lemma-cask.rb`, from `scripts/homebrew.ts`),
   its notes listing the pull requests since the release before. Nightlies a
-  month old that were not promoted are deleted, with their tags.
+  month old that were not promoted are deleted, with their tags. By hand with
+  `publish` off, it builds and checks the commit it runs on instead, and
+  publishes nothing: `gh workflow run nightly.yml --ref <branch> -f
+  publish=false` tries a branch's release files on every platform, the macOS
+  app and Homebrew's cask included, and keeps them as the run's artifacts for a
+  week (`gh run download <run-id> --name lemma-desktop-darwin-arm64`).
 - **Promote** (`.github/workflows/promote.yml`), by hand, makes a nightly (the
   newest, or the version you give) the stable release: it marks it latest and
   not a prerelease, and rewrites its notes to cover everything since the last

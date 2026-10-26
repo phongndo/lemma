@@ -6,17 +6,26 @@ name: Nightly
 # then installed and run on its own platform (scripts/dist-check.ts, dist-desktop-check.ts), with the installer, npm's
 # lemma-harness, and Homebrew's formula, and on macOS its cask (scripts/homebrew.ts), which the release carries for the
 # tap. The Promote workflow makes a nightly the stable release. Daily, and by hand; a day with nothing new on main
-# publishes nothing.
+# publishes nothing. By hand with `publish: false`, it builds and checks the commit it runs on instead, a branch's
+# (`gh workflow run nightly.yml --ref <branch> -f publish=false`), and publishes nothing: its files stay the run's
+# artifacts for a week.
 on:
   schedule:
     - cron: "41 5 * * *"
   workflow_dispatch:
+    inputs:
+      publish:
+        description: "Publish the newest commit on main that passed Check; when off, build and check this run's commit, and publish nothing"
+        required: false
+        type: boolean
+        default: true
 
 permissions:
   contents: read
 
+# Runs that publish, one at a time; one that does not waits for none.
 concurrency:
-  group: nightly
+  group: nightly-${{ github.event_name == 'workflow_dispatch' && !inputs.publish && github.run_id || 'publish' }}
   cancel-in-progress: false
 
 # Actions are pinned by commit, their version in the comment.
@@ -38,25 +47,31 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
+          PUBLISH: ${{ github.event_name != 'workflow_dispatch' || inputs.publish }}
         run: |
           set -euo pipefail
-          # A push's run: a pull request's from a fork's own `main` names that branch too, and its commit is not main's.
-          sha=$(gh run list --workflow check.yml --branch main --event push --status success --limit 1 --json headSha --jq '.[0].headSha // empty')
-          [[ -n "$sha" ]] || { echo "::error::No commit on main has passed Check"; exit 1; }
-          on_main=$(gh api "repos/$GH_REPO/compare/$sha...main" --jq .status)
-          [[ "$on_main" == ahead || "$on_main" == identical ]] || { echo "::error::$sha passed Check but is not on main ($on_main)"; exit 1; }
           previous=$(gh release list --exclude-drafts --limit 1 --json tagName --jq '.[0].tagName // empty')
-          if [[ -n "$previous" ]]; then
-            # A rerun of an older commit's Check can pass after a newer one's: only a commit after the last release is new.
-            status=$(gh api "repos/$GH_REPO/compare/$previous...$sha" --jq .status)
-            [[ "$status" == ahead ]] || { echo "::notice::Nothing on main that passed Check is newer than $previous"; exit 0; }
+          if [[ "$PUBLISH" != true ]]; then
+            # The commit this run is for (`--ref`), checked whether or not it passed Check, as it is published nowhere.
+            sha=$GITHUB_SHA
+          else
+            # A push's run: a pull request's from a fork's own `main` names that branch too, and its commit is not main's.
+            sha=$(gh run list --workflow check.yml --branch main --event push --status success --limit 1 --json headSha --jq '.[0].headSha // empty')
+            [[ -n "$sha" ]] || { echo "::error::No commit on main has passed Check"; exit 1; }
+            on_main=$(gh api "repos/$GH_REPO/compare/$sha...main" --jq .status)
+            [[ "$on_main" == ahead || "$on_main" == identical ]] || { echo "::error::$sha passed Check but is not on main ($on_main)"; exit 1; }
+            if [[ -n "$previous" ]]; then
+              # A rerun of an older commit's Check can pass after a newer one's: only a commit after the last release is new.
+              status=$(gh api "repos/$GH_REPO/compare/$previous...$sha" --jq .status)
+              [[ "$status" == ahead ]] || { echo "::notice::Nothing on main that passed Check is newer than $previous"; exit 0; }
+            fi
           fi
           line=$(gh api "repos/$GH_REPO/contents/apps/cli/package.json?ref=$sha" --jq .content | base64 -d | jq -r .version | cut -d. -f1,2)
           [[ "$line" =~ ^[0-9]+\.[0-9]+$ ]] || { echo "::error::apps/cli/package.json has no version line"; exit 1; }
           last=$(gh api --paginate "repos/$GH_REPO/git/matching-refs/tags/v$line." --jq '.[].ref' | sed -n "s|^refs/tags/v$line\.\([0-9][0-9]*\)$|\1|p" | sort -n | tail -n 1)
           version="$line.$((${last:--1} + 1))"
           { echo "sha=$sha"; echo "version=$version"; echo "previous=$previous"; } >> "$GITHUB_OUTPUT"
-          echo "::notice::Nightly $version from $sha"
+          if [[ "$PUBLISH" == true ]]; then echo "::notice::Nightly $version from $sha"; else echo "::notice::A trial of $version from $sha, published nowhere"; fi
 
   # Every target's archive, and the desktop app made from each Linux one, in the development shells as Check builds
   # its own; each target's files an artifact of their own, so a job downloads only those it runs.
@@ -240,9 +255,10 @@ jobs:
 
   # Each file's build provenance, signed for this workflow (`gh attestation verify`, docs/installation.md); then a
   # draft, published once its files are all there, so the channel never offers a release without them. Then nightlies
-  # older than a month that were not promoted go.
+  # older than a month that were not promoted go. Not in a run that publishes nothing.
   publish:
     needs: [resolve, verify, macos]
+    if: github.event_name != 'workflow_dispatch' || inputs.publish
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
