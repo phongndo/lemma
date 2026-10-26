@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { readTool } from "../src/index.ts";
 import type { ReadDetails } from "../src/index.ts";
 import { readLines } from "../src/lines.ts";
+import { sniffBinary } from "../src/read.ts";
 import { attempt, call, context, tempDir, textOf } from "@lemma/tools/testing";
 
 let dir: string;
@@ -105,6 +106,19 @@ describe("read", () => {
     const window = await readLines(counting, 10, 20, { headBytes: 1024, countBytes: 1024 }, new AbortController().signal, 256).finally(() => handle.close());
     expect(window).toEqual({ text: Array.from({ length: 10 }, (_, i) => `line ${i + 11}`).join("\n") });
     expect(furthest).toBeLessThanOrEqual(1024 + 256);
+  });
+
+  it("tells binary files from text, saying what kind each is instead of showing it", async () => {
+    await put("doc.pdf", Buffer.concat([Buffer.from("%PDF-1.7\n%"), Buffer.from([0xe2, 0xe3, 0xcf, 0xd3]), Buffer.from("\n1 0 obj\n")]));
+    await put("lib.so", Buffer.concat([Buffer.from([0x7f, 0x45, 0x4c, 0x46, 2, 1, 1, 0]), Buffer.alloc(64)]));
+    await put("blob.bin", Buffer.from(Array.from({ length: 512 }, (_, i) => (i * 37 + 128) % 256).filter((byte) => byte !== 0)));
+    expect(textOf(await call(readTool, { path: "doc.pdf" }, context(dir)))).toBe(
+      "doc.pdf is a PDF (23B), not text, so it is not shown. Look into it with bash (file, strings, xxd) or a tool made for it.",
+    );
+    expect(textOf(await call(readTool, { path: "lib.so" }, context(dir)))).toMatch(/^lib\.so is an ELF executable or library \(72B\)/);
+    expect(textOf(await call(readTool, { path: "blob.bin" }, context(dir)))).toMatch(/^blob\.bin is a binary file /);
+    expect(sniffBinary(Buffer.from("plain text, ünïcödé, emoji 😀, tabs\tand\r\nlines\n\x1b[31mcolor\x1b[0m"))).toBeUndefined();
+    expect(sniffBinary(Buffer.from([0x61, 0x00, 0x62]))).toBe("a binary file");
   });
 
   it("returns images by content, not extension, and reports missing files and directories", async () => {

@@ -32,6 +32,38 @@ const PAGE_LINES = 2000;
 /** Past this much of a file, reading stops at the page's end rather than count the rest of its lines. */
 const COUNT_BYTES = 64 * 1024 * 1024;
 
+/** How much of a file is read to tell an image or a binary file from text, as git reads to tell binary files. */
+const SNIFF_BYTES = 8000;
+
+/** Binary files by their first bytes, named in what the model is told of them. */
+const MAGIC: readonly (readonly [string, string])[] = [
+  ["a PDF", "%PDF-"],
+  ["an ELF executable or library", "\x7fELF"],
+  ["a zip archive (or a file in a zip format: docx, xlsx, jar)", "PK\x03\x04"],
+  ["a gzip archive", "\x1f\x8b"],
+  ["a SQLite database", "SQLite format 3\0"],
+  ["a WebAssembly module", "\0asm"],
+  ["a Mach-O executable or library", "\xcf\xfa\xed\xfe"],
+  ["a Windows executable or library", "MZ"],
+];
+
+/**
+ * What kind of binary file starts with `head`: one of `MAGIC` by its first bytes, else a binary file when the bytes
+ * hold a NUL, as git judges, or are mostly not text (invalid UTF-8, control characters). Undefined for text.
+ */
+export function sniffBinary(head: Uint8Array): string | undefined {
+  const known = MAGIC.find(([, magic]) => [...magic].every((char, i) => head[i] === char.charCodeAt(0)));
+  if (known !== undefined) return known[0];
+  if (head.includes(0)) return "a binary file";
+  const text = new TextDecoder().decode(head);
+  let odd = 0;
+  for (const char of text) {
+    const code = char.codePointAt(0)!;
+    if (code === 0xfffd || (code < 0x20 && !"\t\n\r\f\v\b\x1b".includes(char))) odd++;
+  }
+  return odd > text.length / 10 ? "a binary file" : undefined;
+}
+
 async function readHead(file: string, length: number): Promise<Uint8Array> {
   const handle = await open(file, "r");
   try {
@@ -62,7 +94,8 @@ export const readTool: Tool<ReadInput> = {
     }
     throwIfAborted(signal);
 
-    const mimeType = sniffImage(await readHead(absolute, 16));
+    const head = await readHead(absolute, SNIFF_BYTES);
+    const mimeType = sniffImage(head);
     if (mimeType !== undefined) {
       const { size } = await stat(absolute);
       if (size > MAX_IMAGE_BYTES) {
@@ -79,6 +112,11 @@ export const readTool: Tool<ReadInput> = {
         details: { path: absolute } satisfies ReadDetails,
         structured: { type: "image", data, mimeType, note } satisfies ReadOutput,
       });
+    }
+    const binary = sniffBinary(head);
+    if (binary !== undefined) {
+      const text = `${path} is ${binary} (${formatSize((await stat(absolute)).size)}), not text, so it is not shown. Look into it with bash (file, strings, xxd) or a tool made for it.`;
+      return new ToolResult({ content: [{ type: "text", text }], details: { path: absolute } satisfies ReadDetails, structured: text });
     }
 
     // A page at a time, read only as far as the page and, in a file up to `COUNT_BYTES`, on to count its lines.
