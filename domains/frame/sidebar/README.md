@@ -75,8 +75,10 @@ Requires `Threads`, `Slots`, `WebPlugins`, `Layout`, and `Workspace`.
   once. Only the pointer moving shows them, not a card moving under a still
   pointer (a thread made or archived above it), and a key press puts them away.
 - **Focus stays in the list.** Archiving, deleting, or discarding the row that
-  has focus moves it to the next row (the one before, at the end; with none,
-  New thread); a row that moves (pinned) keeps it.
+  has focus moves it to the next row in its list (the one before, at the end;
+  with none, the first row of the threads, else New thread); a row that moves
+  (pinned) keeps it. Focus the person moved elsewhere, or left on nothing with
+  a click, is theirs.
 - **Search** is the palette's, floating over the page: threads by title,
   project, and what was said in them.
 - **Keys.** `mod+1` … `mod+9` go to the thread at that place, pinned ones

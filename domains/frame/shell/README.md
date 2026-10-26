@@ -19,8 +19,9 @@ config.
   window allows; a double-click or Enter resets it to 264px) and collapses it. On a window up to 820px wide it is a drawer over the
   page instead, as wide as chosen up to the window's width less 48px, which
   `toggleSidebar` opens and `onPick`, Escape, or a click beside it closes.
-  While it is open the page beside it is inert and focus is in it; closed, it
-  gives focus back to what had it, and is inert itself. The chosen width and
+  While it is open the page beside it and the docks are inert and focus is in
+  it (and in what shows over it, a toast or a notice); closed, it gives focus
+  back to what had it, and is inert itself. The chosen width and
   whether it is collapsed are kept in the browser's storage; a narrower window
   clamps the width shown, not the one chosen.
 - **Focus stays put.** When toggling, or the window narrowing or widening,

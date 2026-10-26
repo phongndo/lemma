@@ -23,6 +23,14 @@
   top: min(anchor(--toasts bottom, 56px), 50vh);
 }
 
+/* Where CSS anchors are not supported, how tall the toasts stand is unknown: the top-right notices go to the bottom right, out of their way. */
+@supports not (top: anchor(--toasts bottom)) {
+  .thread-notices[data-corner="top-right"] {
+    top: auto;
+    bottom: 16px;
+  }
+}
+
 .thread-notices[data-corner^="bottom"] {
   bottom: 16px;
 }

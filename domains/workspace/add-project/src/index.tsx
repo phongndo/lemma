@@ -336,7 +336,7 @@ function AddProjectDialog(props: { deps: Deps }) {
               <div class="palette-note">Showing the first {listing()?.entries.length}</div>
             </Show>
           </div>
-          <footer class="add-project-foot">
+          <footer class="palette-foot">
             <span>
               <kbd>↑</kbd>
               <kbd>↓</kbd> move
@@ -350,7 +350,7 @@ function AddProjectDialog(props: { deps: Deps }) {
             <span>
               <kbd>⌫</kbd> up
             </span>
-            <span class="add-project-foot-end">
+            <span class="palette-foot-end">
               <kbd>esc</kbd> close
             </span>
           </footer>

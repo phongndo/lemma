@@ -81,5 +81,47 @@ export interface MenuAction<Subject, Control = undefined> {
  */
 export const inDesktop = typeof window !== "undefined" && "lemmaDesktop" in window;
 
+/** Nothing has focus: it rests on the page's body (or nowhere). What the frame's plugins move focus from, when it is lost. */
+export const nothingFocused = (element: Element | null): boolean => element === null || element instanceof HTMLBodyElement;
+
+/** The handlers `holdWhileRead` gives a passing message's element. */
+export interface ReadingHandlers {
+  readonly onPointerEnter: () => void;
+  readonly onPointerLeave: () => void;
+  readonly onFocusIn: (event: FocusEvent) => void;
+  readonly onFocusOut: (event: FocusEvent) => void;
+}
+
+/**
+ * Holds a passing message (a toast, a notice) while it is read: while the pointer is on it, or keyboard focus is in it.
+ * Focus a click leaves on one of its buttons (Copy) does not hold it, so it still goes once the pointer leaves. `held`
+ * hears each change; spread the result on the message's element.
+ */
+export const holdWhileRead = (held: (holding: boolean) => void): ReadingHandlers => {
+  let pointed = false;
+  let focused = false;
+  const tell = () => held(pointed || focused);
+  return {
+    onPointerEnter: () => {
+      pointed = true;
+      tell();
+    },
+    onPointerLeave: () => {
+      pointed = false;
+      tell();
+    },
+    onFocusIn: (event) => {
+      focused = event.target instanceof Element && event.target.matches(":focus-visible");
+      tell();
+    },
+    onFocusOut: (event) => {
+      // Moving within it, the next `focusin` says whether it holds.
+      if (event.currentTarget instanceof Element && event.currentTarget.contains(event.relatedTarget as Node | null)) return;
+      focused = false;
+      tell();
+    },
+  };
+};
+
 export { ActionMenu } from "./menu.tsx";
 export { FRAME_CONTRACT } from "./version.ts";

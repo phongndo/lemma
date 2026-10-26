@@ -135,3 +135,8 @@
     background: var(--scrim);
   }
 }
+
+/* The docks' holder only makes them inert under an open drawer: each dock stays the frame's own item. */
+.docks {
+  display: contents;
+}

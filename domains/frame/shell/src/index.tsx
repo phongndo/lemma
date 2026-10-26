@@ -3,7 +3,7 @@ import { load, save } from "@lemma/web/storage";
 import { dragEdge } from "@lemma/web/drag";
 import { onLookChange, tokenColor } from "@lemma/web/paint";
 import { Actions } from "@lemma/actions";
-import { Docks, FRAME_CONTRACT, Layers, Layout, MainRegion, SidebarRegion, TopRegion } from "@lemma/frame";
+import { Docks, FRAME_CONTRACT, Layers, Layout, MainRegion, SidebarRegion, TopRegion, nothingFocused } from "@lemma/frame";
 import { Root, Slots, defineWebPlugin, Contained, Each } from "@lemma/web";
 import { SidebarIcon } from "@lemma/look";
 import styles from "./shell.css?inline";
@@ -24,12 +24,14 @@ const NARROW = "(max-width: 820px)";
 const TOGGLES = "[data-sidebar-toggle]";
 const FOCUSABLE = "button, [href], input, select, textarea, [tabindex]:not([tabindex='-1'])";
 
-/** Nothing has focus: it rests on the page's body. */
-const onNothing = (element: Element | null): boolean => element === null || element instanceof HTMLBodyElement;
-
-/** It shows and can take focus: connected, drawn, and not in an inert part of the page. */
+/** It shows and can take focus: connected, drawn, enabled, and not in an inert part of the page. */
 const focusable = (element: Element | null | undefined): element is HTMLElement =>
-  element instanceof HTMLElement && !onNothing(element) && element.isConnected && element.checkVisibility() && element.closest("[inert]") === null;
+  element instanceof HTMLElement &&
+  !nothingFocused(element) &&
+  element.isConnected &&
+  !element.matches(":disabled") &&
+  element.checkVisibility() &&
+  element.closest("[inert]") === null;
 
 /** Chromium's Window Controls Overlay: a desktop window (Electron) whose own controls sit over the page's top-left. */
 interface ControlsOverlay extends EventTarget {
@@ -111,8 +113,9 @@ export default defineWebPlugin({
     const openDrawer = () => {
       opener = document.activeElement instanceof HTMLElement ? document.activeElement : undefined;
       setDrawer(true);
-      // The page beside it is inert while it is open (`inert` on the columns), so focus goes in and Tab stays there.
-      queueMicrotask(() => box?.querySelector<HTMLElement>(FOCUSABLE)?.focus({ preventScroll: true }));
+      // The page beside it and the docks under it are inert while it is open, so focus goes in and Tab stays there, and
+      // in what shows over it (a toast, a notice).
+      queueMicrotask(() => [...(box?.querySelectorAll<HTMLElement>(FOCUSABLE) ?? [])].find(focusable)?.focus({ preventScroll: true }));
     };
     const closeDrawer = () => {
       if (!drawer()) return;
@@ -125,7 +128,7 @@ export default defineWebPlugin({
       if (narrow()) return drawer() ? closeDrawer() : openDrawer();
       const had = document.activeElement;
       setCollapsedSaved(!collapsed());
-      if (!onNothing(had)) refocus();
+      if (!nothingFocused(had)) refocus();
     };
 
     slots.add(Actions, {
@@ -239,8 +242,10 @@ export default defineWebPlugin({
             </div>
             <Each slot={Layers} />
           </div>
-          {/* Docked under the app, which shrinks to the space left: each dock sizes itself. */}
-          <Each slot={Docks} />
+          {/* Docked under the app, which shrinks to the space left: each dock sizes itself; out of reach under an open drawer. */}
+          <div class="docks" inert={drawerOpen() || undefined}>
+            <Each slot={Docks} />
+          </div>
         </div>
       );
     }

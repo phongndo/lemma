@@ -1,5 +1,5 @@
 import { For, Show, createEffect, createMemo } from "solid-js";
-import { Layers } from "@lemma/frame";
+import { Layers, holdWhileRead } from "@lemma/frame";
 import { Notify, Slots, defineWebPlugin } from "@lemma/web";
 import type { Toast } from "@lemma/web";
 import { AlertIcon, CopyButton, ExternalIcon, XIcon } from "@lemma/look";
@@ -11,31 +11,10 @@ const SHOWS_FOR: Readonly<Record<Toast["level"], number>> = { error: 12_000, war
 const AT_MOST = 6;
 
 function ToastView(props: { toast: Toast; onDismiss: () => void; hold: (held: boolean) => void }) {
-  // Held while the pointer is on it or focus is in it, so it is not dismissed while being read.
-  let pointed = false;
-  let focused = false;
-  const tell = () => props.hold(pointed || focused);
+  // Held while it is read (the pointer on it, keyboard focus in it), so it is not dismissed then.
+  const reading = holdWhileRead((held) => props.hold(held));
   return (
-    <div
-      class={`toast toast-${props.toast.level}`}
-      role={props.toast.level === "error" ? "alert" : "status"}
-      onPointerEnter={() => {
-        pointed = true;
-        tell();
-      }}
-      onPointerLeave={() => {
-        pointed = false;
-        tell();
-      }}
-      onFocusIn={() => {
-        focused = true;
-        tell();
-      }}
-      onFocusOut={(event) => {
-        focused = event.currentTarget.contains(event.relatedTarget as Node | null);
-        tell();
-      }}
-    >
+    <div class={`toast toast-${props.toast.level}`} role={props.toast.level === "error" ? "alert" : "status"} {...reading}>
       <div class="toast-main">
         <Show when={props.toast.level !== "info"}>
           <AlertIcon />

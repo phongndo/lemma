@@ -1,7 +1,7 @@
 import { For, Show, createEffect, createMemo, createSignal, on, onCleanup, untrack } from "solid-js";
 import type { Component } from "solid-js";
 import { Actions } from "@lemma/actions";
-import { Layers } from "@lemma/frame";
+import { Layers, holdWhileRead } from "@lemma/frame";
 import { SettingsGroups, SettingsSections, Settings } from "@lemma/settings";
 import { sessionTitle, Threads } from "@lemma/threads";
 import { Slots, defineWebPlugin, usePlugin } from "@lemma/web";
@@ -65,39 +65,18 @@ const permissionNow = (): Permission => (typeof Notification === "undefined" ? "
 function NoticeCard(props: { notice: Notice; title: string; project: string; open: () => void; dismiss: () => void }) {
   const plugin = usePlugin();
   let stop: (() => void) | undefined;
-  let pointed = false;
-  let focused = false;
-  /** A turn's end goes after a while, the pointer on it or focus in it holding it; a thread waiting stays until it is answered. */
-  const wait = () => {
+  /** A turn's end goes after a while, held while it is read (`holdWhileRead`); a thread waiting stays until it is answered. */
+  const wait = (held: boolean) => {
     stop?.();
     stop = undefined;
-    if (props.notice.state !== "waiting" && !pointed && !focused) stop = plugin.after(NOTICE_MS, () => props.dismiss(), { name: "dismiss notice" });
+    if (props.notice.state !== "waiting" && !held) stop = plugin.after(NOTICE_MS, () => props.dismiss(), { name: "dismiss notice" });
   };
-  wait();
+  const reading = holdWhileRead(wait);
+  wait(false);
   onCleanup(() => stop?.());
   const Glyph = STATE_ICONS[props.notice.state];
   return (
-    <div
-      class="thread-notice"
-      data-state={props.notice.state}
-      role={props.notice.state === "done" ? "status" : "alert"}
-      onPointerEnter={() => {
-        pointed = true;
-        wait();
-      }}
-      onPointerLeave={() => {
-        pointed = false;
-        wait();
-      }}
-      onFocusIn={() => {
-        focused = true;
-        wait();
-      }}
-      onFocusOut={(event) => {
-        focused = event.currentTarget.contains(event.relatedTarget as Node | null);
-        wait();
-      }}
-    >
+    <div class="thread-notice" data-state={props.notice.state} role={props.notice.state === "done" ? "status" : "alert"} {...reading}>
       <button type="button" class="thread-notice-open" onClick={() => props.open()}>
         <span class="thread-notice-icon">
           <Glyph />

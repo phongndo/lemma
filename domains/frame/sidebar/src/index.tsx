@@ -11,7 +11,7 @@ import { loadJson, recordOf, save } from "@lemma/web/storage";
 import { dragEdge } from "@lemma/web/drag";
 import { ActionIds, Actions, shownKeysOf } from "@lemma/actions";
 import { sessionTitle, ThreadActions, Threads, SidebarRowPart, SidebarRow } from "@lemma/threads";
-import { ActionMenu, inDesktop, Layout, SidebarActions, SidebarFooter, SidebarRegion } from "@lemma/frame";
+import { ActionMenu, inDesktop, Layout, SidebarActions, SidebarFooter, SidebarRegion, nothingFocused } from "@lemma/frame";
 import type { LayoutService } from "@lemma/frame";
 import { Workspace } from "@lemma/workspace/web";
 import { Slots, WebPlugins, defineWebPlugin, Each, usePlugin } from "@lemma/web";
@@ -627,6 +627,9 @@ function DraftRow(props: {
   );
 }
 
+/** What a press can put focus on. */
+const TAKES_FOCUS = "a[href], button, input, select, textarea, [tabindex]";
+
 /** The row focus goes to when `row` (a list item) goes with focus in it: the next in its list, else the one before. */
 const neighbourOf = (row: Element): HTMLElement | undefined => {
   const links = [...(row.closest("ul")?.querySelectorAll<HTMLElement>("[data-session-row]") ?? [])].filter((link) => !row.contains(link));
@@ -635,9 +638,6 @@ const neighbourOf = (row: Element): HTMLElement | undefined => {
     links.filter((link) => (row.compareDocumentPosition(link) & Node.DOCUMENT_POSITION_PRECEDING) !== 0).at(-1)
   );
 };
-
-/** Nothing has focus: it rests on the page's body. */
-const onNothing = (element: Element | null): boolean => element === null || element instanceof HTMLBodyElement;
 
 /**
  * Keeps focus in `list` as its rows change: a row that goes with focus in it (archived, deleted, discarded) hands it to
@@ -655,11 +655,15 @@ const keepFocus = (plugin: Pick<WebPluginContext<unknown>, "listen">, list: HTML
   const observer = new MutationObserver((records) => {
     const was = kept;
     if (was === undefined) return;
-    if (list.contains(document.activeElement)) return remember();
-    if (!onNothing(document.activeElement) || !records.some((record) => [...record.removedNodes].some((node) => node.contains(was.focused)))) return;
+    if (list.contains(document.activeElement)) {
+      // The neighbour changes only as rows come, go, or move (a list's own children), not with what changes in a row.
+      if (was.focused !== document.activeElement || records.some((record) => record.target instanceof HTMLUListElement)) remember();
+      return;
+    }
+    if (!nothingFocused(document.activeElement) || !records.some((record) => [...record.removedNodes].some((node) => node.contains(was.focused)))) return;
     // After what the change does itself (a renamed row focusing its link again).
     queueMicrotask(() => {
-      if (onNothing(document.activeElement))
+      if (nothingFocused(document.activeElement))
         [was.focused, was.next, list.querySelector<HTMLElement>("[data-session-row]") ?? undefined, fallback()]
           .find((candidate) => candidate?.isConnected === true)
           ?.focus();
@@ -672,7 +676,11 @@ const keepFocus = (plugin: Pick<WebPluginContext<unknown>, "listen">, list: HTML
   const forget = (to: EventTarget | null) => {
     if (to instanceof Node && !list.contains(to)) kept = undefined;
   };
-  onCleanup(plugin.listen(document, "pointerdown", (event) => forget(event.target), { capture: true }));
+  /** A press elsewhere, or on what in the list takes no focus (its empty space), leaves focus where the person put it. */
+  const pressed = (on: EventTarget | null) => {
+    if (!(on instanceof Element) || !list.contains(on) || on.closest(TAKES_FOCUS) === null) kept = undefined;
+  };
+  onCleanup(plugin.listen(document, "pointerdown", (event) => pressed(event.target), { capture: true }));
   return { focusIn: remember, focusOut: (event: FocusEvent) => forget(event.relatedTarget) };
 };
 
