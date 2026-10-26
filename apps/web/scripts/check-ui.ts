@@ -2,11 +2,16 @@ import { recordFlake, summarizeFlakes } from "../../../scripts/flaky.ts";
 import type { Flake } from "../../../scripts/flaky.ts";
 import { closeRouter, inLane, stopHosts } from "./check-ui/hosts.ts";
 import { browser, closePages, only, retries, saveArtifacts, server, shard, shards } from "./check-ui/shared.ts";
+import { addresses } from "./check-ui/addresses.ts";
 import { devtools } from "./check-ui/devtools.ts";
+import { examples } from "./check-ui/examples.ts";
 import { pages } from "./check-ui/pages.ts";
+import { pane } from "./check-ui/pane.ts";
 import { parts } from "./check-ui/parts.ts";
 import { rail } from "./check-ui/rail.ts";
 import { separate } from "./check-ui/separate.ts";
+import { sidebar } from "./check-ui/sidebar.ts";
+import { slots } from "./check-ui/slots.ts";
 import { toggling } from "./check-ui/toggling.ts";
 import { turns } from "./check-ui/turns.ts";
 
@@ -154,8 +159,9 @@ const attempt = async (lane: () => Promise<string>): Promise<string> => {
 };
 
 try {
-  // In this order, every other lane makes two shares that take about as long.
-  const all = [toggling, parts, rail, devtools, turns, separate, pages];
+  // In this order, every other lane makes two shares that end about together: the longest lane, toggling, with the
+  // shortest five; and the longest first, as AT_ONCE start.
+  const all = [toggling, sidebar, examples, addresses, pages, turns, parts, separate, devtools, pane, slots, rail];
   const unknown = (only ?? []).filter((name) => !all.some((lane) => lane.name === name));
   if (unknown.length > 0) throw new Error(`UI check: no lane ${unknown.join(", ")}; the lanes are ${all.map((lane) => lane.name).join(", ")}`);
   const lanes = all.filter((lane) => only === undefined || only.includes(lane.name)).filter((_, at) => at % shards === shard - 1);
