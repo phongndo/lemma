@@ -2,10 +2,9 @@ import { For, Show, createEffect, createMemo, createResource, createSignal, on, 
 import type { Accessor, JSX } from "solid-js";
 import { KERNEL_LABEL, RUNTIME_LABEL, kernelOf, pluginWiring, tablesOf } from "@lemma/contracts";
 import type { InspectorInfo, KernelKind as Kind, PluginStatus, Table } from "@lemma/contracts";
-import { DevtoolsPanels, PLUGIN_PANEL, TRACE_PANEL } from "@lemma/devtools/web";
+import { DevtoolsPanels, PLUGIN_PANEL, TRACE_PANEL, clearsOnEscape, rowKeys } from "@lemma/devtools/web";
 import { SectionIds, SettingsRoute } from "@lemma/settings";
 import { usePlugin } from "@lemma/web";
-import { rowKeys } from "./rows.ts";
 import { INSPECTORS_PANEL, kernelFor, slotViews } from "./kernel.tsx";
 import type { Deps, SlotView } from "./kernel.tsx";
 
@@ -23,7 +22,7 @@ const stateLabel = (plugin: PluginStatus) => (plugin.enabled ? plugin.state : "o
 /** A plugin's name: opens it in the Plugins panel, wherever it appears. */
 function PluginName(props: { deps: Deps; kind: Kind; id: string }) {
   return (
-    <button class="dt-link" onClick={() => props.deps.devtools.show(PLUGIN_PANEL, `${props.kind}:${props.id}`)}>
+    <button class="dt-link dt-code" onClick={() => props.deps.devtools.show(PLUGIN_PANEL, `${props.kind}:${props.id}`)}>
       {props.id}
     </button>
   );
@@ -422,6 +421,7 @@ export function PluginsPanel(props: { deps: Deps; inspectors: Accessor<readonly 
             aria-label="Filter plugins"
             value={filter()}
             onInput={(event) => setFilter(event.currentTarget.value)}
+            onKeyDown={clearsOnEscape(filter, () => setFilter(""))}
           />
         </label>
         <span class="dt-sep" />
@@ -444,8 +444,8 @@ export function PluginsPanel(props: { deps: Deps; inspectors: Accessor<readonly 
                 <th class="devtools-plugins-state">State</th>
                 <th class="devtools-plugins-source">Source</th>
                 <th>Provides</th>
-                <th class="devtools-plugins-requires">Requires</th>
-                <th class="devtools-plugins-faults">Faults</th>
+                <th class="devtools-plugins-requires dt-num">Requires</th>
+                <th class="devtools-plugins-faults dt-num">Faults</th>
               </tr>
             </thead>
             <tbody>
@@ -533,7 +533,7 @@ export function HooksPanel(props: { deps: Deps }) {
             <thead>
               <tr>
                 <th>{what() === "hooks" ? "Hook" : "Event"}</th>
-                <th class="devtools-hooks-count">{what() === "hooks" ? "Handlers" : "Observers"}</th>
+                <th class="devtools-hooks-count dt-num">{what() === "hooks" ? "Handlers" : "Observers"}</th>
                 <th>{what() === "hooks" ? "Runs" : "Observed by"}</th>
               </tr>
             </thead>
@@ -586,7 +586,7 @@ export function HooksPanel(props: { deps: Deps }) {
                             <td>
                               <PluginName deps={deps} kind={kind()} id={id} />
                             </td>
-                            <td class="dt-muted">{row.orders?.[index()] ?? ""}</td>
+                            <Show when={row.orders}>{(orders) => <td class="dt-muted">{orders()[index()]}</td>}</Show>
                           </tr>
                         )}
                       </For>
@@ -632,6 +632,7 @@ export function RegistriesPanel(props: { deps: Deps }) {
             aria-label="Filter registries"
             value={filter()}
             onInput={(event) => setFilter(event.currentTarget.value)}
+            onKeyDown={clearsOnEscape(filter, () => setFilter(""))}
           />
         </label>
         <span class="dt-sep" />
@@ -643,7 +644,7 @@ export function RegistriesPanel(props: { deps: Deps }) {
             <thead>
               <tr>
                 <th>{kind() === "web" ? "Slot" : "Registry"}</th>
-                <th class="devtools-registries-items">Items</th>
+                <th class="devtools-registries-items dt-num">Items</th>
                 <th>Plugins</th>
               </tr>
             </thead>
@@ -748,7 +749,9 @@ export function RegistriesPanel(props: { deps: Deps }) {
                                     <td>
                                       <PluginName deps={deps} kind="web" id={item.plugin} />
                                     </td>
-                                    <td class="dt-muted">{view.shows === "first" ? (index() === 0 ? "shown" : "replaced") : ""}</td>
+                                    <Show when={view.shows === "first"}>
+                                      <td class="dt-muted">{index() === 0 ? "shown" : "replaced"}</td>
+                                    </Show>
                                   </tr>
                                 )}
                               </For>

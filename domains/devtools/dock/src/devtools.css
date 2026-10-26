@@ -1,18 +1,43 @@
-/* The dock; its panels draw with the foundation's `.dt-*` vocabulary. */
+/* The dock. Its panel's body is a `.dt-scope` (the foundation's `.dt-*` vocabulary), so any panel draws in it, a bundled
+   one with a scope of its own inside; its chrome (the edge, the tabs, the close button) is outside it, so focus there is
+   not focus in a panel's table, and takes a scope's type and colours here. */
 .devtools {
   position: relative;
   flex: none;
+  display: flex;
+  flex-direction: column;
   border-top: 1px solid var(--border-strong);
+  background: var(--bg-raised);
+  color: var(--text);
+  font: var(--font-size-sm)/1.4 var(--font-ui);
 }
 
+.devtools button {
+  font: inherit;
+}
+
+/* Its top edge, with room either side of the border to take the pointer; it shows a line while hovered, dragged, or
+   focused, as the inspection pane's edge does. */
 .devtools-resize {
   position: absolute;
-  top: -3px;
+  top: -4px;
   left: 0;
   right: 0;
-  height: 6px;
+  height: 7px;
   z-index: 3;
   cursor: ns-resize;
+  touch-action: none;
+  outline: none;
+}
+
+.devtools-resize:hover,
+.devtools-resize:focus-visible,
+.devtools-resizing .devtools-resize {
+  background: linear-gradient(var(--dt-select-focus), var(--dt-select-focus)) center / 100% 2px no-repeat;
+}
+
+.devtools-resizing {
+  user-select: none;
 }
 
 .devtools-spacer {
@@ -33,12 +58,18 @@
 
 /* Host events, in the foundation's `.dt-*` vocabulary; the type column is coloured by what each line is about. */
 .log-view {
-  --devtools-log-session: #4b8fe8;
+  --devtools-log-session: #2a6bc9;
   --log-turn: var(--ok);
   --log-interaction: var(--warn);
+  --log-host: #7a52d6;
+  --log-conn: #0d7686;
+  height: 100%;
+}
+
+[data-theme="dark"] .log-view {
+  --devtools-log-session: #4b8fe8;
   --log-host: #9b7be8;
   --log-conn: #1fa9bf;
-  height: 100%;
 }
 
 .log-table {
@@ -164,10 +195,4 @@
 
 .devtools-chain-place {
   width: 28px;
-}
-
-/* A table whose rows select by keys too (rows.ts): the selected row's colour shows where the focus is, so it needs no
-   ring of its own; a row focused but not selected keeps one. */
-.dt-table[role="grid"] tbody tr[aria-selected="true"]:focus-visible {
-  outline: none;
 }

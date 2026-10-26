@@ -1,11 +1,12 @@
-import { For, Match, Show, Switch, createMemo, createSignal, onMount } from "solid-js";
+import { For, Match, Show, Switch, createMemo, createSignal, onMount, untrack } from "solid-js";
 import type { Accessor, JSX } from "solid-js";
 import type { PluginStatus, SpanRecord } from "@lemma/contracts";
-import { PLUGIN_PANEL } from "@lemma/devtools/web";
+import { PLUGIN_PANEL, clearsOnEscape, rowKeys } from "@lemma/devtools/web";
+import { XIcon } from "@lemma/look";
 import { ThreadRoute } from "@lemma/sessions";
 import { usePlugin } from "@lemma/web";
 import { clockTime } from "@lemma/web/format";
-import { createTrace, hostTrace, pageTrace } from "./model.ts";
+import { createTrace, hostTrace, pageTrace, spanTime as ms } from "./model.ts";
 import type { TraceModel, TraceSource } from "./model.ts";
 import { matcher, narrowedBy, parseQuery, turnOrder } from "./query.ts";
 import { contains, flatten, forest, profile } from "./tree.ts";
@@ -25,8 +26,17 @@ const MODES: readonly { readonly id: Mode; readonly label: string }[] = [
   { id: "faults", label: "Faults" },
 ];
 
-/** A time with its unit: milliseconds below a second, seconds from there. */
-const ms = (value: number) => (value < 10 ? `${value.toFixed(2)} ms` : value < 1000 ? `${value.toFixed(1)} ms` : `${(value / 1000).toFixed(2)} s`);
+/**
+ * Focus goes back to the Spans view's table in the panel `root` (the trace's `.trc`), on the row of `id` when it shows:
+ * where a view or the details that had it went away from (Enter on a plugin, a fault; closing the details).
+ */
+const focusSpans = (root: Element | undefined, id?: string) =>
+  queueMicrotask(() => {
+    const table = root?.querySelector<HTMLElement>('table[aria-label="Spans"]');
+    const row = id === undefined ? null : (table?.querySelector<HTMLElement>(`tbody tr[data-key="${CSS.escape(id)}"]`) ?? null);
+    (row ?? table)?.focus();
+  });
+
 const pluginOf = (span: SpanRecord) => (typeof span.attributes["plugin.id"] === "string" ? (span.attributes["plugin.id"] as string) : undefined);
 
 /** What the panel shares between its views: the trace shown, its filter, and the span selected. */
@@ -39,6 +49,8 @@ interface Shown {
   readonly selected: Accessor<string | undefined>;
   readonly select: (id: string | undefined) => void;
   readonly deps: Deps;
+  /** The panel's element (`.trc`), in which focus finds where to go back to as a view or the details go. */
+  readonly root: () => HTMLElement | undefined;
 }
 
 /** A plugin's id, linking to it in the Plugins panel. */
@@ -47,7 +59,7 @@ function PluginLink(props: { shown: Shown; id: string | undefined }) {
     <Show when={props.id} fallback={<span class="dt-muted">—</span>}>
       {(id) => (
         <button
-          class="dt-link"
+          class="dt-link dt-code"
           onClick={(event) => {
             event.stopPropagation();
             props.shown.deps.devtools.show(PLUGIN_PANEL, `${props.shown.which === "host" ? "host" : "web"}:${id()}`);
@@ -68,10 +80,28 @@ function SpanDetails(props: { shown: Shown; span: SpanRecord }) {
     props.shown.setQuery(query);
     props.shown.select(undefined);
   };
+  /** Closes the details, focus going back to the span's row. */
+  const close = () => {
+    const id = span().id;
+    props.shown.select(undefined);
+    focusSpans(props.shown.root(), id);
+  };
   return (
-    <aside class="dt-details dt-side" aria-label="Span details">
+    <aside
+      class="dt-details dt-side"
+      aria-label="Span details"
+      onKeyDown={(event) => {
+        if (event.key !== "Escape" || event.defaultPrevented) return;
+        event.preventDefault();
+        event.stopPropagation();
+        close();
+      }}
+    >
       <div class="dt-details-title">
-        <strong class="dt-code">{span().name}</strong>
+        <strong class="dt-code trc-title">{span().name}</strong>
+        <button class="dt-close trc-end" aria-label="Close details" data-tip="Close (Esc)" onClick={close}>
+          <XIcon />
+        </button>
       </div>
       <div class="dt-side-body">
         <dl class="dt-facts">
@@ -92,36 +122,38 @@ function SpanDetails(props: { shown: Shown; span: SpanRecord }) {
             <dd class="dt-err">{span().error}</dd>
           </Show>
         </dl>
-        <div class="dt-toolbar" role="toolbar" aria-label="Narrow the trace">
-          <Show when={attribute("session.id")}>
-            {(session) => (
-              <a class="dt-chip" href={props.shown.deps.router.href(ThreadRoute, { id: session(), view: "trajectory" })}>
-                Thread's trajectory
-              </a>
-            )}
-          </Show>
-          <Show when={attribute("turn.id")}>
-            {(turn) => (
-              <button class="dt-chip" onClick={() => narrow(`turn:${turn()}`)}>
-                This turn
-              </button>
-            )}
-          </Show>
-          <Show when={attribute("tool.call.id")}>
-            {(call) => (
-              <button class="dt-chip" onClick={() => narrow(`tool:${call()}`)}>
-                This tool call
-              </button>
-            )}
-          </Show>
-          <Show when={pluginOf(span())}>
-            {(plugin) => (
-              <button class="dt-chip" onClick={() => narrow(`plugin:${plugin()}`)}>
-                This plugin
-              </button>
-            )}
-          </Show>
-        </div>
+        <Show when={attribute("session.id") ?? attribute("turn.id") ?? attribute("tool.call.id") ?? pluginOf(span())}>
+          <div class="trc-narrow" role="group" aria-label="Narrow the trace">
+            <Show when={attribute("session.id")}>
+              {(session) => (
+                <a class="dt-chip" href={props.shown.deps.router.href(ThreadRoute, { id: session(), view: "trajectory" })}>
+                  Thread's trajectory
+                </a>
+              )}
+            </Show>
+            <Show when={attribute("turn.id")}>
+              {(turn) => (
+                <button class="dt-chip" onClick={() => narrow(`turn:${turn()}`)}>
+                  This turn
+                </button>
+              )}
+            </Show>
+            <Show when={attribute("tool.call.id")}>
+              {(call) => (
+                <button class="dt-chip" onClick={() => narrow(`tool:${call()}`)}>
+                  This tool call
+                </button>
+              )}
+            </Show>
+            <Show when={pluginOf(span())}>
+              {(plugin) => (
+                <button class="dt-chip" onClick={() => narrow(`plugin:${plugin()}`)}>
+                  This plugin
+                </button>
+              )}
+            </Show>
+          </div>
+        </Show>
         <table class="dt-table" aria-label="Attributes">
           <tbody>
             <For each={Object.entries(span().attributes).sort(([a], [b]) => a.localeCompare(b))}>
@@ -149,7 +181,10 @@ function Waterfall(props: { shown: Shown; root: SpanNode; matches: (span: SpanRe
       {({ node, depth }) => (
         <tr
           data-row
+          data-key={node.span.id}
           data-selected={props.shown.selected() === node.span.id}
+          aria-selected={props.shown.selected() === node.span.id}
+          tabindex="-1"
           classList={{ "trc-dim": !props.matches(node.span) }}
           onClick={() => props.shown.select(props.shown.selected() === node.span.id ? undefined : node.span.id)}
         >
@@ -193,7 +228,13 @@ function SpansView(props: { shown: Shown }) {
     for (let index = all.length - 1; index >= 0 && found.length < ROOTS; index--) if (contains(all[index]!, matches())) found.push(all[index]!);
     return found;
   });
-  const [open, setOpen] = createSignal<ReadonlySet<string>>(new Set());
+  // Shown with a span in a trace selected (a fault's, from the Faults view), its trace opens, so its row shows.
+  const opened = untrack(() => {
+    const id = props.shown.selected();
+    const root = id === undefined ? undefined : roots().find((candidate) => candidate.span.id !== id && contains(candidate, (span) => span.id === id));
+    return root === undefined ? [] : [root.span.id];
+  });
+  const [open, setOpen] = createSignal<ReadonlySet<string>>(new Set(opened));
   const toggle = (id: string) =>
     setOpen((was) => {
       const next = new Set(was);
@@ -201,10 +242,26 @@ function SpansView(props: { shown: Shown }) {
       return next;
     });
   const selected = createMemo(() => spans().find((span) => span.id === props.shown.selected()));
+  /** A trace's row clicked, or Enter on it: opens its waterfall and shows its details; again, closes both. */
+  const openRoot = (root: SpanNode) => {
+    const closing = open().has(root.span.id) && props.shown.selected() === root.span.id;
+    if (closing || !open().has(root.span.id)) toggle(root.span.id);
+    props.shown.select(closing ? undefined : root.span.id);
+  };
+  // The arrows select a row (a trace's too, without opening it); Enter opens a trace, or selects a span in one.
+  const keys = rowKeys(
+    (id) => props.shown.select(id),
+    () => props.shown.select(undefined),
+    (id) => {
+      const root = shown().find((candidate) => candidate.span.id === id);
+      if (root === undefined) props.shown.select(id);
+      else openRoot(root);
+    },
+  );
   return (
     <div class="dt-split">
       <div class="dt-main" tabindex="-1">
-        <table class="dt-table trc-table" aria-label="Spans">
+        <table class="dt-table trc-table" aria-label="Spans" role="grid" tabindex="0" onKeyDown={keys}>
           <thead>
             <tr>
               <th>Span</th>
@@ -230,16 +287,18 @@ function SpansView(props: { shown: Shown }) {
                 <>
                   <tr
                     data-row
+                    data-key={root.span.id}
                     data-selected={props.shown.selected() === root.span.id}
-                    onClick={() => {
-                      // Opens its waterfall and shows its details; again, closes both.
-                      const closing = open().has(root.span.id) && props.shown.selected() === root.span.id;
-                      if (closing || !open().has(root.span.id)) toggle(root.span.id);
-                      props.shown.select(closing ? undefined : root.span.id);
-                    }}
+                    aria-selected={props.shown.selected() === root.span.id}
+                    aria-expanded={root.children.length > 0 ? open().has(root.span.id) : undefined}
+                    tabindex="-1"
+                    onClick={() => openRoot(root)}
                   >
                     <td class="dt-code trc-name" title={root.span.error}>
-                      <span class="trc-caret">{open().has(root.span.id) ? "▾" : "▸"}</span>
+                      {/* A trace with nothing under it has nothing to open: its place is kept, so the names line up. */}
+                      <span class="trc-caret" aria-hidden="true">
+                        {root.children.length === 0 ? "" : open().has(root.span.id) ? "▾" : "▸"}
+                      </span>
                       {root.span.name}
                       <Show when={root.children.length > 0}>
                         <span class="dt-muted"> · {root.size - 1} under it</span>
@@ -276,9 +335,16 @@ function PluginsView(props: { shown: Shown }) {
     const spans = props.shown.trace.spans();
     return profile(forest(spans), matcher(parseQuery(props.shown.query()), turnOrder(spans)));
   });
+  const [chosen, choose] = createSignal<string>();
+  const narrowTo = (plugin: string) => {
+    props.shown.setQuery(narrowedBy(props.shown.query(), "plugin", plugin));
+    props.shown.setMode("spans");
+    // This view goes, with the row focused: focus goes on to the spans it narrowed to.
+    focusSpans(props.shown.root());
+  };
   return (
     <div class="dt-main" tabindex="-1">
-      <table class="dt-table" aria-label="Plugins by time">
+      <table class="dt-table" aria-label="Plugins by time" role="grid" tabindex="0" onKeyDown={rowKeys(choose, () => choose(undefined), narrowTo)}>
         <thead>
           <tr>
             <th>Plugin</th>
@@ -305,10 +371,11 @@ function PluginsView(props: { shown: Shown }) {
             {(row) => (
               <tr
                 data-row
-                onClick={() => {
-                  props.shown.setQuery(narrowedBy(props.shown.query(), "plugin", row.plugin));
-                  props.shown.setMode("spans");
-                }}
+                data-key={row.plugin}
+                data-selected={chosen() === row.plugin}
+                aria-selected={chosen() === row.plugin}
+                tabindex="-1"
+                onClick={() => narrowTo(row.plugin)}
               >
                 <td>
                   <PluginLink shown={props.shown} id={row.plugin} />
@@ -337,7 +404,7 @@ const ids = (list: readonly string[]): JSX.Element => (list.length === 0 ? <span
 function ChangesView(props: { shown: Shown }) {
   return (
     <div class="dt-main" tabindex="-1">
-      <table class="dt-table" aria-label="Composition changes">
+      <table class="dt-table trc-changes" aria-label="Composition changes">
         <thead>
           <tr>
             <th style={{ width: "96px" }}>When</th>
@@ -361,20 +428,22 @@ function ChangesView(props: { shown: Shown }) {
           >
             {(change) => (
               <tr data-row title={change.subjects?.join(", ")}>
-                <td class="dt-muted">{clockTime(change.at)}</td>
-                <td>{change.cause}</td>
+                <td class="dt-muted dt-wrap">{clockTime(change.at)}</td>
+                <td class="dt-wrap">{change.cause}</td>
                 <Show
                   when={change.refused === undefined}
                   fallback={
-                    <td colSpan={4} class="dt-err">
+                    <td colSpan={4} class="dt-err dt-wrap">
                       Refused: {change.refused}
                     </td>
                   }
                 >
-                  <td>{ids(change.started)}</td>
-                  <td>{ids(change.stopped)}</td>
-                  <td>{ids(change.restarted)}</td>
-                  <td classList={{ "dt-err": change.failed.length > 0 }}>{ids(change.failed)}</td>
+                  <td class="dt-wrap">{ids(change.started)}</td>
+                  <td class="dt-wrap">{ids(change.stopped)}</td>
+                  <td class="dt-wrap">{ids(change.restarted)}</td>
+                  <td class="dt-wrap" classList={{ "dt-err": change.failed.length > 0 }}>
+                    {ids(change.failed)}
+                  </td>
                 </Show>
               </tr>
             )}
@@ -399,6 +468,14 @@ function FaultsView(props: { shown: Shown; plugins: Accessor<readonly PluginStat
       .filter((span) => span.status === "error")
       .reverse(),
   );
+  const [chosen, choose] = createSignal<string>();
+  /** A failed span, in the Spans view: among its turn's, or every failed one's. */
+  const showSpan = (span: SpanRecord) => {
+    props.shown.setQuery(span.attributes["turn.id"] === undefined ? "status:error" : `turn:${String(span.attributes["turn.id"])}`);
+    props.shown.select(span.id);
+    props.shown.setMode("spans");
+    focusSpans(props.shown.root(), span.id);
+  };
   return (
     <div class="dt-main" tabindex="-1">
       <table class="dt-table" aria-label="Plugin faults">
@@ -434,7 +511,20 @@ function FaultsView(props: { shown: Shown; plugins: Accessor<readonly PluginStat
           </For>
         </tbody>
       </table>
-      <table class="dt-table" aria-label="Failed spans">
+      <table
+        class="dt-table"
+        aria-label="Failed spans"
+        role="grid"
+        tabindex="0"
+        onKeyDown={rowKeys(
+          choose,
+          () => choose(undefined),
+          (id) => {
+            const span = failed().find((candidate) => candidate.id === id);
+            if (span !== undefined) showSpan(span);
+          },
+        )}
+      >
         <thead>
           <tr>
             <th style={{ width: "96px" }}>When</th>
@@ -457,11 +547,11 @@ function FaultsView(props: { shown: Shown; plugins: Accessor<readonly PluginStat
             {(span) => (
               <tr
                 data-row
-                onClick={() => {
-                  props.shown.setQuery(span.attributes["turn.id"] === undefined ? "status:error" : `turn:${String(span.attributes["turn.id"])}`);
-                  props.shown.select(span.id);
-                  props.shown.setMode("spans");
-                }}
+                data-key={span.id}
+                data-selected={chosen() === span.id}
+                aria-selected={chosen() === span.id}
+                tabindex="-1"
+                onClick={() => showSpan(span)}
               >
                 <td class="dt-muted">{clockTime(span.start)}</td>
                 <td>
@@ -487,6 +577,7 @@ function TraceView(props: {
   setMode: (mode: Mode) => void;
   query: Accessor<string>;
   setQuery: (query: string) => void;
+  root: () => HTMLElement | undefined;
 }) {
   const plugin = usePlugin();
   const trace = createTrace(props.source);
@@ -501,6 +592,7 @@ function TraceView(props: {
     selected,
     select,
     deps: props.deps,
+    root: props.root,
   };
   return (
     <>
@@ -513,13 +605,14 @@ function TraceView(props: {
             spellcheck={false}
             value={props.query()}
             onInput={(event) => props.setQuery(event.currentTarget.value)}
+            onKeyDown={clearsOnEscape(props.query, () => props.setQuery(""))}
           />
         </label>
         <button class="dt-chip" onClick={plugin.action("read the trace", () => trace.refresh())}>
           Refresh
         </button>
         <span class="dt-sep" />
-        <span class="dt-muted">
+        <span class="dt-muted trc-count">
           {trace.spans().length} spans · {trace.changes().length} changes
         </span>
         <Show when={trace.error()}>{(error) => <span class="dt-err">{error()}</span>}</Show>
@@ -549,8 +642,9 @@ export function TracePanel(props: { deps: Deps }) {
     host: createMemo(() => hostTrace(props.deps.client)),
     page: createMemo(() => pageTrace(props.deps.page)),
   };
+  let panel: HTMLDivElement | undefined;
   return (
-    <div class="dt-scope trc" aria-label="Trace panel">
+    <div class="dt-scope trc" aria-label="Trace panel" ref={panel}>
       <div class="dt-toolbar" role="toolbar" aria-label="Which trace">
         <For each={["host", "page"] as const}>
           {(name) => (
@@ -569,7 +663,18 @@ export function TracePanel(props: { deps: Deps }) {
         </For>
       </div>
       <Show when={which()} keyed>
-        {(name) => <TraceView which={name} source={sources[name]()} deps={props.deps} mode={mode} setMode={setMode} query={query} setQuery={setQuery} />}
+        {(name) => (
+          <TraceView
+            which={name}
+            source={sources[name]()}
+            deps={props.deps}
+            mode={mode}
+            setMode={setMode}
+            query={query}
+            setQuery={setQuery}
+            root={() => panel}
+          />
+        )}
       </Show>
     </div>
   );

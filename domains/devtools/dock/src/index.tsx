@@ -1,5 +1,6 @@
-import { For, Show, createEffect, createSignal } from "solid-js";
-import { withKeys } from "@lemma/web/keys";
+import { For, Show, createEffect, createSignal, createUniqueId } from "solid-js";
+import { dragEdge } from "@lemma/web/drag";
+import { radioGroupKey, typing, withKeys } from "@lemma/web/keys";
 import { shownKeys, Actions } from "@lemma/actions";
 import { Docks } from "@lemma/frame";
 import { Client, HostPlugins, Router, Slots, WebPlugins, defineWebPlugin, Contained } from "@lemma/web";
@@ -15,6 +16,9 @@ import { routePanels } from "./routes.tsx";
 const STATE_KEY = "lemma.devtools";
 const TOGGLE_KEYS = "mod+shift+d";
 const MIN_HEIGHT = 160;
+const HEIGHT = 320;
+/** How far ↑ or ↓ moves the dock's top edge, focused. */
+const STEP = 16;
 
 interface Saved {
   readonly open: boolean;
@@ -23,9 +27,9 @@ interface Saved {
 }
 const load = (): Saved => {
   try {
-    return { open: false, height: 320, ...(JSON.parse(sessionStorage.getItem(STATE_KEY) ?? "{}") as Partial<Saved>) };
+    return { open: false, height: HEIGHT, ...(JSON.parse(sessionStorage.getItem(STATE_KEY) ?? "{}") as Partial<Saved>) };
   } catch {
-    return { open: false, height: 320 };
+    return { open: false, height: HEIGHT };
   }
 };
 
@@ -60,22 +64,78 @@ export default defineWebPlugin({
     const current = () => panels().find((item) => item.id === panel()) ?? panels()[0];
 
     function Dock() {
+      const [resizing, setResizing] = createSignal(false);
+      const fit = (next: number) => setHeight(Math.round(Math.min(window.innerHeight * 0.85, Math.max(MIN_HEIGHT, next))));
+      // Its top edge's drag sets its height from the pointer, which the edge holds, so a move over a frame still counts.
       const resize = (event: PointerEvent) => {
-        event.preventDefault();
-        const move = (moved: PointerEvent) =>
-          setHeight(Math.round(Math.min(window.innerHeight * 0.85, Math.max(MIN_HEIGHT, window.innerHeight - moved.clientY))));
-        const stop = () => {
-          for (const remove of listening) remove();
-        };
-        const listening = [plugin.listen(window, "pointermove", move), plugin.listen(window, "pointerup", stop)];
+        if (dragEdge(event, { move: (moved) => fit(window.innerHeight - moved.clientY), end: () => setResizing(false) })) setResizing(true);
       };
+      const resizeKeys = (event: KeyboardEvent) => {
+        const by = event.key === "ArrowUp" ? STEP : event.key === "ArrowDown" ? -STEP : undefined;
+        if (by === undefined && event.key !== "Enter") return;
+        event.preventDefault();
+        // Enter resets it, as a double-click does.
+        if (by === undefined) fit(HEIGHT);
+        else fit(height() + by);
+      };
+      // The tabs are one Tab stop, the shown one's; arrows, Home, and End move between them, as a tab list's do.
+      const id = createUniqueId();
+      const tabKeys = (event: KeyboardEvent & { currentTarget: HTMLDivElement }) => {
+        // ← → Home End, from the tab focused (not the close button beside them); ↑ and ↓ are a panel's rows'.
+        if (event.key === "ArrowUp" || event.key === "ArrowDown") return;
+        const item = panels()[radioGroupKey(event, undefined, "tab") ?? -1];
+        if (item !== undefined) setPanel(item.id);
+      };
+      // "/" (when not typing) and Ctrl/Cmd+F go to the shown panel's filter, as in a browser's devtools, never to the
+      // app's (the prompt, the thread's find bar), which leaves a key handled here alone. A panel without one has none.
+      let body!: HTMLDivElement;
+      const findKeys = (event: KeyboardEvent) => {
+        const find = event.key === "f" && (event.ctrlKey || event.metaKey) && !event.altKey && !event.shiftKey;
+        if (!find && !(event.key === "/" && !typing(event.target))) return;
+        // A panel with no filter (Hooks) leaves them to the app: its find bar, the prompt.
+        const filter = body.querySelector<HTMLInputElement>(".dt-filter input");
+        if (filter === null) return;
+        event.preventDefault();
+        event.stopPropagation();
+        filter.focus();
+        filter.select();
+      };
+      // The panel's body is the `.dt-scope`, not the whole dock: a panel is drawn in the vocabulary, and focus on the
+      // dock's edge, tabs, or close button is not focus in its table (`:focus-within`), whose selected row stays as it is.
       return (
-        <section class="devtools dt-scope" aria-label="Devtools" style={{ height: `${height()}px` }}>
-          <div class="devtools-resize" role="separator" aria-orientation="horizontal" aria-label="Resize the devtools" onPointerDown={resize} />
-          <div class="dt-tabs" role="tablist" aria-label="Devtools panels">
+        <section
+          class="devtools"
+          classList={{ "devtools-resizing": resizing() }}
+          aria-label="Devtools"
+          style={{ height: `${height()}px` }}
+          onKeyDown={findKeys}
+        >
+          <div
+            class="devtools-resize"
+            role="separator"
+            aria-orientation="horizontal"
+            aria-label="Resize the devtools"
+            aria-valuenow={height()}
+            aria-valuemin={MIN_HEIGHT}
+            aria-valuemax={Math.round(window.innerHeight * 0.85)}
+            tabindex="0"
+            data-tip="Drag to resize · double-click to reset"
+            onPointerDown={resize}
+            onDblClick={() => fit(HEIGHT)}
+            onKeyDown={resizeKeys}
+          />
+          <div class="dt-tabs" role="tablist" aria-label="Devtools panels" onKeyDown={tabKeys}>
             <For each={panels()}>
               {(item) => (
-                <button role="tab" class="dt-tab" aria-selected={current()?.id === item.id} onClick={() => setPanel(item.id)}>
+                <button
+                  role="tab"
+                  class="dt-tab"
+                  id={`${id}-${item.id}`}
+                  aria-selected={current()?.id === item.id}
+                  aria-controls={`${id}-panel`}
+                  tabindex={current()?.id === item.id ? 0 : -1}
+                  onClick={() => setPanel(item.id)}
+                >
                   {item.title}
                 </button>
               )}
@@ -90,7 +150,13 @@ export default defineWebPlugin({
               <XIcon />
             </button>
           </div>
-          <div class="devtools-body" role="tabpanel">
+          <div
+            class="dt-scope devtools-body"
+            role="tabpanel"
+            id={`${id}-panel`}
+            aria-labelledby={current() === undefined ? undefined : `${id}-${current()!.id}`}
+            ref={body}
+          >
             <Show when={current()} keyed fallback={<p class="dt-empty">No panels: the plugins that add them are off.</p>}>
               {(item) => <Contained slot={DevtoolsPanels} item={item} component={item.component} />}
             </Show>

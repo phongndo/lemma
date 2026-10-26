@@ -150,11 +150,13 @@ export const radioStep = (key: string, index: number, length: number): number | 
 };
 
 /**
- * A radio group's keydown, on its `role="radiogroup"` element: `radioStep` from the option focused (else `checked`),
- * focusing the `[role=radio]` moved to and returning its index for the group to check. Undefined for other keys.
+ * A radio group's keydown, on its `role="radiogroup"` element (or a tab list's, `role` "tab"): `radioStep` from the option
+ * focused (else `checked`), focusing the `[role=…]` moved to and returning its index for the group to check. Undefined
+ * for other keys, and with a modifier held (Alt+← is back).
  */
-export const radioGroupKey = (event: KeyboardEvent & { readonly currentTarget: Element }, checked?: number): number | undefined => {
-  const radios = [...event.currentTarget.querySelectorAll<HTMLElement>("[role=radio]")];
+export const radioGroupKey = (event: KeyboardEvent & { readonly currentTarget: Element }, checked?: number, role = "radio"): number | undefined => {
+  if (event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return undefined;
+  const radios = [...event.currentTarget.querySelectorAll<HTMLElement>(`[role=${role}]`)];
   const focused = radios.indexOf(document.activeElement as HTMLElement);
   const from = focused >= 0 ? focused : checked;
   const next = from === undefined ? undefined : radioStep(event.key, from, radios.length);

@@ -1,11 +1,10 @@
 import { For, Show, createMemo, createSignal } from "solid-js";
 import type { RouterEvent, RouteVerdict } from "@lemma/router";
 import { clockTime } from "@lemma/web/format";
-import { PLUGIN_PANEL } from "@lemma/devtools/web";
+import { PLUGIN_PANEL, clearsOnEscape, rowKeys } from "@lemma/devtools/web";
 import { Pages } from "@lemma/web";
 import type { RouterService, SlotsService } from "@lemma/web";
 import type { DevtoolsService } from "@lemma/devtools/web";
-import { rowKeys } from "./rows.ts";
 
 /* The router's panels' views (see `routePanels`), loaded the first time the devtools draw one of their own panels. */
 
@@ -50,7 +49,7 @@ function PluginLink(props: { devtools: DevtoolsService; id: string | undefined }
   return (
     <Show when={props.id} fallback={<span class="dt-muted">?</span>}>
       {(id) => (
-        <button class="dt-link" onClick={() => props.devtools.show(PLUGIN_PANEL, `web:${id()}`)}>
+        <button class="dt-link dt-code" onClick={() => props.devtools.show(PLUGIN_PANEL, `web:${id()}`)}>
           {id()}
         </button>
       )}
@@ -88,6 +87,10 @@ export function Routes(props: { router: RouterService; slots: SlotsService; devt
             spellcheck={false}
             autocomplete="off"
             onInput={(event) => setAddress(event.currentTarget.value)}
+            onKeyDown={clearsOnEscape(
+              () => address() ?? "",
+              () => setAddress(undefined),
+            )}
           />
         </label>
         <span class="dt-sep" />
@@ -236,7 +239,13 @@ export function Navigation(props: { router: RouterService }) {
     <div class="dt-scope">
       <div class="dt-toolbar" role="toolbar" aria-label="Navigation toolbar">
         <label class="dt-filter">
-          <input aria-label="Filter the journal" placeholder="Filter" value={query()} onInput={(event) => setQuery(event.currentTarget.value)} />
+          <input
+            aria-label="Filter the journal"
+            placeholder="Filter"
+            value={query()}
+            onInput={(event) => setQuery(event.currentTarget.value)}
+            onKeyDown={clearsOnEscape(query, () => setQuery(""))}
+          />
         </label>
         <span class="dt-sep" />
         <For each={KINDS}>
@@ -262,7 +271,7 @@ export function Navigation(props: { router: RouterService }) {
             <thead>
               <tr>
                 <th class="devtools-journal-time">Time</th>
-                <th class="devtools-journal-at">At</th>
+                <th class="devtools-journal-at dt-num">At</th>
                 <th class="devtools-journal-event">Event</th>
                 <th>Address</th>
                 <th>Details</th>

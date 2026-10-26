@@ -22,9 +22,14 @@
   color: var(--text-3);
 }
 
-/* A span the filter does not pick, shown for its place in the trace. */
+/* On a selected row's fill, its caret steps up a shade, as the foundation's muted text (how many spans are under it) does. */
+.trc .dt-table tbody tr[data-selected="true"] .trc-caret {
+  color: var(--text-2);
+}
+
+/* A span the filter does not pick, shown for its place in the trace: faded, its text still legible (4.5:1). */
 .trc-dim td {
-  opacity: 0.55;
+  opacity: 0.6;
 }
 
 .trc-bar-cell {
@@ -42,4 +47,51 @@
 
 .trc-bar-error {
   background: var(--err);
+}
+
+/* On the focused selection's fill, a bar takes its text's color, as the link fill would be lost on it. */
+.dt-scope:focus-within .dt-table tbody tr[data-selected="true"] .trc-bar {
+  background: var(--dt-select-focus-fg);
+}
+
+.trc-count {
+  font-variant-numeric: tabular-nums;
+}
+
+/* A span's title, cut short before its close button. */
+.trc-title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.trc-end {
+  margin-left: auto;
+}
+
+/* Where a span leads: a row of chips under its facts. */
+.trc-narrow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.trc-narrow .dt-chip {
+  box-shadow: inset 0 0 0 1px var(--dt-line);
+}
+
+/* The composition's changes: each list wraps in its own column, so a long one (every plugin started) leaves the
+   others in view. */
+.trc-changes {
+  table-layout: fixed;
+}
+
+/* Every cell a list's (`.dt-wrap`), set at its row's top. */
+.trc-changes td {
+  vertical-align: top;
+}
+
+.trc-changes td.dt-wrap {
+  overflow-wrap: anywhere;
 }

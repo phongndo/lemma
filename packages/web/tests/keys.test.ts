@@ -1,5 +1,5 @@
-import { describe, expect, it, vi } from "vitest";
-import { bindingOf, formatKeys, holdsKeys, listKey, matchesKeys, quickKey, radioStep, typedWithAltGr } from "../src/keys.ts";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { bindingOf, formatKeys, holdsKeys, listKey, matchesKeys, quickKey, radioGroupKey, radioStep, typedWithAltGr } from "../src/keys.ts";
 
 // Not a Mac here, so `mod` is Ctrl. Node has a `navigator` that reports the host, so pin it.
 vi.hoisted(() => {
@@ -125,5 +125,47 @@ describe("radioStep", () => {
     expect(radioStep("Home", 2, 3)).toBe(0);
     expect(radioStep("End", 0, 3)).toBe(2);
     expect(radioStep("Enter", 1, 3)).toBeUndefined();
+  });
+});
+
+describe("radioGroupKey", () => {
+  afterEach(() => vi.unstubAllGlobals());
+  /** A group of `role` options, as the DOM would hand them over, with the option at `focused` holding the focus. */
+  const group = (focused: number | undefined, role = "radio") => {
+    const options = [0, 1, 2].map(() => ({ focus: vi.fn() }));
+    vi.stubGlobal("document", { activeElement: focused === undefined ? null : options[focused] });
+    const queried: string[] = [];
+    const currentTarget = { querySelectorAll: (selector: string) => (queried.push(selector), selector === `[role=${role}]` ? options : []) };
+    const press = (key: string, mods: { alt?: boolean; ctrl?: boolean; meta?: boolean; shift?: boolean } = {}) => {
+      const event = {
+        key,
+        altKey: mods.alt ?? false,
+        ctrlKey: mods.ctrl ?? false,
+        metaKey: mods.meta ?? false,
+        shiftKey: mods.shift ?? false,
+        preventDefault: vi.fn(),
+        currentTarget,
+      };
+      return { event, next: radioGroupKey(event as unknown as KeyboardEvent & { currentTarget: Element }, undefined, role) };
+    };
+    return { options, press };
+  };
+
+  it("steps from the option focused, focusing the one moved to", () => {
+    const { options, press } = group(1);
+    const { event, next } = press("ArrowRight");
+    expect(next).toBe(2);
+    expect(options[2]!.focus).toHaveBeenCalled();
+    expect(event.preventDefault).toHaveBeenCalled();
+  });
+
+  it("answers a tab list's options too", () => {
+    expect(group(0, "tab").press("End").next).toBe(2);
+  });
+
+  it("leaves a modified key, and focus on no option, alone", () => {
+    expect(group(1).press("ArrowLeft", { alt: true }).next).toBeUndefined();
+    expect(group(1).press("ArrowRight", { shift: true }).next).toBeUndefined();
+    expect(group(undefined).press("ArrowRight").next).toBeUndefined();
   });
 });

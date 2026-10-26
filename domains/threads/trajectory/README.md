@@ -22,7 +22,11 @@ that put something in it (`pluginShares`). Requires `Threads` and the runtime's
 ## Behavior
 
 - **The filter** takes `parseLedgerFilter`'s terms (`is:error`, `tool:bash`,
-  `turn:2`, …); the kind chips narrow it further.
+  `turn:2`, …); the kind chips narrow it further. A record it leaves out
+  leaves the details too, and with nothing left the table offers to clear it.
+- **Narrow** (the inspection pane's width), the table leaves out Type and
+  Initiator below 640px and Status below 540px, so the names and the waterfall
+  keep their room.
 - **The time axis.** Time within a turn is to scale; the idle time between
   turns shrinks to a sliver, so one long pause does not squash every turn. The
   wheel zooms around the pointer and a sideways wheel pans, as does dragging
@@ -41,9 +45,13 @@ that put something in it (`pluginShares`). Requires `Threads` and the runtime's
   from the log with `rebuildRequest`), copies the record's payload, result,
   text, or JSON, filters by its tool or turn, and on a model call or tool run,
   branches from it (`Threads.checkout`): the next prompt continues from there.
-- **Keys.** Arrow keys move the selection, and `/`, Ctrl+F, or ⌘F focuses the
-  filter. Escape closes the menu, else clears the filter being typed in, else
-  closes the details; with none of those, it is left to the app.
+- **Keys.** Arrow keys move the selection and the focus with it, Enter or
+  Space opens a focused row's details, and `/`, Ctrl+F, or ⌘F focuses the
+  filter. The headers sort as buttons, and the details' tabs are one Tab stop
+  (← and →, Home, End). The context menu (also the menu key on a row) takes
+  ↑ and ↓, and Escape or Tab closes it, back to the row. Escape closes the
+  menu, else clears the filter being typed in, else closes the details; with
+  none of those, it is left to the app.
 - **A tool's body** is the View tab of its tool runs, before the tabs plugins
   add. It gets the logged call and result, no live `output`, and `state`
   `interrupted` for a run without a result, running or not.

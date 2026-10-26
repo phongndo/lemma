@@ -28,6 +28,10 @@ page's (`PageTrace`):
 - **Changes**: the composition's changes, newest first.
 - **Faults**: each plugin's recent faults, and the spans that failed.
 
+Its tables take the other panels' keys (`rowKeys`): ↑ and ↓ select a row,
+Enter opens it (a trace's waterfall, a plugin's spans, a failed span among its
+turn's), and Escape clears the selection or the filter.
+
 The filter is words, each narrowing what shows: `plugin:tools` (a plugin, or a
 domain's), `session:`, `turn:` (an id, or the Nth turn the trace kept),
 `step:` (an id, or an index in its turn: a step's spans and all its work), `tool:`

@@ -28,8 +28,16 @@ Trace panel ([its README](../trace/README.md#the-trace-panel)).
 ## Behavior
 
 - **It lasts the tab's life.** Whether it is open, which panel, and its height
-  (drag its top edge, from 160px to 85% of the window) are kept in
+  (drag its top edge, or focus it and press ↑ or ↓, from 160px to 85% of the
+  window; a double-click or Enter puts it back to 320px) are kept in
   `sessionStorage`.
+- **Keys.** The panels' tabs are one Tab stop (← and →, Home, End). A panel's
+  table selects with ↑ and ↓ and opens a row with Enter, and Escape clears a
+  filter being typed in (`rowKeys` and `clearsOnEscape` in
+  [`@lemma/devtools/web`](../contract/src/web/keys.ts), for any panel's).
+  While the focus is in the dock, "/" and Ctrl/Cmd+F focus the shown panel's
+  filter (its first `.dt-filter` input) rather than the prompt or the thread's
+  find bar.
 - **Subjects.** Besides `devtools.plugins` (see `show`), `devtools.inspectors`
   takes one, an inspector's id; the other panels take none. A plugin's name in
   a panel opens it in `devtools.plugins`, whose details link to its row on the

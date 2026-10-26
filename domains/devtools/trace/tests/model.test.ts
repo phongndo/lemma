@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { createRoot } from "solid-js";
 import type { SpanRecord } from "@lemma/contracts";
-import { createTrace, KEPT } from "../src/model.ts";
+import { createTrace, KEPT, spanTime } from "../src/model.ts";
 import type { TraceSource } from "../src/model.ts";
 
 const span = (id: string): SpanRecord => ({ id, traceId: "t", name: id, start: 0, ms: 1, status: "ok", attributes: {} });
@@ -52,5 +52,23 @@ describe("a trace a view shows", () => {
       expect(model.spans().at(-1)!.id).toBe("s0");
       dispose();
     });
+  });
+});
+
+describe("spanTime", () => {
+  it("writes a fraction of a millisecond finely, and from 100ms as the trajectory does", () => {
+    expect([0, Number.NaN, 0.004, 3.456, 9.996, 45.71, 99.94, 99.96, 613.2, 999.7, 1_820].map(spanTime)).toEqual([
+      "0ms",
+      "0ms",
+      "<0.01ms",
+      "3.46ms",
+      "10.0ms",
+      "45.7ms",
+      "99.9ms",
+      "100ms",
+      "613ms",
+      "1.0s",
+      "1.8s",
+    ]);
   });
 });

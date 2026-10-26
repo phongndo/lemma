@@ -1,6 +1,6 @@
 # devtools
 
-The devtools: panels docked under the app (`mod+shift+d`) for its routes, events, channels, plugins, hooks, registries, inspectors, and the host's trace; and the host's own state served as channels, for scripts. Its contract is [`@lemma/devtools`](contract/src/index.ts) (the trace's and the host's channels) and [`@lemma/devtools/web`](contract/src/web/index.ts) (the dock's panels).
+The devtools: panels docked under the app (`mod+shift+d`) for its routes, events, channels, plugins, hooks, registries, inspectors, and the host's trace; and the host's own state served as channels, for scripts. Its contract is [`@lemma/devtools`](contract/src/index.ts) (the trace's and the host's channels) and [`@lemma/devtools/web`](contract/src/web/index.ts) (the dock's panels, and the keys their tables and filters share).
 
 | Plugin                     | Halves     | What it does                                                               |
 | -------------------------- | ---------- | -------------------------------------------------------------------------- |

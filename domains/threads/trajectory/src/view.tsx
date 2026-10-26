@@ -1,4 +1,4 @@
-import { Show, createEffect, createMemo, on } from "solid-js";
+import { Show, createEffect, createMemo, createSignal, on, onCleanup, onMount } from "solid-js";
 import type { JSX } from "solid-js";
 import { createLedgerProjector, createTrajectoryProjector, ledgerSpans, parseLedgerFilter } from "@lemma/sessions";
 import type { LedgerRecord } from "@lemma/sessions";
@@ -23,7 +23,27 @@ import { createToolbar } from "./toolbar.tsx";
  */
 export function createTrajectory(deps: TrajectoryDeps): () => JSX.Element {
   const view = createView(deps);
-  const { selection, tab, setCollapsed, query, setQuery, sort, setRange, setZoom, menu, setMenu, stuck, setStuck, follow, select, typeMatches, refs } = view;
+  const {
+    selection,
+    tab,
+    setCollapsed,
+    query,
+    setQuery,
+    typeFilter,
+    setTypeFilter,
+    sort,
+    setRange,
+    setZoom,
+    menu,
+    setMenu,
+    stuck,
+    setStuck,
+    follow,
+    select,
+    typeMatches,
+    refs,
+    rowElements,
+  } = view;
   const { Toolbar } = createToolbar(view);
   const { Overview } = createTimeline(view);
   const { Table, ContextMenu, StatusBar } = createTable(view);
@@ -45,6 +65,16 @@ export function createTrajectory(deps: TrajectoryDeps): () => JSX.Element {
     const matches = (record: LedgerRecord) => typeMatches(record) && matchesQuery()(record);
     const visible = createMemo(() => records().filter(matches));
     let root!: HTMLDivElement;
+    // The room the table has decides which of its columns fit (`Table`'s `width`). It is measured before the table is
+    // first laid out, and again when the scroller's border box changes: only the pane's layout sets that, where the
+    // scrollbars a change of the columns adds or takes away would change the content box in the frame it was observed.
+    const [width, setWidth] = createSignal(Infinity);
+    const observer = new ResizeObserver(() => setWidth(refs.scroller!.clientWidth));
+    onMount(() => {
+      setWidth(refs.scroller!.clientWidth);
+      observer.observe(refs.scroller!, { box: "border-box" });
+    });
+    onCleanup(() => observer.disconnect());
 
     createEffect(
       on(
@@ -73,6 +103,18 @@ export function createTrajectory(deps: TrajectoryDeps): () => JSX.Element {
       on(visible, () => {
         if (stuck() && sort().key === "time") follow();
       }),
+    );
+    // A record a change of the filter leaves out leaves the details too, rather than showing what the table no longer
+    // does. One picked on the overview, where every record shows, stays until the filter next changes.
+    createEffect(
+      on(
+        [query, typeFilter],
+        () => {
+          const s = selection();
+          if (s?.type === "record" && !visible().some((record) => record.id === s.id)) select(undefined);
+        },
+        { defer: true },
+      ),
     );
     createEffect(
       on(
@@ -103,13 +145,29 @@ export function createTrajectory(deps: TrajectoryDeps): () => JSX.Element {
         // Handled here when it closes something; otherwise it is the app's (stopping a turn, say).
         if (menu() !== undefined) setMenu(undefined);
         else if (typing && query() !== "") setQuery("");
-        else if (selection() !== undefined) select(undefined);
-        else return;
+        else if (selection() !== undefined) {
+          const s = selection()!;
+          const inDetails = event.target instanceof Element && event.target.closest(".trj-details") !== null;
+          select(undefined);
+          // The details go, and the focus in them goes back to the row they showed (or the view), not to the page.
+          if (inDetails) ((s.type === "record" ? rowElements.get(s.id) : undefined) ?? root).focus({ preventScroll: true });
+        } else return;
         event.preventDefault();
         event.stopPropagation();
         return;
       }
-      if (typing || (event.key !== "ArrowDown" && event.key !== "ArrowUp")) return;
+      // The details keep their own keys (a text's selection), but on their tabs, whose ← and → are theirs, ↑ and ↓ still
+      // move the selection, as they do from the table.
+      if (typing || !(event.target instanceof Element)) return;
+      const onTab = event.target.matches('[role="tab"]') && event.target.closest(".trj-details") !== null;
+      if (event.target.closest(".trj-details") !== null && !onTab) return;
+      // Enter or Space on a row opens its details, as a click does.
+      if ((event.key === "Enter" || event.key === " ") && event.target instanceof HTMLTableRowElement && event.target.dataset.record !== undefined) {
+        event.preventDefault();
+        select({ type: "record", id: event.target.dataset.record });
+        return;
+      }
+      if ((event.key !== "ArrowDown" && event.key !== "ArrowUp") || event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
       event.preventDefault();
       const rows = [...root.querySelectorAll<HTMLTableRowElement>("tbody tr[data-record]")];
       const s = selection();
@@ -117,7 +175,17 @@ export function createTrajectory(deps: TrajectoryDeps): () => JSX.Element {
       const next = rows[stepFor(event.key, current, rows.length)!];
       if (next === undefined) return;
       select({ type: "record", id: next.dataset.record! }, tab());
+      // The focus goes with the selection, so its ring is not left on the row clicked; from a details tab it goes to the
+      // tab shown for the next record, its tabs drawn anew, which reads it in its turn.
+      if (onTab)
+        queueMicrotask(() => (root.querySelector<HTMLElement>('.trj-details [role="tab"][aria-selected="true"]') ?? next).focus({ preventScroll: true }));
+      else next.focus({ preventScroll: true });
       next.scrollIntoView({ block: "nearest" });
+    };
+    const clearFilter = () => {
+      setQuery("");
+      setTypeFilter("all");
+      refs.filterInput?.focus();
     };
 
     return (
@@ -136,7 +204,23 @@ export function createTrajectory(deps: TrajectoryDeps): () => JSX.Element {
               when={records().length > 0}
               fallback={<p class="trj-empty">{deps.threads.blank() ? "Start a chat to see its trajectory." : "No records on this branch yet."}</p>}
             >
-              <Table records={records()} visible={visible()} scale={scale()} ledgerSpans={spanById()} now={now()} compact={selection() !== undefined} />
+              <Table
+                records={records()}
+                visible={visible()}
+                scale={scale()}
+                ledgerSpans={spanById()}
+                now={now()}
+                compact={selection() !== undefined}
+                width={width()}
+              />
+              <Show when={visible().length === 0}>
+                <div class="trj-empty trj-no-match">
+                  <p>No records match the filter.</p>
+                  <button class="dt-chip" onClick={clearFilter}>
+                    Clear filter
+                  </button>
+                </div>
+              </Show>
             </Show>
           </div>
           <Details records={records()} />

@@ -1,4 +1,4 @@
-import { For, Match, Show, Switch, createMemo } from "solid-js";
+import { For, Match, Show, Switch, createMemo, createUniqueId } from "solid-js";
 import type { JSX } from "solid-js";
 import { formatDuration, formatTokens } from "@lemma/client/format";
 import { contentText } from "@lemma/llm";
@@ -7,6 +7,7 @@ import { RECORD_KIND_LABEL, promptDiff, rebuildRequest, recordRequest } from "@l
 import type { AssistantRecord, LedgerRecord, SystemRecord, Timing, TrajectoryRequest } from "@lemma/sessions";
 import { inputTokens } from "./scale.ts";
 import { clockTime } from "@lemma/web/format";
+import { radioGroupKey } from "@lemma/web/keys";
 import { ToolViews, TrajectoryTabs, formatThroughput, throughput } from "@lemma/threads";
 import { CopyIcon, Markdown, XIcon } from "@lemma/look";
 import { Contained, usePlugin } from "@lemma/web";
@@ -17,11 +18,12 @@ import type { View, Kind } from "./state.ts";
 export function createDetails(view: View) {
   const { selection, tab, setTab, select, json, thinkingOf, callsOf, copy, deps } = view;
 
-  function Section(props: { title: string; children: JSX.Element; aside?: JSX.Element }) {
+  /** A titled part of a tab; `code` when its title is a name (a section's id, a tool's), set in code as names are. */
+  function Section(props: { title: string; code?: boolean; children: JSX.Element; aside?: JSX.Element }) {
     return (
       <section class="dt-section">
         <h4>
-          <span>{props.title}</span>
+          <span classList={{ "dt-code": props.code === true }}>{props.title}</span>
           <Show when={props.aside}>
             <span class="dt-section-aside">{props.aside}</span>
           </Show>
@@ -92,7 +94,7 @@ export function createDetails(view: View) {
       <>
         <For each={props.request.sections}>
           {(section) => (
-            <Section title={section.id} aside={<Meta source={section.source} chars={section.chars} changed={section.changed} />}>
+            <Section title={section.id} code aside={<Meta source={section.source} chars={section.chars} changed={section.changed} />}>
               <Show when={section.text !== undefined}>
                 <Pre text={section.text!} />
               </Show>
@@ -114,7 +116,7 @@ export function createDetails(view: View) {
     return (
       <For each={props.request.tools}>
         {(tool) => (
-          <Section title={tool.name} aside={<Meta source={tool.source} chars={tool.chars} changed={tool.changed} />}>
+          <Section title={tool.name} code aside={<Meta source={tool.source} chars={tool.chars} changed={tool.changed} />}>
             <Show when={tool.spec}>
               {(spec) => (
                 <>
@@ -145,6 +147,7 @@ export function createDetails(view: View) {
             {(section) => (
               <Section
                 title={section.id}
+                code
                 aside={
                   <>
                     <span class="trj-source">{section.source}</span>
@@ -495,13 +498,32 @@ export function createDetails(view: View) {
 
   function Tabs(props: { tabs: readonly Tab[]; lead?: JSX.Element; title?: JSX.Element }) {
     const active = () => props.tabs.find((candidate) => candidate.id === tab()) ?? props.tabs[0];
+    // One Tab stop, the shown tab's; ← and → (Home, End) move between them, as a tab list's do.
+    const id = createUniqueId();
+    const onKeyDown = (event: KeyboardEvent & { currentTarget: HTMLDivElement }) => {
+      // ← → Home End, from the tab focused (not the close button beside them); ↑ and ↓ move the selection.
+      if (event.key === "ArrowUp" || event.key === "ArrowDown") return;
+      const next = props.tabs[radioGroupKey(event, undefined, "tab") ?? -1];
+      if (next === undefined) return;
+      event.stopPropagation();
+      setTab(next.id);
+    };
     return (
       <>
-        <div class="dt-tabs" role="tablist" aria-label="Event details">
+        <div class="dt-tabs" role="tablist" aria-label="Event details" onKeyDown={onKeyDown}>
           {props.lead}
           <For each={props.tabs}>
-            {(candidate) => (
-              <button role="tab" class="dt-tab" aria-selected={active()?.id === candidate.id} onClick={() => setTab(candidate.id)}>
+            {(candidate, index) => (
+              <button
+                role="tab"
+                class="dt-tab"
+                id={`${id}-${index()}`}
+                data-tab={candidate.id}
+                aria-selected={active()?.id === candidate.id}
+                aria-controls={`${id}-panel`}
+                tabindex={active()?.id === candidate.id ? 0 : -1}
+                onClick={() => setTab(candidate.id)}
+              >
                 {candidate.label}
               </button>
             )}
@@ -510,7 +532,15 @@ export function createDetails(view: View) {
         <Show when={props.title}>
           <div class="dt-details-title">{props.title}</div>
         </Show>
-        <div class="trj-detail-body" role="tabpanel">
+        <div
+          class="trj-detail-body"
+          role="tabpanel"
+          id={`${id}-panel`}
+          aria-labelledby={`${id}-${Math.max(
+            0,
+            props.tabs.findIndex((candidate) => candidate.id === active()?.id),
+          )}`}
+        >
           {active()?.render()}
         </div>
       </>

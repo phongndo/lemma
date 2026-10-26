@@ -134,6 +134,7 @@ export function createTimeline(view: View) {
                   data-current={current()}
                   data-dim={outside() || !props.matches(span.record)}
                   data-running={span.end === undefined}
+                  data-motion={span.end === undefined || undefined}
                   classList={{ "has-ttft": ttft() !== undefined && !equalDurations() }}
                   style={{
                     left: `${left()}px`,

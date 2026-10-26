@@ -4,7 +4,7 @@ import { ThreadRoute } from "@lemma/sessions";
 import { clockTime } from "@lemma/web/format";
 import type { ClientService, RouterService } from "@lemma/web";
 import { XIcon } from "@lemma/look";
-import { rowKeys } from "./rows.ts";
+import { clearsOnEscape, rowKeys } from "@lemma/devtools/web";
 import { HOST_EVENTS, category, describe, sessionOf, streamOf, typeOf } from "./events.tsx";
 import type { Line } from "./events.tsx";
 
@@ -55,13 +55,6 @@ export function EventLog(props: { client: ClientService; router: RouterService; 
     }),
   );
   const onScroll = () => setStuck(scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 24);
-  // Escape in the filter clears it.
-  const onKey = (event: KeyboardEvent) => {
-    if (event.key !== "Escape" || event.defaultPrevented || query() === "") return;
-    event.preventDefault();
-    event.stopPropagation();
-    setQuery("");
-  };
 
   return (
     <div class="dt-scope log-view" aria-label="Host events">
@@ -74,7 +67,7 @@ export function EventLog(props: { client: ClientService; router: RouterService; 
             spellcheck={false}
             value={query()}
             onInput={(event) => setQuery(event.currentTarget.value)}
-            onKeyDown={onKey}
+            onKeyDown={clearsOnEscape(query, () => setQuery(""))}
           />
         </label>
         <span class="dt-sep" />
@@ -122,11 +115,11 @@ export function EventLog(props: { client: ClientService; router: RouterService; 
             <thead>
               <tr>
                 <th class="devtools-log-time">Time</th>
-                <th class="devtools-log-gap">Gap</th>
+                <th class="devtools-log-gap dt-num">Gap</th>
                 <th class="devtools-log-stream">Stream</th>
                 <th class="devtools-log-stream">Type</th>
                 <th class="devtools-log-session">Session</th>
-                <th class="devtools-log-size">Size</th>
+                <th class="devtools-log-size dt-num">Size</th>
                 <th>Message</th>
               </tr>
             </thead>
