@@ -75,7 +75,8 @@ its counts are the same on every machine, and hard budgets.
 
 `pnpm check` also holds the runtime (what no plugin can replace: the kernel,
 the runtime's contracts, the host and web runtimes, the planner, the client)
-to a size budget in lines (`scripts/size.ts`), and prints how many extension
+to a size budget in tokens, which leave out comments and whitespace
+(`scripts/size.ts`), and prints how many extension
 points each domain's contract declares. A change that needs more raises the
 budget in the same change. It fails on a registry, hook, event, slot, or part
 that no bundled plugin, example, or contract adds to, handles, or observes
