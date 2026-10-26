@@ -155,6 +155,23 @@ export const radioStep = (key: string, index: number, length: number): number | 
           ? length - 1
           : undefined;
 
+/**
+ * A radio group's keydown, on its `role="radiogroup"` element: the arrows, Home, and End move focus from the option
+ * focused (else from `checked`) along its `[role=radio]` options, and return the index moved to, for the group to check
+ * it, as a choice saved elsewhere comes back only later. Undefined for any other key, which is left alone, and while
+ * focus is on no option and none is `checked`.
+ */
+export const radioGroupKey = (event: KeyboardEvent & { readonly currentTarget: Element }, checked?: number): number | undefined => {
+  const radios = [...event.currentTarget.querySelectorAll<HTMLElement>("[role=radio]")];
+  const focused = radios.indexOf(document.activeElement as HTMLElement);
+  const from = focused >= 0 ? focused : checked;
+  const next = from === undefined ? undefined : radioStep(event.key, from, radios.length);
+  if (next === undefined) return undefined;
+  event.preventDefault();
+  radios[next]?.focus();
+  return next;
+};
+
 /** What a key does in a list being searched: moves the active item, or picks one of the first nine at once. */
 export type ListKey = { readonly move: 1 | -1 } | { readonly pick: number };
 

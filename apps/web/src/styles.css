@@ -310,17 +310,18 @@
       color var(--duration-hover);
   }
 
-  .button:hover:not(:disabled),
+  .button:hover:not(:disabled, [aria-disabled="true"]),
   .button[aria-expanded="true"] {
     background: var(--bg-hover);
     color: var(--text);
   }
 
-  .button:active:not(:disabled) {
+  .button:active:not(:disabled, [aria-disabled="true"]) {
     background: var(--bg-active);
   }
 
-  .button:disabled {
+  /* Disabled, or marked so (`aria-disabled`), which keeps its focus and its tip: it fades and does not answer the pointer. */
+  .button:is(:disabled, [aria-disabled="true"]) {
     opacity: var(--disabled-opacity);
   }
 

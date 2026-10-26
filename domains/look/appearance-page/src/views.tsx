@@ -2,7 +2,7 @@ import { For, Index, Show, createSignal, onCleanup } from "solid-js";
 import type { Accessor } from "solid-js";
 import { fontAvailable } from "./fonts.ts";
 import { onLookChange, tokenColor } from "@lemma/web/paint";
-import { radioStep } from "@lemma/web/keys";
+import { radioGroupKey } from "@lemma/web/keys";
 import {
   CORNERS,
   SCHEMES,
@@ -52,13 +52,8 @@ const SAMPLE = [
  * the arrows, Home, and End move the focus along its options, `pick`ing the one moved to.
  */
 const radioKeys = (pick: (index: number) => void) => (event: KeyboardEvent & { currentTarget: HTMLElement }) => {
-  const radios = [...event.currentTarget.querySelectorAll<HTMLElement>("[role=radio]")];
-  const from = radios.indexOf(event.target as HTMLElement);
-  const next = from < 0 ? undefined : radioStep(event.key, from, radios.length);
-  if (next === undefined) return;
-  event.preventDefault();
-  radios[next]!.focus();
-  pick(next);
+  const next = radioGroupKey(event);
+  if (next !== undefined) pick(next);
 };
 
 const missingNote = (deps: Deps, field: Field, fallback: string) => {

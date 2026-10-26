@@ -186,11 +186,23 @@ export default defineWebPlugin({
       let search!: HTMLInputElement;
       const previous = document.activeElement as HTMLElement | null;
       // Opened at General, the search takes focus; opened at another section (a way straight to it, as the composer's
-      // Connect is), that section's first control does, as it does while the search is out of sight in a closed drawer.
-      onMount(() => queueMicrotask(() => (section() === SectionIds.general && !layout.sidebarHidden() ? search.focus() : toSection()?.())));
+      // Connect is), that section's first control does, as it does while the search is out of sight in a closed drawer:
+      // once its page is drawn, which may be after this.
+      let opening = true;
+      onMount(() => {
+        if (section() !== SectionIds.general || layout.sidebarHidden()) return;
+        opening = false;
+        queueMicrotask(() => search.focus());
+      });
+      createEffect(() => {
+        const to = toSection();
+        if (!opening || to === undefined) return;
+        opening = false;
+        queueMicrotask(to);
+      });
       setFocus(() => () => {
-        // Out of sight (a closed drawer, a collapsed sidebar), the search comes into view first.
-        if (layout.sidebarHidden()) layout.toggleSidebar();
+        // In a closed drawer, the drawer opens first (for a while: a collapsed sidebar is the person's to bring back).
+        if (search.closest("[inert]") !== null) layout.toggleSidebar();
         queueMicrotask(() => {
           search.focus();
           search.select();

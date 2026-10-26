@@ -154,7 +154,8 @@ function ProviderRow(props: {
               >
                 {(close) => (
                   <>
-                    <For each={ways()}>{(method) => <MenuItem label={methodLabel(method)} close={close} run={() => login(method.type)} />}</For>
+                    {/* While its sign-in runs (its dialog closed, the host still at it), a way in waits for it to end. */}
+                    <For each={ways()}>{(method) => <MenuItem label={methodLabel(method)} close={close} run={() => !busy() && login(method.type)} />}</For>
                     <Show when={props.provider.custom}>
                       <CustomItems provider={props.provider} custom={props.custom} close={close} />
                     </Show>
@@ -180,10 +181,11 @@ function ProviderRow(props: {
               </Show>
             </button>
           </Show>
+          {/* Nothing to manage while a sign-in runs: its own button (Sign in again) is the one its dialog returns to. */}
           <Popover
             label={`${props.provider.name} options`}
             tip="Options"
-            disabled={blocked()}
+            disabled={blocked() || busy()}
             triggerClass="button small provider-connect"
             placement="bottom-end"
             trigger="Manage"

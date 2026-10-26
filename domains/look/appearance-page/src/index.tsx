@@ -219,16 +219,20 @@ export default defineWebPlugin({
         </Show>
       ),
       // Always there, so the first change moves nothing on the page; it does something once a setting is not its default.
-      actions: () => (
-        <button
-          class="button small"
-          disabled={!customized()}
-          data-tip={customized() ? "Return every appearance setting to its default" : "Every appearance setting is its default"}
-          onClick={plugin.action("reset appearance", reset)}
-        >
-          Reset
-        </button>
-      ),
+      // Marked disabled rather than disabled, so pressing it keeps its focus (and its tip says why it does nothing).
+      actions: () => {
+        const resetNow = plugin.action("reset appearance", reset);
+        return (
+          <button
+            class="button small"
+            aria-disabled={!customized() || undefined}
+            data-tip={customized() ? "Return every appearance setting to its default" : "Every appearance setting is its default"}
+            onClick={() => customized() && resetNow()}
+          >
+            Reset
+          </button>
+        );
+      },
     });
     slots.add(SettingsGroups, {
       id: "appearance.preview",

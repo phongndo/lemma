@@ -1,4 +1,4 @@
-import { For, Show, createMemo, createSignal, mapArray, onCleanup } from "solid-js";
+import { For, Show, createEffect, createMemo, createSignal, mapArray, onCleanup } from "solid-js";
 import { bindingOf, formatKeys } from "@lemma/web/keys";
 import { KEYMAP_PLUGIN, bindingRows, conflicts, defaultKeys, formatBindings, keysFor, labelOf, overridesFrom, withOverride, Actions } from "@lemma/actions";
 import type { KeyOverrides, Action } from "@lemma/actions";
@@ -36,6 +36,10 @@ interface Deps {
   readonly lines: Map<string, () => void>;
 }
 
+/** The same shortcuts, whatever order their actions came in. */
+const sameOverrides = (a: KeyOverrides, b: KeyOverrides): boolean =>
+  Object.keys(a).length === Object.keys(b).length && Object.entries(a).every(([id, keys]) => b[id]?.join("\n") === keys.join("\n"));
+
 /** Sets an action's keys, dropping the override when they are its own again. */
 const setKeys = (deps: Deps, action: Item, next: readonly string[] | undefined) =>
   void deps.save(withOverride(deps.overrides(), action.id, next, defaultKeys(action.keys)));
@@ -59,8 +63,9 @@ function Recorder(props: { onKeys: (binding: string) => void; onCancel: (refocus
       aria-label="Press a shortcut"
       ref={(el) => queueMicrotask(() => el.focus())}
       onBlur={() => props.onCancel(false)}
-      onKeyDown={(event) => {
-        // Nothing else (the keymap, the settings' Escape) sees keys pressed here.
+      // Its own listener, not the document's delegated one: stopping it here keeps every key pressed in it, Tab too,
+      // from the keymap and the settings' Escape, which listen on the document.
+      on:keydown={(event) => {
         event.stopPropagation();
         // Tab, with Shift or without, moves focus on as it does anywhere; leaving cancels.
         if (event.key === "Tab" && !event.ctrlKey && !event.metaKey && !event.altKey) return;
@@ -413,9 +418,14 @@ export default defineWebPlugin({
   styles,
   requires: { slots: Slots, settings: Settings, webPlugins: WebPlugins, notify: Notify },
   setup: ({ slots, settings, webPlugins, notify }, plugin) => {
-    // What was just saved, shown until the plugin list catches up with it.
+    // What was just saved, shown until the plugin list catches up with it, so a line just focused is not drawn away.
     const [pending, setPending] = createSignal<KeyOverrides>();
-    const overrides = () => pending() ?? overridesFrom(webPlugins.list());
+    const saved = () => overridesFrom(webPlugins.list());
+    const overrides = () => pending() ?? saved();
+    createEffect(() => {
+      const waiting = pending();
+      if (waiting !== undefined && sameOverrides(waiting, saved())) setPending(undefined);
+    });
     const save = async (next: KeyOverrides) => {
       const keymap = webPlugins.list().find((candidate) => candidate.id === KEYMAP_PLUGIN);
       if (keymap === undefined) {
@@ -426,9 +436,9 @@ export default defineWebPlugin({
       try {
         await webPlugins.setConfig(keymap, { bindings: Object.keys(next).length === 0 ? null : formatBindings(next) });
       } catch (error) {
-        notify.report(error, "Could not save the shortcut");
-      } finally {
+        // Not saved: what shows is what is there.
         setPending(undefined);
+        notify.report(error, "Could not save the shortcut");
       }
     };
     const bound = () => slots.list(Actions).map((action) => ({ id: action.id, keys: keysFor(action.id, action.keys, overrides()) }));

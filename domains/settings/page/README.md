@@ -27,8 +27,8 @@ requires: a plugin providing `Settings` takes its place. No config.
 - **Focus on opening** goes to the search at General. Opened straight to
   another section (the composer's Connect opens Providers), or with the search
   out of sight in a closed drawer, it goes to that section's own search, else
-  its first control. `/` brings the search into view (opening the drawer) and
-  focuses it.
+  its first control. `/` focuses the search, opening the drawer first when the
+  search is in a closed one; a sidebar the person collapsed stays so.
 - **Closing** returns to where settings were opened from: back through history
   when that entry is still behind, else to its address, else to a new thread.
   Each settings history entry keeps the way out, so a reload, or back and

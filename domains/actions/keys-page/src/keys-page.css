@@ -84,9 +84,8 @@
   color: var(--text);
 }
 
-/* After the key in the markup (Tab reaches the key first), before it on the screen. */
+/* After the key in the markup (Tab reaches the key first), before it on the screen: set at its left (`right: 100%`). */
 .shortcut-tools {
-  order: -1;
   position: absolute;
   right: 100%;
   top: 50%;

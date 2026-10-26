@@ -760,11 +760,16 @@ function PluginsInspector(props: { inspector: Inspector; filter: () => string; s
   /** The plugin rows that show, in order, for the keys that move the selection. */
   const shown = createMemo(() => groups().flatMap((group) => (group.domain === "" || isOpen(group.domain) ? group.entries : [])));
   const navKey = (entry: KindedPlugin) => `${entry.kind}:${entry.plugin.id}`;
-  /** The table's one Tab stop, among the rows that show: the selected plugin's, else the first; its arrow keys move in it. */
+  /**
+   * The table's one Tab stop, among the rows that show: the selected plugin's, else its domain's row while that is
+   * folded, else the first; its arrow keys move in it.
+   */
   const stop = createMemo(() => {
     const id = inspector.selected()?.id;
     const chosen = shown().find((entry) => entry.plugin.id === id);
     if (chosen !== undefined) return navKey(chosen);
+    const folded = id === undefined ? undefined : domainOf(id);
+    if (folded !== undefined && domains().some((group) => group.domain === folded)) return `domain:${folded}`;
     const domain = domains()[0];
     if (domain !== undefined) return `domain:${domain.domain}`;
     const entry = loose()[0];
