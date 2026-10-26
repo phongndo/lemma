@@ -1,5 +1,6 @@
 /* Settings › General › Agent: a count and its unit. */
 .agent-count {
+  position: relative;
   display: inline-flex;
   align-items: center;
   gap: 8px;
@@ -8,7 +9,21 @@
 
 .agent-count .field {
   width: 84px;
-  height: 30px;
   text-align: right;
   font-variant-numeric: tabular-nums;
+}
+
+.agent-count .field[aria-invalid="true"] {
+  border-color: var(--err);
+}
+
+/* What the field takes, shown under it while what is in it is not that: in the row's padding, so nothing moves. */
+.agent-count-hint {
+  position: absolute;
+  top: 100%;
+  right: 0;
+  color: var(--err);
+  font-size: var(--font-size-xs);
+  line-height: 1.4;
+  white-space: nowrap;
 }

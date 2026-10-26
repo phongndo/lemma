@@ -102,6 +102,11 @@
   text-align: right;
 }
 
+/* On the chosen project's fill, its muted parts step up a shade, so they still read. */
+.project-item[aria-current="true"] :is(.project-item-path, .project-item-count) {
+  color: var(--text-2);
+}
+
 .project-item-running {
   flex: none;
   width: 7px;
@@ -212,9 +217,11 @@
 }
 
 @media (max-width: 760px) {
+  /* Stacked, the detail follows the list: the rows take their content's height, and no band opens between them. */
   .projects {
     grid-template-columns: minmax(0, 1fr);
     grid-template-rows: auto auto;
+    align-content: start;
   }
 
   .projects-list {

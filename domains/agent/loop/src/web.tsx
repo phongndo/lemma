@@ -1,3 +1,4 @@
+import { Show, createSignal, createUniqueId } from "solid-js";
 import { SectionIds, SettingsGroups, configSetting } from "@lemma/settings";
 import type { ConfigSetting, SettingsEntry } from "@lemma/settings";
 import { SettingRow, Toggle } from "@lemma/look";
@@ -6,13 +7,19 @@ import styles from "./web.css?inline";
 
 const ID = "agent.loop";
 
-/** A whole number at least `min`, saved on Enter or on leaving the field; a blank or smaller one goes back to what is set. */
+/**
+ * A whole number at least `min`, saved on Enter or on leaving the field. One that is not says so under the field while
+ * it has the focus (Enter keeps it there), and leaving it goes back to what is set.
+ */
 function Count(props: { label: string; value: number; min: number; unit: string; onChange: (value: number) => void }) {
   let input!: HTMLInputElement;
+  const hint = createUniqueId();
+  const [invalid, setInvalid] = createSignal(false);
+  const valid = () => input.value.trim() !== "" && Number.isInteger(Number(input.value)) && Number(input.value) >= props.min;
   const commit = () => {
-    const next = Number(input.value);
-    if (input.value.trim() === "" || !Number.isInteger(next) || next < props.min) input.value = String(props.value);
-    else props.onChange(next);
+    setInvalid(false);
+    if (valid()) props.onChange(Number(input.value));
+    else input.value = String(props.value);
   };
   return (
     <label class="agent-count">
@@ -24,10 +31,22 @@ function Count(props: { label: string; value: number; min: number; unit: string;
         min={props.min}
         step="1"
         aria-label={props.label}
+        aria-invalid={invalid()}
+        aria-describedby={invalid() ? hint : undefined}
         value={props.value}
+        // A blank field is one being typed in: it says nothing until Enter.
+        onInput={() => setInvalid(input.value.trim() !== "" && !valid())}
         onKeyDown={(event) => {
-          if (event.key === "Enter") input.blur();
+          if (event.key === "Enter") {
+            if (valid()) input.blur();
+            else setInvalid(true);
+          }
           if (event.key === "Escape") {
+            // Undoing an edit is all it does; with none, it closes what is open, as Escape does.
+            if (input.value !== String(props.value)) {
+              event.preventDefault();
+              event.stopPropagation();
+            }
             input.value = String(props.value);
             input.blur();
           }
@@ -35,6 +54,11 @@ function Count(props: { label: string; value: number; min: number; unit: string;
         onBlur={commit}
       />
       <span class="muted">{props.unit}</span>
+      <Show when={invalid()}>
+        <span id={hint} class="agent-count-hint">
+          A whole number, {props.min} or more
+        </span>
+      </Show>
     </label>
   );
 }

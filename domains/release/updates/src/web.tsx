@@ -228,11 +228,13 @@ export default defineWebPlugin({
       badgeTone: "info",
     });
 
+    /** A row's value, every row's alike: a path wraps anywhere rather than run off a narrow page. */
+    const valueClass = "tw:min-w-0 tw:break-all tw:text-right tw:text-sm tw:text-text-2";
     const row = (text: string, title: () => string, value: () => string | undefined, description?: () => string | undefined): SettingsEntry => ({
       text,
       view: () => (
         <SettingRow title={title()} description={description?.()}>
-          <span class="muted">{value()}</span>
+          <span class={valueClass}>{value()}</span>
         </SettingRow>
       ),
     });
@@ -285,9 +287,10 @@ export default defineWebPlugin({
         text: "commit built",
         view: () => (
           <SettingRow title="Built" description={when(build().built) ?? (build().kind === "checkout" ? "From this checkout" : undefined)}>
-            <Show when={build().commit} fallback={<span class="muted">Unknown</span>}>
+            <Show when={build().commit} fallback={<span class={valueClass}>Unknown</span>}>
               {(commit) => (
-                <a class="button small" href={commitUrl(commit())} target="_blank" rel="noreferrer">
+                // Its text ends where the other rows' values do, its padding past them.
+                <a class="button small tw:-mr-2 tw:text-sm" href={commitUrl(commit())} target="_blank" rel="noreferrer">
                   {commit().slice(0, 12)}
                 </a>
               )}

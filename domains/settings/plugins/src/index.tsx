@@ -28,6 +28,8 @@ import { ChevronIcon, ConfigForm, PuzzleIcon, RefreshIcon, SearchField, Segmente
 import styles from "./plugins-page.css?inline";
 
 const SECTION = SectionIds.plugins;
+/** Each app's runtime, as the summary heads its list. */
+const KIND_HEADING: Readonly<Record<PluginKind, string>> = { web: "Web app", host: "Host" };
 const DEFAULT_TAB = "plugins.overview";
 
 /** A tab's id in the `plugins.tabs` slot. */
@@ -155,7 +157,7 @@ function Confirm(props: { inspector: Inspector; plugin: PluginStatus; pending: C
  * A domain's row: its plugins folded into one line, which a click, Enter, or Space opens and closes (→ opens, ← folds).
  * It takes the keyboard's focus as the table's arrow keys move through it (`data-nav`).
  */
-function DomainRow(props: { group: PluginGroup; open: boolean; onToggle: () => void }) {
+function DomainRow(props: { group: PluginGroup; open: boolean; stop: boolean; onToggle: () => void }) {
   const summary = createMemo(() => summarizeDomain(props.group));
   const onKeyDown = (event: KeyboardEvent) => {
     const wants = event.key === "Enter" || event.key === " " ? !props.open : event.key === "ArrowRight" ? true : event.key === "ArrowLeft" ? false : undefined;
@@ -170,7 +172,7 @@ function DomainRow(props: { group: PluginGroup; open: boolean; onToggle: () => v
       classList={{ open: props.open }}
       role="row"
       aria-expanded={props.open}
-      tabindex="-1"
+      tabindex={props.stop ? 0 : -1}
       data-nav={`domain:${props.group.domain}`}
       onClick={() => props.onToggle()}
       onKeyDown={onKeyDown}
@@ -198,8 +200,8 @@ function DomainRow(props: { group: PluginGroup; open: boolean; onToggle: () => v
   );
 }
 
-/** A plugin's row; `nested` under its domain's. */
-function Row(props: { inspector: Inspector; entry: KindedPlugin; nested?: boolean }) {
+/** A plugin's row; `nested` under its domain's; `stop`, the table's one Tab stop. */
+function Row(props: { inspector: Inspector; entry: KindedPlugin; nested?: boolean; stop: boolean }) {
   const { inspector } = props;
   const plugin = () => props.entry.plugin;
   /** The half whose state the row shows: the first half, unless it runs and its other half does not. */
@@ -221,7 +223,7 @@ function Row(props: { inspector: Inspector; entry: KindedPlugin; nested?: boolea
         classList={{ selected: selected(), off: !plugin().enabled, nested: props.nested === true }}
         role="row"
         aria-selected={selected()}
-        tabindex="-1"
+        tabindex={props.stop ? 0 : -1}
         data-key={key()}
         data-nav={key()}
         onClick={() => inspector.select({ kind: kind(), id: plugin().id })}
@@ -489,7 +491,10 @@ function SettingsTab(props: { inspector: Inspector; kind: PluginKind; plugin: Pl
         onSave={(values) => props.inspector.configure(props.kind, props.plugin, values)}
       />
       <details class="inspector-raw">
-        <summary>Effective config</summary>
+        <summary>
+          <Disclosure />
+          Effective config
+        </summary>
         <pre>{JSON.stringify(props.plugin.config?.values ?? {}, null, 2)}</pre>
         <Show when={props.plugin.config?.secretsSet.length}>
           <p class="muted small">Set but not shown: {props.plugin.config!.secretsSet.join(", ")}</p>
@@ -571,6 +576,15 @@ function HostFacts(props: { client: ClientService; slots: SlotsService; webPlugi
   );
 }
 
+/** A disclosure's chevron, first in its `<summary>`: it turns as the disclosure opens, as a domain's row's does. */
+function Disclosure() {
+  return (
+    <span class="chevron">
+      <ChevronIcon />
+    </span>
+  );
+}
+
 /** What each app provides itself, and who uses each: the runtime plugins are written against, which has no row. */
 function Runtime(props: { inspector: Inspector }) {
   const { inspector } = props;
@@ -578,10 +592,11 @@ function Runtime(props: { inspector: Inspector }) {
   return (
     <section class="inspector-wiring inspector-runtime">
       <h3>Runtime</h3>
+      <p class="muted small">Provided by each app itself, for its plugins to require; none replaces it, and it has no switch.</p>
       <For each={kinds()}>
         {(kind) => (
-          <>
-            <p class="muted small">Provided by {RUNTIME_LABEL[kind]} itself, for its plugins to require; none replaces it, and it has no switch.</p>
+          <div class="inspector-runtime-kind">
+            <h4>{KIND_HEADING[kind]}</h4>
             <ul>
               <For each={inspector.services[kind].runtime()}>
                 {(key) => {
@@ -590,10 +605,11 @@ function Runtime(props: { inspector: Inspector }) {
                     <li>
                       <details>
                         <summary>
+                          <Disclosure />
                           <span class="capability" data-tip={key}>
                             {capabilityName(key)}
                           </span>
-                          <span class="muted"> used by {users().length === 1 ? "1 plugin" : `${users().length} plugins`}</span>
+                          <span class="muted">used by {users().length === 1 ? "1 plugin" : `${users().length} plugins`}</span>
                         </summary>
                         <div class="inspector-runtime-users">
                           <Links inspector={inspector} kind={kind} ids={users()} none="no plugin" />
@@ -604,7 +620,7 @@ function Runtime(props: { inspector: Inspector }) {
                 }}
               </For>
             </ul>
-          </>
+          </div>
         )}
       </For>
       <HostFacts client={inspector.client} slots={inspector.slots} webPlugins={inspector.webPlugins} />
@@ -743,6 +759,22 @@ function PluginsInspector(props: { inspector: Inspector; filter: () => string; s
   );
   /** The plugin rows that show, in order, for the keys that move the selection. */
   const shown = createMemo(() => groups().flatMap((group) => (group.domain === "" || isOpen(group.domain) ? group.entries : [])));
+  const navKey = (entry: KindedPlugin) => `${entry.kind}:${entry.plugin.id}`;
+  /**
+   * The table's one Tab stop, among the rows that show: the selected plugin's, else its domain's row while that is
+   * folded, else the first; its arrow keys move in it.
+   */
+  const stop = createMemo(() => {
+    const id = inspector.selected()?.id;
+    const chosen = shown().find((entry) => entry.plugin.id === id);
+    if (chosen !== undefined) return navKey(chosen);
+    const folded = id === undefined ? undefined : domainOf(id);
+    if (folded !== undefined && domains().some((group) => group.domain === folded)) return `domain:${folded}`;
+    const domain = domains()[0];
+    if (domain !== undefined) return `domain:${domain.domain}`;
+    const entry = loose()[0];
+    return entry === undefined ? undefined : navKey(entry);
+  });
   const current = () => {
     const selection = inspector.selected();
     return selection === undefined ? undefined : entries().find((entry) => entry.plugin.id === selection.id);
@@ -779,7 +811,7 @@ function PluginsInspector(props: { inspector: Inspector; filter: () => string; s
     event.preventDefault();
     const next = rows[step];
     next?.focus();
-    const entry = shown().find((candidate) => `${candidate.kind}:${candidate.plugin.id}` === next?.dataset.nav);
+    const entry = shown().find((candidate) => navKey(candidate) === next?.dataset.nav);
     if (entry !== undefined) inspector.select({ kind: entry.kind, id: entry.plugin.id });
   };
   return (
@@ -798,7 +830,8 @@ function PluginsInspector(props: { inspector: Inspector; filter: () => string; s
         <span class="muted small">{matched().length === entries().length ? `${entries().length} plugins` : `${matched().length} of ${entries().length}`}</span>
       </SearchField>
       <div class="inspector-split" classList={{ "has-selection": selected() !== undefined }} ref={split}>
-        <div class="inspector-table" role="grid" aria-label="Plugins" tabindex="0" ref={table} onKeyDown={onKey}>
+        {/* Focusable for a click between rows, which the arrow keys then move from; Tab stops at a row (`stop`). */}
+        <div class="inspector-table" role="grid" aria-label="Plugins" tabindex="-1" ref={table} onKeyDown={onKey}>
           <div class="inspector-row inspector-head" role="row">
             <span role="columnheader">Plugin</span>
             <span role="columnheader">Kind</span>
@@ -811,14 +844,14 @@ function PluginsInspector(props: { inspector: Inspector; filter: () => string; s
             <For each={domains()}>
               {(group) => (
                 <div role="rowgroup" aria-label={group.domain}>
-                  <DomainRow group={group} open={isOpen(group.domain)} onToggle={() => toggle(group.domain)} />
+                  <DomainRow group={group} open={isOpen(group.domain)} stop={stop() === `domain:${group.domain}`} onToggle={() => toggle(group.domain)} />
                   <Show when={isOpen(group.domain)}>
-                    <For each={group.entries}>{(entry) => <Row inspector={inspector} entry={entry} nested />}</For>
+                    <For each={group.entries}>{(entry) => <Row inspector={inspector} entry={entry} nested stop={stop() === navKey(entry)} />}</For>
                   </Show>
                 </div>
               )}
             </For>
-            <For each={loose()}>{(entry) => <Row inspector={inspector} entry={entry} />}</For>
+            <For each={loose()}>{(entry) => <Row inspector={inspector} entry={entry} stop={stop() === navKey(entry)} />}</For>
           </Show>
         </div>
         <aside class="inspector-detail" aria-label="Plugin details">

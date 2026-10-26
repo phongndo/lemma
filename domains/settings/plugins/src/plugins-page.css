@@ -1,6 +1,10 @@
+/*
+ * Ids in code (a plugin's, a capability's) are mono a step below the text around them, which mono at the same size
+ * outweighs: `sm` beside a row's `md` (the search's results), `xs` in the inspector's `sm` rows and lists.
+ */
 .link-button.inspector-link {
   font-family: var(--font-mono);
-  font-size: var(--font-size-sm);
+  font-size: var(--font-size-xs);
 }
 
 .host-facts {
@@ -18,9 +22,7 @@
 .host-facts dd {
   margin: 0;
   min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  overflow-wrap: anywhere;
 }
 
 .host-facts .mono {
@@ -39,6 +41,10 @@
 .plugin-id {
   font-family: var(--font-mono);
   font-size: var(--font-size-sm);
+}
+
+.inspector-row .plugin-id {
+  font-size: var(--font-size-xs);
 }
 
 .state-dot {
@@ -161,9 +167,19 @@
   background: var(--bg-hover);
 }
 
-.inspector-row.selected,
-.inspector-table:focus-visible .inspector-row.selected {
+.inspector-row.selected {
   background: var(--bg-active);
+}
+
+/* On the selected row's fill, its muted parts step up a shade, so they still read. */
+.inspector-row.selected :is(.plugin-domain, .inspector-kind),
+.inspector-row.selected.off .plugin-id {
+  color: var(--text-2);
+}
+
+/* Inside the row: the table scrolls, and would cut a ring drawn outside it. */
+.inspector-row:focus-visible {
+  outline-offset: -2px;
 }
 
 .inspector-row.off .plugin-id {
@@ -181,15 +197,35 @@
   cursor: pointer;
 }
 
-.inspector-domain .chevron {
+/*
+ * What opens in place, a domain's row or the page's own disclosures (the runtime's, the effective config), leads with
+ * a chevron that turns as it opens, in place of a disclosure's own marker.
+ */
+.inspector-domain .chevron,
+.inspector-runtime summary .chevron,
+.inspector-raw summary .chevron {
   display: inline-flex;
   flex: none;
   color: var(--text-3);
-  transition: transform 0.12s;
+  transition: transform var(--duration-enter);
 }
 
-.inspector-domain.open .chevron {
+.inspector-domain.open .chevron,
+.inspector-runtime details[open] > summary .chevron,
+.inspector-raw[open] > summary .chevron {
   transform: rotate(90deg);
+}
+
+:is(.inspector-runtime, .inspector-raw) summary {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  list-style: none;
+  cursor: pointer;
+}
+
+:is(.inspector-runtime, .inspector-raw) summary::-webkit-details-marker {
+  display: none;
 }
 
 /* A tree's levels: a plugin in no domain beside the domains (past their chevrons), a domain's own under its name. */
@@ -327,9 +363,9 @@
 }
 
 .inspector-wiring h3 {
-  font-size: var(--font-size-xs);
-  font-weight: 500;
-  color: var(--text-3);
+  font-size: var(--font-size-sm);
+  font-weight: 600;
+  color: var(--text);
 }
 
 .inspector-wiring ul {
@@ -348,15 +384,27 @@
 
 .capability {
   font-family: var(--font-mono);
+  font-size: var(--font-size-xs);
+}
+
+/* Each app's runtime under a heading of its own. */
+.inspector-runtime-kind {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  margin-top: 6px;
+}
+
+.inspector-runtime h4 {
+  margin: 0 0 1px;
   font-size: var(--font-size-sm);
+  font-weight: 500;
+  color: var(--text-2);
 }
 
-.inspector-runtime summary {
-  cursor: pointer;
-}
-
+/* Under its capability's name, past the chevron. */
 .inspector-runtime-users {
-  margin: 2px 0 4px 14px;
+  margin: 2px 0 4px 20px;
 }
 
 .inspector-runtime .host-facts {
@@ -364,7 +412,6 @@
 }
 
 .inspector-raw summary {
-  cursor: pointer;
   font-size: var(--font-size-sm);
   color: var(--text-2);
 }
@@ -432,10 +479,13 @@
   }
 }
 
-/* Too narrow for every column: the kind goes (`kind:web` still filters by it). */
+/*
+ * Too narrow for every column: the kind goes (`kind:web` still filters by it), and the state and switch columns
+ * narrow, so a name keeps its room. Each row is a grid of its own, so the columns are fixed widths.
+ */
 @container inspector (max-width: 520px) {
   .inspector-row {
-    grid-template-columns: minmax(0, 1fr) 110px 128px;
+    grid-template-columns: minmax(0, 1fr) 80px 100px;
   }
   .inspector-row > :nth-child(2) {
     display: none;

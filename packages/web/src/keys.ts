@@ -144,16 +144,25 @@ export const stepFor = (key: string, index: number, length: number): number | un
  * either axis, wrapping at the ends, and Home and End to the first and last. Undefined for any other key. The group is
  * one Tab stop (the checked option's `tabindex` 0, the rest -1), and moving checks the option moved to.
  */
-export const radioStep = (key: string, index: number, length: number): number | undefined =>
-  key === "ArrowRight" || key === "ArrowDown"
-    ? (index + 1) % length
-    : key === "ArrowLeft" || key === "ArrowUp"
-      ? (index - 1 + length) % length
-      : key === "Home"
-        ? 0
-        : key === "End"
-          ? length - 1
-          : undefined;
+export const radioStep = (key: string, index: number, length: number): number | undefined => {
+  const step = key === "ArrowRight" || key === "ArrowDown" ? 1 : key === "ArrowLeft" || key === "ArrowUp" ? -1 : undefined;
+  return step !== undefined ? (index + step + length) % length : key === "Home" ? 0 : key === "End" ? length - 1 : undefined;
+};
+
+/**
+ * A radio group's keydown, on its `role="radiogroup"` element: `radioStep` from the option focused (else `checked`),
+ * focusing the `[role=radio]` moved to and returning its index for the group to check. Undefined for other keys.
+ */
+export const radioGroupKey = (event: KeyboardEvent & { readonly currentTarget: Element }, checked?: number): number | undefined => {
+  const radios = [...event.currentTarget.querySelectorAll<HTMLElement>("[role=radio]")];
+  const focused = radios.indexOf(document.activeElement as HTMLElement);
+  const from = focused >= 0 ? focused : checked;
+  const next = from === undefined ? undefined : radioStep(event.key, from, radios.length);
+  if (next === undefined) return undefined;
+  event.preventDefault();
+  radios[next]?.focus();
+  return next;
+};
 
 /** What a key does in a list being searched: moves the active item, or picks one of the first nine at once. */
 export type ListKey = { readonly move: 1 | -1 } | { readonly pick: number };

@@ -49,6 +49,8 @@
 
 /* A row on the settings' row grid (`.setting-row`), whose button, the whole row's height, opens it. */
 .integration-row {
+  /* The error color, a shade toward the text: on the open row's fill, where the error color falls short of 4.5:1. */
+  --integration-err-strong: color-mix(in srgb, var(--err) 85%, var(--text));
   padding-block: 0;
 }
 
@@ -56,8 +58,24 @@
   background: var(--bg-active);
 }
 
-/* A row that is off reads quieter, until pointed at or open. */
-.integration-row.off:not(:hover, .selected) .integration-row-main {
+/* On the open row's fill, its muted parts step up a shade, so they still read. */
+.integration-row.selected :is(.integration-version, .integration-row-status) {
+  color: var(--text-2);
+}
+
+.integration-row.selected .integration-row-status[data-tone="error"] {
+  color: var(--integration-err-strong);
+}
+
+/*
+ * A row that is off reads quieter, until pointed at or open: its name muted and its mark faded. Its text is dimmed by
+ * color, not faded, so it still reads.
+ */
+.integration-row.off:not(:hover, .selected) .setting-title {
+  color: var(--text-2);
+}
+
+.integration-row.off:not(:hover, .selected) .integration-icon {
   opacity: 0.6;
 }
 
@@ -319,9 +337,11 @@
 }
 
 @media (max-width: 760px) {
+  /* Stacked, the detail follows the list: the rows take their content's height, and no band opens between them. */
   .integrations {
     grid-template-columns: minmax(0, 1fr);
     grid-template-rows: auto auto;
+    align-content: start;
   }
 
   .integrations-list {
@@ -392,11 +412,12 @@
   border-top: 0;
 }
 
+/* A section's heading reads as the settings' group headings do. */
 .integration-section > h3 {
   margin: 0;
-  font-size: var(--font-size-sm);
-  font-weight: 500;
-  color: var(--text-3);
+  font-size: var(--font-size-base);
+  font-weight: 600;
+  color: var(--text);
 }
 
 .integration-section > p {

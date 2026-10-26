@@ -5,7 +5,7 @@ import { Layers, holdWhileRead } from "@lemma/frame";
 import { SettingsGroups, SettingsSections, Settings } from "@lemma/settings";
 import { sessionTitle, Threads } from "@lemma/threads";
 import { Slots, defineWebPlugin, usePlugin } from "@lemma/web";
-import { radioStep } from "@lemma/web/keys";
+import { radioGroupKey } from "@lemma/web/keys";
 import { loadJson, save } from "@lemma/web/storage";
 import { Workspace } from "@lemma/workspace/web";
 import { AlertIcon, BellIcon, CheckIcon, QuestionIcon, SettingRow, Toggle, XIcon } from "@lemma/look";
@@ -148,11 +148,8 @@ function ChannelGrid(props: { prefs: () => Prefs; change: (state: Told, channel:
 /** Where notices stack, picked on a window in miniature: one Tab stop, whose arrow keys, Home, and End move the choice. */
 function CornerPicker(props: { corner: () => Corner; pick: (corner: Corner) => void }) {
   const onKeyDown = (event: KeyboardEvent & { currentTarget: HTMLDivElement }) => {
-    const next = radioStep(event.key, CORNERS.indexOf(props.corner()), CORNERS.length);
-    if (next === undefined) return;
-    event.preventDefault();
-    props.pick(CORNERS[next]!);
-    event.currentTarget.querySelectorAll<HTMLButtonElement>("[role=radio]")[next]?.focus();
+    const next = radioGroupKey(event, CORNERS.indexOf(props.corner()));
+    if (next !== undefined) props.pick(CORNERS[next]!);
   };
   return (
     <SettingRow title="Where notices show" description={`${CORNER_TITLES[props.corner()]} of the window.`}>

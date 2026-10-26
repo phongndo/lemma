@@ -1,5 +1,5 @@
 import { For } from "solid-js";
-import { radioStep } from "@lemma/web/keys";
+import { radioGroupKey } from "@lemma/web/keys";
 import type { SegmentedProps, SettingRowProps } from "@lemma/look";
 
 /** A setting's name and explanation, with its control on the right. */
@@ -27,13 +27,8 @@ export function Segmented(props: SegmentedProps) {
       props.options.findIndex((option) => option.value === props.value),
     );
   const onKeyDown = (event: KeyboardEvent & { currentTarget: HTMLDivElement }) => {
-    const options = [...event.currentTarget.querySelectorAll<HTMLButtonElement>("[role=radio]")];
-    const focused = options.indexOf(document.activeElement as HTMLButtonElement);
-    const next = radioStep(event.key, focused < 0 ? checked() : focused, props.options.length);
-    if (next === undefined) return;
-    event.preventDefault();
-    props.onChange(props.options[next]!.value);
-    options[next]?.focus();
+    const next = radioGroupKey(event, checked());
+    if (next !== undefined) props.onChange(props.options[next]!.value);
   };
   return (
     <div class="segmented" role="radiogroup" aria-label={props.label} onKeyDown={onKeyDown}>
