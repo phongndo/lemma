@@ -15,7 +15,7 @@ import { Registries } from "../registries.ts";
 import type { ContributeOptions, Contribution, Registry } from "../registries.ts";
 import { makeBridge } from "./bridge.ts";
 import type { Bridge, RunOptions } from "./bridge.ts";
-import { followsAwait, outside, within } from "../internal/current.ts";
+import { outside, within } from "../internal/current.ts";
 import type { Current } from "../internal/current.ts";
 import { plainView } from "./view.ts";
 import type { Plain } from "./view.ts";
@@ -29,7 +29,6 @@ export { Event } from "../events.ts";
 export { Hook } from "../hooks.ts";
 export { Registry } from "../registries.ts";
 export type { Plain } from "./view.ts";
-export { followsAwait };
 
 /** The services behind named capabilities, as promise-based code uses them. */
 export type PlainServices<C extends Capabilities> = { readonly [K in keyof C]: Plain<Context.Service.Shape<C[K]>> };
@@ -165,8 +164,7 @@ export interface PlainDefinition<
   readonly provides?: Provides;
   /**
    * Runs once when the plugin activates; may be `async`. Returns the services
-   * it provides, as their contracts declare them (`asEffect` turns an async
-   * function into one returning an Effect). It is active once setup has
+   * it provides, as their contracts declare them. It is active once setup has
    * returned and every call it made has settled: a call that failed, or a
    * throw, fails its activation, attributed to it.
    */
@@ -183,12 +181,10 @@ export interface PlainDefinition<
 export interface Embedding {
   /**
    * `"plain"` (the default): as `Plain<S>`, refused once the plugin stops.
-   * `"raw"`: as provided, for contracts that are promise-based already.
    * A function: the embedder's own view, given the plugin's `PluginContext` and its signal, aborted as it stops.
    */
   readonly services?:
     | "plain"
-    | "raw"
     | ((
         services: Readonly<Record<string, unknown>>,
         owner: Context.Service.Shape<typeof PluginContext> & { readonly signal: AbortSignal },
@@ -196,18 +192,6 @@ export interface Embedding {
   /** Runs `setup` (it calls the plugin's), inside whatever the embedder needs: a reactive root, an error boundary. */
   readonly run?: <T>(setup: () => T, plugin: PlainSetup<unknown>) => T;
 }
-
-/**
- * A function returning a promise as one returning an Effect, for providing a
- * contract whose methods return Effects. A rejection is a defect unless its
- * error was marked with `fail`.
- *
- *   return { store: { get: asEffect(async (key: string) => cache.get(key) ?? (await load(key))) } };
- */
-export const asEffect =
-  <Args extends readonly unknown[], A, E = never>(fn: (...args: Args) => Awaitable<A, E>) =>
-  (...args: Args): Effect.Effect<A, E> =>
-    awaitable(() => fn(...args));
 
 /** Effect work promise-based code starts, outside its invocation (see `outside`): what it leaves running is not that code's. */
 const runFork = <A, E>(effect: Effect.Effect<A, E>) => outside(() => Effect.runFork(effect));
@@ -333,11 +317,9 @@ export function definePlugin<
         const plugin = context(owner, bridge, hooks, events, registries, cleanups, base);
         const raw = services as Readonly<Record<string, unknown>>;
         const view =
-          embedding.services === "raw"
-            ? raw
-            : typeof embedding.services === "function"
-              ? embedding.services(raw, owner)
-              : Object.fromEntries(Object.entries(raw).map(([name, service]) => [name, plainView(service, bridge, name)]));
+          typeof embedding.services === "function"
+            ? embedding.services(raw, owner)
+            : Object.fromEntries(Object.entries(raw).map(([name, service]) => [name, plainView(service, bridge, name)]));
         const run = () => setup(view as PlainServices<Requires>, plugin as PlainSetup<ConfigOf<C>, Carried>);
         // Setup runs in the plugin's own context (a timer it starts does not trace under an activation long over),
         // recording the calls it makes: it is active once they have settled, and a registration that failed fails it.

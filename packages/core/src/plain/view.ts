@@ -47,20 +47,9 @@ type PlainMember<T, Left extends number> =
  * else is as it was.
  *
  * A mapped type keeps one signature per member, so an overloaded method keeps
- * its last and a generic one loses its type parameter. A contract gives such
- * members their promise-based types by hand under `"~plain"`, a phantom
- * member nothing implements:
- *
- *   interface Store {
- *     readonly get: <A>(key: Key<A>) => Effect.Effect<A>;
- *     readonly "~plain"?: { readonly get: <A>(key: Key<A>) => Promise<A> };
- *   }
+ * its last and a generic one loses its type parameter.
  */
-export type Plain<S> = "~plain" extends keyof S
-  ? NonNullable<S["~plain" & keyof S]> extends infer P
-    ? Omit<PlainMember<Omit<S, "~plain">, 4>, keyof P> & P
-    : never
-  : PlainMember<S, 4>;
+export type Plain<S> = PlainMember<S, 4>;
 
 /** Objects this many levels below the service are left as they are: services are shallow, and data is not converted. */
 const DEPTH = 4;

@@ -145,15 +145,14 @@ export default definePlugin({
   promise of its value, one returning a stream an async iterable, and an Effect
   member becomes a method. A failure rejects with its error, marked so that
   rethrowing it keeps it a typed failure; a defect rejects with the defect. A
-  generic or overloaded method keeps one signature through the mapping; a
-  contract restores it with a phantom `"~plain"` member (see `Plain`).
+  generic or overloaded method keeps one signature through the mapping.
 - **Context.** A call runs in the context of the work that led to it (a hook's
   operation, an event, the activation), so it keeps that work's references and
   trace, and stops when that work is interrupted. It always runs as the plugin
   that makes it, with its own `PluginContext` and `Scope`, whoever's work called
   the code (a guard another plugin runs). Where the runtime has
   `AsyncLocalStorage` (Node.js, found without importing it, so browser bundles
-  are unaffected; `followsAwait` says so) this follows `await` and `.then`;
+  are unaffected) this follows `await` and `.then`;
   elsewhere it holds until the first one, and later calls run in the plugin's
   own context, stopping when it stops. What a plugin registers (a handler, an
   observer, an item, a background task) is its own, not the work's that was
@@ -244,14 +243,13 @@ export default definePlugin({
   Event, a Registry), and anything deeper are left as they are. `Plain<S>`
   types them the same way.
 - **Providing.** `setup` returns services as their contracts declare them; it does
-  not convert them. `asEffect(async (…) => …)` turns an async function into one
-  returning an Effect, for a contract whose methods return Effects.
+  not convert them. A method a contract types as returning an Effect can return
+  `awaitable(async () => …)`.
 
 An application with its own way of writing plugins (a UI framework's) builds on
-`definePlugin(definition, { services, run })`. `services: "raw"` hands services
-over as provided, for contracts that are promise-based already, and a function
-gives its own view. `run` wraps the call to setup in a reactive root or an
-error boundary.
+`definePlugin(definition, { services, run })`. `services` is a function that
+gives its own view of the services. `run` wraps the call to setup in a reactive
+root or an error boundary.
 
 ### Callbacks a contract takes
 
