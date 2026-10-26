@@ -103,7 +103,7 @@
 .agent-title {
   overflow: hidden;
   color: var(--text);
-  font-size: calc(13px * var(--text-scale));
+  font-size: var(--font-size-md);
   font-weight: 500;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -112,7 +112,7 @@
 .agent-state {
   flex: none;
   color: var(--text-3);
-  font-size: calc(11.5px * var(--text-scale));
+  font-size: var(--font-size-xs);
 }
 
 .agent-row[data-state="working"] .agent-state,
@@ -132,7 +132,7 @@
 .agent-detail {
   overflow: hidden;
   color: var(--text-3);
-  font-size: calc(12px * var(--text-scale));
+  font-size: var(--font-size-sm);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -140,7 +140,7 @@
 .agent-time {
   flex: none;
   color: var(--text-3);
-  font-size: calc(12px * var(--text-scale));
+  font-size: var(--font-size-sm);
   font-variant-numeric: tabular-nums;
 }
 
@@ -190,7 +190,7 @@
 
 .agent-group-status {
   color: var(--text-3);
-  font-size: calc(12px * var(--text-scale));
+  font-size: var(--font-size-sm);
 }
 
 .agent-group-status.active {
@@ -232,7 +232,7 @@
 .agent-stack-more {
   margin-left: 4px;
   color: var(--text-3);
-  font-size: calc(11px * var(--text-scale));
+  font-size: var(--font-size-xs);
 }
 
 .agent-stack-button {
@@ -249,7 +249,7 @@
   align-items: center;
   gap: 10px;
   color: var(--text-2);
-  font-size: calc(12.5px * var(--text-scale));
+  font-size: var(--font-size-sm);
 }
 
 .agents-notice-text {
@@ -269,7 +269,7 @@
   background: none;
   color: var(--text-3);
   font: inherit;
-  font-size: calc(12.5px * var(--text-scale));
+  font-size: var(--font-size-sm);
   cursor: pointer;
 }
 

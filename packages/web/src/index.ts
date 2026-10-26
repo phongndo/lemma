@@ -20,6 +20,11 @@
  *   element gives it that scheme's own tokens, for a preview (see "the look").
  * - `aria-expanded` on a button marks a disclosure: the chat keeps it in place
  *   when it opens instead of following new output.
+ * - `data-motion` on an element keeps its animation when the person asks for
+ *   less motion (`prefers-reduced-motion`), which otherwise ends every
+ *   animation and transition at once: it marks motion that shows a state (a
+ *   spinner, a working pulse), slowed by its own stylesheet's rule rather than
+ *   stopped.
  * - `data-titlebar` on the shell's `.app` means the page fills a desktop
  *   window whose own controls overlay its top (`env(titlebar-area-*)`): at the
  *   left on macOS, at the right on Windows and Linux. The bar atop each column

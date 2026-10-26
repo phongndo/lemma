@@ -18,7 +18,7 @@
   border: 1px solid var(--border-strong);
   background: var(--bg-raised);
   box-shadow: var(--shadow-lg);
-  font-size: calc(13px * var(--text-scale));
+  font-size: var(--font-size-md);
   animation: drop 0.16s ease-out;
 }
 
@@ -41,7 +41,7 @@
 }
 
 .toast-source {
-  font-size: calc(11px * var(--text-scale));
+  font-size: var(--font-size-xs);
   color: var(--text-3);
 }
 

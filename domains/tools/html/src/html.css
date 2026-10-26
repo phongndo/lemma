@@ -158,7 +158,7 @@
   margin: 0;
   overflow: auto;
   font-family: var(--font-mono);
-  font-size: calc(12px * var(--text-scale));
+  font-size: var(--font-size-sm);
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }

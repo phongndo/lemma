@@ -15,7 +15,7 @@
   border-top: 1px solid var(--border);
   background: var(--bg-raised);
   color: var(--text);
-  font: calc(12px * var(--text-scale))/1.4 var(--font-ui);
+  font: var(--font-size-sm)/1.4 var(--font-ui);
 }
 
 [data-theme="dark"] .trj {
@@ -234,7 +234,7 @@
   box-shadow:
     var(--shadow),
     inset 0 0 0 1px var(--border-strong);
-  font-size: calc(11px * var(--text-scale));
+  font-size: var(--font-size-xs);
   color: var(--text-2);
 }
 
@@ -249,7 +249,7 @@
   display: grid;
   place-items: center;
   color: var(--text-3);
-  font-size: calc(11px * var(--text-scale));
+  font-size: var(--font-size-xs);
 }
 
 /* table */
@@ -345,13 +345,13 @@
 
 .trj-call-name {
   font-family: var(--font-mono);
-  font-size: calc(11.5px * var(--text-scale));
+  font-size: var(--font-size-xs);
   font-weight: 600;
 }
 
 .trj-call-args {
   font-family: var(--font-mono);
-  font-size: calc(11.5px * var(--text-scale));
+  font-size: var(--font-size-xs);
   color: var(--text-3);
 }
 
@@ -361,7 +361,7 @@
   background: none;
   color: var(--trj-user);
   cursor: pointer;
-  font-size: calc(12px * var(--text-scale));
+  font-size: var(--font-size-sm);
 }
 
 .trj-link-cell:hover,
@@ -467,7 +467,7 @@
   box-shadow:
     var(--shadow-lg),
     inset 0 0 0 1px var(--border-strong);
-  font: calc(12px * var(--text-scale)) var(--font-ui);
+  font: var(--font-size-sm) var(--font-ui);
 }
 
 .trj-menu-item {
@@ -539,7 +539,7 @@
   margin: 0;
   padding: 4px 0;
   background: transparent;
-  font: calc(11.5px * var(--text-scale))/1.5 var(--font-mono);
+  font: var(--font-size-xs)/1.5 var(--font-mono);
   white-space: pre-wrap;
   overflow-wrap: anywhere;
   max-height: 520px;
@@ -596,7 +596,7 @@
   padding: 0;
   background: none;
   color: var(--trj-user);
-  font-size: calc(12px * var(--text-scale));
+  font-size: var(--font-size-sm);
 }
 
 .trj-link:hover {
@@ -649,7 +649,7 @@
 .trj-source-parts {
   grid-column: 2 / 4;
   color: var(--text-3);
-  font-size: calc(11px * var(--text-scale));
+  font-size: var(--font-size-xs);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -669,7 +669,7 @@
 }
 
 .trj-md {
-  font-size: calc(13px * var(--text-scale));
+  font-size: var(--font-size-md);
   line-height: 1.55;
 }
 
@@ -696,7 +696,7 @@
 
 /* A plugin's share of the latest request, in the Plugins page's Cost tab. */
 .trj-cost {
-  font-size: calc(12.5px * var(--text-scale));
+  font-size: var(--font-size-sm);
 }
 .trj-cost p {
   margin: 0 0 10px;

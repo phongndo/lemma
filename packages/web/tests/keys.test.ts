@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { bindingOf, formatKeys, holdsKeys, listKey, matchesKeys, quickKey, typedWithAltGr } from "../src/keys.ts";
+import { bindingOf, formatKeys, holdsKeys, listKey, matchesKeys, quickKey, radioStep, typedWithAltGr } from "../src/keys.ts";
 
 // Not a Mac here, so `mod` is Ctrl. Node has a `navigator` that reports the host, so pin it.
 vi.hoisted(() => {
@@ -110,5 +110,20 @@ describe("listKey", () => {
     expect(listKey(press("ArrowDown", "ArrowDown", { alt: true }))).toBeUndefined();
     expect(quickKey(0)).toBe("Ctrl+1");
     expect(quickKey(9)).toBeUndefined();
+  });
+});
+
+describe("radioStep", () => {
+  it("moves along either axis and wraps at the ends", () => {
+    expect(radioStep("ArrowRight", 0, 3)).toBe(1);
+    expect(radioStep("ArrowDown", 2, 3)).toBe(0);
+    expect(radioStep("ArrowLeft", 0, 3)).toBe(2);
+    expect(radioStep("ArrowUp", 1, 3)).toBe(0);
+  });
+
+  it("jumps to the ends with Home and End, and leaves other keys alone", () => {
+    expect(radioStep("Home", 2, 3)).toBe(0);
+    expect(radioStep("End", 0, 3)).toBe(2);
+    expect(radioStep("Enter", 1, 3)).toBeUndefined();
   });
 });

@@ -1,6 +1,6 @@
 .link-button.inspector-link {
   font-family: var(--font-mono);
-  font-size: calc(12px * var(--text-scale));
+  font-size: var(--font-size-sm);
 }
 
 .host-facts {
@@ -8,7 +8,7 @@
   grid-template-columns: max-content 1fr;
   gap: 3px 14px;
   margin: 0 0 12px;
-  font-size: calc(12.5px * var(--text-scale));
+  font-size: var(--font-size-sm);
 }
 
 .host-facts dt {
@@ -25,20 +25,20 @@
 
 .host-facts .mono {
   font-family: var(--font-mono);
-  font-size: calc(12px * var(--text-scale));
+  font-size: var(--font-size-sm);
 }
 
 .status-pill {
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  font-size: calc(12px * var(--text-scale));
+  font-size: var(--font-size-sm);
   color: var(--text-2);
 }
 
 .plugin-id {
   font-family: var(--font-mono);
-  font-size: calc(12.5px * var(--text-scale));
+  font-size: var(--font-size-sm);
 }
 
 .state-dot {
@@ -73,7 +73,7 @@
   border-radius: var(--radius-sm);
   background: var(--err-soft);
   color: var(--err);
-  font-size: calc(12px * var(--text-scale));
+  font-size: var(--font-size-sm);
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
@@ -86,7 +86,7 @@
   padding: 8px 10px;
   border-radius: var(--radius-sm);
   background: var(--warn-soft);
-  font-size: calc(12.5px * var(--text-scale));
+  font-size: var(--font-size-sm);
 }
 
 .plugin-details {
@@ -94,7 +94,7 @@
   grid-template-columns: max-content 1fr;
   gap: 4px 14px;
   margin: 8px 0 2px 26px;
-  font-size: calc(12.5px * var(--text-scale));
+  font-size: var(--font-size-sm);
 }
 
 .plugin-details dt {
@@ -153,7 +153,7 @@
   min-height: 32px;
   padding: 0 8px;
   border-bottom: 1px solid var(--border);
-  font-size: calc(12.5px * var(--text-scale));
+  font-size: var(--font-size-sm);
   cursor: default;
 }
 
@@ -173,7 +173,7 @@
 .inspector-head {
   min-height: 26px;
   color: var(--text-3);
-  font-size: calc(11.5px * var(--text-scale));
+  font-size: var(--font-size-xs);
 }
 
 /* A domain's row: its plugins folded into one line, opened in place; its plugins indented under it. */
@@ -259,7 +259,7 @@
 
 .inspector-detail-head h2 {
   font-family: var(--font-mono);
-  font-size: calc(13.5px * var(--text-scale));
+  font-size: var(--font-size-md);
 }
 
 .inspector-tabs {
@@ -275,7 +275,7 @@
   margin-bottom: -1px;
   background: none;
   color: var(--text-3);
-  font-size: calc(12.5px * var(--text-scale));
+  font-size: var(--font-size-sm);
 }
 
 .inspector-tabs button.active {
@@ -327,7 +327,7 @@
 }
 
 .inspector-wiring h3 {
-  font-size: calc(11.5px * var(--text-scale));
+  font-size: var(--font-size-xs);
   font-weight: 500;
   color: var(--text-3);
 }
@@ -339,7 +339,7 @@
   display: flex;
   flex-direction: column;
   gap: 3px;
-  font-size: calc(12.5px * var(--text-scale));
+  font-size: var(--font-size-sm);
 }
 
 .inspector-wiring p {
@@ -348,7 +348,7 @@
 
 .capability {
   font-family: var(--font-mono);
-  font-size: calc(12px * var(--text-scale));
+  font-size: var(--font-size-sm);
 }
 
 .inspector-runtime summary {
@@ -365,13 +365,13 @@
 
 .inspector-raw summary {
   cursor: pointer;
-  font-size: calc(12.5px * var(--text-scale));
+  font-size: var(--font-size-sm);
   color: var(--text-2);
 }
 
 .inspector-raw pre {
   margin: 6px 0 0;
-  font-size: calc(12px * var(--text-scale));
+  font-size: var(--font-size-sm);
   overflow: auto;
 }
 
@@ -388,7 +388,7 @@
   display: flex;
   align-items: center;
   gap: 8px;
-  font-size: calc(12px * var(--text-scale));
+  font-size: var(--font-size-sm);
 }
 
 .inspector-result {

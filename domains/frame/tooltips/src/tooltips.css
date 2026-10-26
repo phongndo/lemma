@@ -21,7 +21,7 @@
   pointer-events: none;
   background: var(--tooltip-bg);
   color: var(--tooltip-fg);
-  font-size: calc(12px * var(--text-scale));
+  font-size: var(--font-size-sm);
   line-height: 1.35;
   font-weight: 500;
   box-shadow: var(--tooltip-shadow);

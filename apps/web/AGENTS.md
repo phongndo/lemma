@@ -80,8 +80,10 @@ replace it.
 - **The look is tokens all through**, so a theme or a setting reaches every
   plugin. Draw with the foundation's tokens; a color of a plugin's own (a
   shadow, a palette) is a token declared in its stylesheet, its default the
-  look it has. A font size is scaled, `calc(12px * var(--text-scale))`, and a corner is
-  one of the foundation's `--radius-*` tokens, chosen by what it rounds (they
+  look it has. A font size is a step of the foundation's type scale,
+  `var(--font-size-sm)` and the like (a size no step fits, such as a code to
+  read off, is scaled, `calc(26px * var(--text-scale))`), and a corner is
+  one of the foundation's `--radius-*` tokens, chosen by what it rounds (both
   are listed with their roles in `src/styles.css`). A shape inside another,
   near its edge, takes the outer radius less the gap; shapes that touch are one
   shape. In a stylesheet, `check-boundaries` fails a color written outside a

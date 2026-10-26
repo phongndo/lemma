@@ -1,6 +1,6 @@
 .palette-heading {
   padding: 10px 16px 0;
-  font-size: calc(12px * var(--text-scale));
+  font-size: var(--font-size-sm);
   font-weight: 500;
   color: var(--text-3);
 }
@@ -14,7 +14,7 @@
   padding: 10px 16px;
   border-bottom: 1px solid var(--border);
   color: var(--text-2);
-  font-size: calc(13px * var(--text-scale));
+  font-size: var(--font-size-md);
   white-space: pre-wrap;
 }
 
@@ -27,7 +27,7 @@
   min-width: 0;
   padding-left: 4px;
   color: var(--text-3);
-  font-size: calc(12px * var(--text-scale));
+  font-size: var(--font-size-sm);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -41,7 +41,7 @@
   background: none;
   color: var(--text-3);
   font-family: var(--font-ui);
-  font-size: calc(12px * var(--text-scale));
+  font-size: var(--font-size-sm);
 }
 
 .palette-kbd {
@@ -64,7 +64,7 @@
   gap: 4px 14px;
   padding: 8px 14px;
   border-top: 1px solid var(--border);
-  font-size: calc(11.5px * var(--text-scale));
+  font-size: var(--font-size-xs);
   color: var(--text-3);
 }
 
@@ -86,7 +86,7 @@
 .palette-note {
   padding: 8px 16px;
   color: var(--text-3);
-  font-size: calc(12px * var(--text-scale));
+  font-size: var(--font-size-sm);
 }
 
 /* On a page, its back button takes the prompt's place, its edge where the prompt's icon sits. */

@@ -8,12 +8,12 @@
 .palette-note {
   padding: 8px 12px;
   color: var(--text-3);
-  font-size: calc(12px * var(--text-scale));
+  font-size: var(--font-size-sm);
 }
 
 .palette-mono {
   font-family: var(--font-mono);
-  font-size: calc(12.5px * var(--text-scale));
+  font-size: var(--font-size-sm);
   color: var(--text-2);
 }
 

@@ -107,7 +107,7 @@
 
 .integration-version {
   font-family: var(--font-mono);
-  font-size: calc(11px * var(--text-scale));
+  font-size: var(--font-size-xs);
   color: var(--text-3);
 }
 
@@ -189,7 +189,7 @@
   background: none;
   color: var(--text);
   font: inherit;
-  font-size: calc(14px * var(--text-scale));
+  font-size: var(--font-size-base);
 }
 
 .integrations-add-error {
@@ -215,7 +215,7 @@
 .integrations-add-heading {
   margin: 0;
   padding: 0 var(--add-row) 4px;
-  font-size: calc(11.5px * var(--text-scale));
+  font-size: var(--font-size-xs);
   font-weight: 500;
   color: var(--text-3);
 }
@@ -255,7 +255,7 @@
 }
 
 .integrations-add-detail {
-  font-size: calc(12px * var(--text-scale));
+  font-size: var(--font-size-sm);
   color: var(--text-2);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -267,7 +267,7 @@
   display: inline-flex;
   align-items: center;
   gap: 5px;
-  font-size: calc(12px * var(--text-scale));
+  font-size: var(--font-size-sm);
   color: var(--text-3);
 }
 
@@ -281,7 +281,7 @@
   align-items: center;
   gap: 8px;
   margin: 4px var(--add-row);
-  font-size: calc(12px * var(--text-scale));
+  font-size: var(--font-size-sm);
   color: var(--text-3);
 }
 
@@ -302,7 +302,7 @@
 
 .integrations-add-form-head h2 {
   margin: 0;
-  font-size: calc(15px * var(--text-scale));
+  font-size: var(--font-size-lg);
 }
 
 .integration-result {
@@ -369,7 +369,7 @@
   align-items: baseline;
   gap: 8px;
   margin: 0;
-  font-size: calc(16px * var(--text-scale));
+  font-size: var(--font-size-xl);
 }
 
 .integration-actions {
@@ -394,7 +394,7 @@
 
 .integration-section > h3 {
   margin: 0;
-  font-size: calc(12.5px * var(--text-scale));
+  font-size: var(--font-size-sm);
   font-weight: 500;
   color: var(--text-3);
 }
@@ -408,7 +408,7 @@
   display: flex;
   flex-direction: column;
   gap: 4px;
-  font-size: calc(12.5px * var(--text-scale));
+  font-size: var(--font-size-sm);
   color: var(--text-2);
 }
 
@@ -419,12 +419,12 @@
 .integration-field textarea.field {
   min-height: 72px;
   font-family: var(--font-mono);
-  font-size: calc(12px * var(--text-scale));
+  font-size: var(--font-size-sm);
   resize: vertical;
 }
 
 .integration-hint {
-  font-size: calc(12px * var(--text-scale));
+  font-size: var(--font-size-sm);
   color: var(--text-3);
 }
 
@@ -438,7 +438,7 @@
 
 .integration-kv .field {
   font-family: var(--font-mono);
-  font-size: calc(12px * var(--text-scale));
+  font-size: var(--font-size-sm);
 }
 
 .integration-code {
@@ -447,14 +447,14 @@
   border-radius: var(--radius-sm);
   background: var(--bg-sunk);
   font-family: var(--font-mono);
-  font-size: calc(12px * var(--text-scale));
+  font-size: var(--font-size-sm);
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
 
 .integration-error {
   color: var(--err);
-  font-size: calc(12px * var(--text-scale));
+  font-size: var(--font-size-sm);
 }
 
 .integration-buttons {
