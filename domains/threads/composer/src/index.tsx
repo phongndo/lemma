@@ -46,7 +46,7 @@ import type { SentPrompt } from "./history.ts";
 import { leftOutWarnings, readImage, sortFiles, unreadWarning } from "./images.ts";
 import { createSender } from "./sender.ts";
 import type { WhenBusy as SendWhenBusy } from "./sender.ts";
-import { createStopKey } from "./stop.ts";
+import { createStopKey, stopKeys } from "./stop.ts";
 import { holds, noChoices, release as releasing, take as taking } from "./takeover.ts";
 import styles from "./composer.css?inline";
 
@@ -121,6 +121,7 @@ function Composer(props: { deps: Deps }) {
   const [dragging, setDragging] = createSignal(false);
   const [sending, setSending] = createSignal(false);
   let input!: HTMLTextAreaElement;
+  let attachments: HTMLDivElement | undefined;
   let suggestionList: HTMLDivElement | undefined;
   const [cursor, setCursor] = createSignal(0);
   const [focused, setFocused] = createSignal(false);
@@ -311,6 +312,8 @@ function Composer(props: { deps: Deps }) {
   const runElsewhere = async () => {
     if (taken() === undefined) return (await runCommand()) ? undefined : sender.send(busyMode(), true);
   };
+  /** The stop button's tip, with the key that stops a turn from the box (the "Stop a turn" setting). */
+  const stopTip = () => `Stop · ${stopKeys(props.deps.config.stop)}`;
   /** What runs the prompt elsewhere: mod with Enter, or with Shift too while mod+Enter sends. */
   const elsewhereKeys = () => (props.deps.config.send === "mod+enter" ? "mod+shift+enter" : "mod+enter");
   /**
@@ -417,6 +420,8 @@ function Composer(props: { deps: Deps }) {
     if (suggestion.submit === true && how === "pick") void submit();
   };
   const addFiles = async (files: Iterable<File>) => {
+    // Where focus was as the files came: they go with what is written next, unless the person has gone elsewhere since.
+    const from = document.activeElement;
     const sorted = sortFiles([...files]);
     for (const message of leftOutWarnings(sorted)) notify.toast({ level: "warning", message });
     const accepted = sorted.accepted;
@@ -429,6 +434,8 @@ function Composer(props: { deps: Deps }) {
     if (attached.length === 0) return;
     edited();
     setImages((current) => [...current, ...attached]);
+    const now = document.activeElement;
+    if (taken() === undefined && input.isConnected && (now === from || now === null || now instanceof HTMLBodyElement)) input.focus();
   };
 
   // ⌘ is the completions' while they show, which ⌘1 … ⌘9 pick from.
@@ -645,18 +652,23 @@ function Composer(props: { deps: Deps }) {
           </div>
         </Show>
         <Show when={images().length > 0 && taken() === undefined}>
-          <div class="attachments">
+          <div class="attachments" ref={attachments}>
             <For each={images()}>
               {(image, index) => (
                 <div class="attachment">
-                  <img src={`data:${image.mimeType};base64,${image.data}`} alt="Attachment" />
+                  <img src={`data:${image.mimeType};base64,${image.data}`} alt={`Image ${index() + 1}`} />
                   <button
                     type="button"
                     class="attachment-remove"
-                    aria-label="Remove image"
+                    aria-label={`Remove image ${index() + 1}`}
+                    data-tip="Remove"
                     onClick={() => {
+                      const at = index();
                       edited();
-                      setImages((all) => all.filter((_, i) => i !== index()));
+                      setImages((all) => all.filter((_, i) => i !== at));
+                      // The focus goes to the next one's button, or back to the box, not to the page.
+                      const next = attachments?.isConnected === true ? attachments.querySelectorAll<HTMLElement>(".attachment-remove")[at] : undefined;
+                      (next ?? input).focus();
                     }}
                   >
                     <XIcon />
@@ -760,7 +772,7 @@ function Composer(props: { deps: Deps }) {
               <Show
                 when={written() && taken() === undefined}
                 fallback={
-                  <button type="button" class="send stop" aria-label="Stop" data-tip="Stop" onClick={() => threads.cancel()}>
+                  <button type="button" class="send stop" aria-label="Stop" data-tip={stopTip()} onClick={() => threads.cancel()}>
                     <StopIcon />
                   </button>
                 }
@@ -890,8 +902,8 @@ function StopSetting(props: { stop: Stop; onChange: (stop: Stop) => void }) {
         label="Stop a turn with"
         value={props.stop}
         options={[
-          { value: "escape-twice", label: `${formatKeys("escape")} ${formatKeys("escape")}` },
-          { value: "escape", label: formatKeys("escape") },
+          { value: "escape-twice", label: stopKeys("escape-twice") },
+          { value: "escape", label: stopKeys("escape") },
         ]}
         onChange={props.onChange}
       />

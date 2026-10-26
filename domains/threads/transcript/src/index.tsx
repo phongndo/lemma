@@ -61,7 +61,7 @@ import type {
   ThreadsService,
 } from "@lemma/threads";
 import { errorView } from "./error.ts";
-import { thoughtHeadline } from "./thought.ts";
+import { thoughtHeadline, thoughtTitles } from "./thought.ts";
 import { displayedCalls, displayEntries, workEntries } from "./work.ts";
 import type { DisplayEntry, ToolBlock, WorkEntry, WorkRow } from "./work.ts";
 import { JUMP_MARGIN, jumpOver, locate as locatePrompts } from "./prompt-rail.ts";
@@ -166,12 +166,19 @@ function Thinking(props: { chat: Chat; id: string; text: string; redacted?: bool
   );
 }
 
-/** The default `chat.thinking` part: one line, the thought's title (the latest while it is written), that opens to the thought as markdown. */
+/**
+ * The default `chat.thinking` part: one line, the thought's title (the latest while it is written), that opens to the
+ * thought as markdown. A thought with no titles is named by its first line, which, once it is open, shows under it.
+ */
 function ThinkingView(props: ChatThinkingProps) {
   const open = () => props.open;
-  const headline = createMemo(() => thoughtHeadline(props.text, props.live === true));
+  // Its titles, read once per update of a thought being written: the headline and whether it has any both come from them.
+  const titles = createMemo(() => thoughtTitles(props.text));
+  const headline = createMemo(() => thoughtHeadline(props.text, props.live === true, titles()));
+  const titled = () => titles().length > 0;
   const empty = () => props.text.trim() === "";
-  const label = () => headline() || (props.redacted ? "Reasoning hidden" : props.live ? "Thinking" : "Thought");
+  const fallback = () => (props.redacted ? "Reasoning hidden" : props.live ? "Thinking" : "Thought");
+  const label = () => (open() && !empty() && !titled() ? fallback() : headline() || fallback());
   return (
     <div class="thinking" classList={{ open: open(), live: props.live === true }}>
       <button class="row-head thinking-head" aria-expanded={open()} disabled={empty()} onClick={() => props.onToggle()}>
@@ -237,6 +244,17 @@ function Blocks(props: { chat: Chat; blocks: readonly Block[]; scope: string; tu
   );
 }
 
+/** A line of an error, what it quotes in backticks (a command to run) shown as code. */
+function ErrorLine(props: { text: string; class?: string }) {
+  // Split on a capture: the odd parts are what was quoted.
+  const parts = () => props.text.split(/`([^`]+)`/);
+  return (
+    <p class={props.class}>
+      <For each={parts()}>{(part, index) => (index() % 2 === 1 ? <code>{part}</code> : part)}</For>
+    </p>
+  );
+}
+
 /**
  * An error in the transcript, read for a person (see `errorView`), with a button that copies what it shows, and what
  * plugins offer to fix it (`ErrorActions`), for a failed model request.
@@ -247,9 +265,9 @@ function ErrorNote(props: { message: string; request?: { readonly provider: stri
     <div class="callout callout-error chat-error">
       <AlertIcon />
       <div class="chat-error-text">
-        <p class="chat-error-summary">{view().summary}</p>
-        <Show when={view().description}>{(description) => <p>{description()}</p>}</Show>
-        <Show when={view().hint}>{(hint) => <p>{hint()}</p>}</Show>
+        <ErrorLine class="chat-error-summary" text={view().summary} />
+        <Show when={view().description}>{(description) => <ErrorLine text={description()} />}</Show>
+        <Show when={view().hint}>{(hint) => <ErrorLine text={hint()} />}</Show>
         <Show when={props.request}>
           {(request) => (
             <div class="chat-error-actions">

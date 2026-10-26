@@ -55,6 +55,12 @@
   background: linear-gradient(var(--border-strong), var(--border-strong)) center / 1px 100% no-repeat;
 }
 
+/* Focused, it is a line in the focus ring's colour (← and → move it), as the devtools' edge is. */
+.thread-inspector-edge:focus-visible {
+  outline: none;
+  background: linear-gradient(var(--focus-ring), var(--focus-ring)) center / 2px 100% no-repeat;
+}
+
 /* A frame takes no pointer, and nothing is selected, while the edge is dragged. */
 .resizing {
   user-select: none;
@@ -137,6 +143,7 @@
 
 /* Its ×, where a browser's is: on the tab shown, under the pointer, and with focus, its room kept so the tabs do not move. Unseen, it still takes focus. */
 .thread-inspector-close {
+  position: relative;
   flex: none;
   display: grid;
   place-items: center;
@@ -148,6 +155,13 @@
   background: transparent;
   color: inherit;
   opacity: 0;
+}
+
+/* What takes the pointer reaches past it, to a target's least (24px), within the tab. */
+.thread-inspector-close::before {
+  content: "";
+  position: absolute;
+  inset: -2px;
 }
 
 .thread-inspector-close .icon {
@@ -213,7 +227,6 @@
   padding-left: max(12px, var(--titlebar-inset, 0px));
 }
 
-/* Over the view's bottom, so what the view shows passes under the composer; the view pads its end by `--composer-height`. Only what it draws takes the pointer, so the view still scrolls beside it. */
 /* The thread card: the open thread's facts, floating over its chat's top right while open, as a menu's rows. */
 .thread-card {
   position: absolute;
@@ -238,10 +251,6 @@
   border-radius: var(--radius-sm);
   font-size: var(--font-size-sm);
   color: var(--text-2);
-}
-
-.thread-card .menu-label {
-  font-weight: 450;
 }
 
 .thread-card .menu-check,
@@ -283,6 +292,7 @@
   color: var(--text);
 }
 
+/* Over the view's bottom, so what the view shows passes under the composer; the view pads its end by `--composer-height`. Only what it draws takes the pointer, so the view still scrolls beside it. */
 .composer-dock {
   position: absolute;
   left: 0;
@@ -294,6 +304,15 @@
 
 .composer-dock > * {
   pointer-events: auto;
+}
+
+/*
+ * What passes under it fades out at its top and is hidden below that, around its pieces and through the composer's
+ * glass: over the column the conversation and the composer share, short of the page's sides, where the view's
+ * scrollbar gutters are (the foundation's 10px), so the scrollbar still shows beside it.
+ */
+.thread-chat:not(.starting) .composer-dock {
+  background: linear-gradient(to bottom, transparent, var(--bg) 20px) 50% 0 / min(100% - 20px, var(--content)) 100% no-repeat;
 }
 
 /*
@@ -386,6 +405,11 @@
   color: var(--accent-text);
 }
 
+/* Where the sidebar's head has it, so it stays put as the sidebar closes: that head's inset, not the header's. */
+.thread-chat > .main-head:has(> .sidebar-toggle:first-child) {
+  padding-left: max(8px, var(--titlebar-inset, 0px));
+}
+
 /* The header's buttons: one quiet row, evenly spaced, coloured only by state; a fill shows only under the pointer. */
 .main-head .icon-button {
   display: grid;
@@ -434,6 +458,21 @@
 
   .main-head.thread-inspector-head {
     padding-left: max(8px, var(--titlebar-inset, 0px));
+  }
+}
+
+/*
+ * Too narrow for both, as the chat's column is in a phone's window or beside a wide pane: the thread's title, without
+ * its project, which the sidebar and the thread card still name.
+ */
+.thread-chat > .main-head {
+  container: thread-head / inline-size;
+}
+
+@container thread-head (max-width: 520px) {
+  .main-project,
+  .main-sep {
+    display: none;
   }
 }
 

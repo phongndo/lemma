@@ -1,3 +1,9 @@
+/* The chat's own colors: the rule beside a failed call's body, and its error's summary, both its red made to read. */
+:root {
+  --tool-error-rule: color-mix(in srgb, var(--err) 75%, transparent);
+  --chat-error-summary: color-mix(in srgb, var(--err), var(--text) 15%);
+}
+
 .output-more {
   display: inline-flex;
   align-items: center;
@@ -97,6 +103,17 @@
 
 .chat-error-summary {
   font-weight: 500;
+  color: var(--chat-error-summary);
+}
+
+/* What an error quotes in backticks (a command to run), as the chat's markdown shows inline code. */
+.chat-error-text code {
+  padding: 0.1em 0.35em;
+  border-radius: var(--radius-xs);
+  background: var(--bg-active);
+  color: var(--text);
+  font-size: 0.88em;
+  font-weight: 400;
 }
 
 .chat-error-text > p:not(.chat-error-summary) {
@@ -508,8 +525,8 @@
   display: flex;
   align-items: center;
   gap: 4px;
-  height: 22px;
-  margin: -2px -4px 0 0;
+  height: 24px;
+  margin: -3px -5px 0 0;
   color: var(--text-3);
   font-size: var(--font-size-sm);
   font-variant-numeric: tabular-nums;
@@ -528,19 +545,13 @@
 }
 
 .prompt-actions .icon-button {
-  width: 22px;
-  height: 22px;
+  width: 24px;
+  height: 24px;
   color: var(--text-3);
 }
 
-.prompt-actions .icon-button:hover {
+.prompt-actions .icon-button:hover:not([aria-disabled="true"]) {
   color: var(--text);
-}
-
-.prompt-actions .icon-button[aria-disabled="true"] {
-  opacity: 0.45;
-  background: none;
-  color: var(--text-3);
 }
 
 .prompt-actions .icon {
@@ -752,6 +763,20 @@
   text-overflow: ellipsis;
 }
 
+/* A command or a path, as code (`ToolSummary.shell`, `.file`); a path after its file's icon (the `file-icon` part). */
+.tool-code {
+  font-family: var(--font-mono);
+  font-size: var(--font-size-sm);
+}
+
+.tool-file-icon {
+  flex: none;
+  align-self: center;
+  width: 14px;
+  height: 14px;
+  margin-right: -2px;
+}
+
 .tool-secondary {
   flex: none;
   font-size: var(--font-size-sm);
@@ -841,8 +866,9 @@
   color: var(--text-3);
 }
 
-.output.error pre {
-  color: var(--err);
+/* A failed call's output reads as it was printed (what passed, among it, reads as passing): the rule beside it marks the failure. */
+.tool-error > .tool-body {
+  border-left-color: var(--tool-error-rule);
 }
 
 .output .link-button {
@@ -942,12 +968,15 @@
   border-top: 1px dashed var(--border-strong);
 }
 
-/* A turn the person stopped ends with a line saying so, which stands in for the line between turns. */
+/*
+ * A turn the person stopped ends with a line saying so, which stands in for the line between turns: quiet, as they
+ * asked for it (a turn that failed ends with its error instead).
+ */
 .turn-interrupted {
   display: flex;
   align-items: center;
   gap: 12px;
-  color: var(--err);
+  color: var(--text-3);
   font-size: var(--font-size-sm);
 }
 
@@ -1019,9 +1048,9 @@
 }
 
 .turn-copy {
-  width: 22px;
-  height: 22px;
-  margin: 0 -6px 0 -4px;
+  width: 24px;
+  height: 24px;
+  margin: 0 -7px 0 -5px;
   color: var(--text-3);
 }
 
@@ -1035,19 +1064,23 @@
   font-size: var(--font-size-md);
 }
 
+/* Its words in line with the column's, its fill and focus ring reaching past them, as a row's do. */
 .work-head {
   display: flex;
   align-items: center;
   gap: 6px;
-  max-width: 100%;
-  padding: 2px 0;
+  max-width: calc(100% + 12px);
+  padding: 2px 6px;
+  margin-left: -6px;
   border: 0;
+  border-radius: var(--radius-sm);
   background: none;
   color: var(--text-3);
   text-align: left;
 }
 
 .work-head:hover {
+  background: var(--bg-hover);
   color: var(--text-2);
 }
 
@@ -1085,7 +1118,7 @@
   display: flex;
   align-items: center;
   gap: 5px;
-  font-size: var(--font-size-md);
+  font-size: inherit;
   color: inherit;
 }
 
@@ -1107,10 +1140,19 @@
   border-top: 1px solid var(--border);
 }
 
-/* What the model says between its calls reads as itself, not as a row. */
+/*
+ * What the model says between its calls reads as itself, not as a row: prose, as the answer is, but quieter once
+ * logged, so the answer after the work stands out. A step still streaming may be the answer, so it keeps the text's color.
+ */
 .work-body > .md,
 .work-body > .assistant > .md {
   margin: 6px 0;
+  font-size: var(--font-size-base);
+}
+
+.work-body > .md,
+.work-body > .assistant:not(.draft) > .md {
+  color: var(--text-2);
 }
 
 .work-group-body {

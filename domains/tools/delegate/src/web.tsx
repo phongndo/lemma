@@ -4,7 +4,7 @@ import { AgentChannels } from "@lemma/agent";
 import type { SessionInfo } from "@lemma/sessions";
 import { ComposerNotices, ContextViews, sessionTitle, ThreadHeader, Threads, ThreadWaits, ToolViews, waitingOn } from "@lemma/threads";
 import type { ContextViewProps, ThreadsService, ToolBodyProps, ToolDisplaysProps } from "@lemma/threads";
-import { AgentIcon, Avatar, ChevronDownIcon, ChevronIcon, Icon, StopIcon } from "@lemma/look";
+import { AgentIcon, Avatar, ChevronIcon, Icon, StopIcon } from "@lemma/look";
 import { Client, Slots, defineWebPlugin, usePlugin } from "@lemma/web";
 import type { SlotsService } from "@lemma/web";
 import { createNow } from "@lemma/web/now";
@@ -228,6 +228,8 @@ export default defineWebPlugin({
       const [open, setOpen] = createSignal(false);
       const agents = createMemo(() => props.calls.map((call) => callAgent(call)));
       const status = createMemo(() => groupStatus(agents().map((agent) => agent.state)));
+      /** Done, and not all well: its line notes the failure as the chat's work lines do, with a dot. */
+      const failed = () => !status().active && agents().some((agent) => agent.state === "failed");
       const since = createMemo(() => Math.min(...agents().map((agent) => agent.session?.createdAt ?? Number.POSITIVE_INFINITY)));
       const until = createMemo(() => Math.max(...agents().map((agent) => agent.session?.updatedAt ?? 0)));
       return (
@@ -236,13 +238,13 @@ export default defineWebPlugin({
             <Stack seeds={agents().flatMap((agent) => (agent.session === undefined ? [] : [agent.session.id]))} states={agents().map((agent) => agent.state)} />
             <span class="agent-text">
               <span class="agent-title">{agentsLabel(props.calls.length)}</span>
-              <span class="agent-group-status" classList={{ active: status().active }}>
+              <span class="agent-group-status" classList={{ active: status().active, failed: failed() }}>
                 {status().label}
               </span>
             </span>
             <span class="agent-time">{Number.isFinite(since()) ? (status().active ? elapsed(since(), now()) : elapsed(since(), until())) : ""}</span>
             <span class="agent-group-chevron" aria-hidden="true">
-              <ChevronDownIcon />
+              <ChevronIcon />
             </span>
           </button>
           <Show when={open()}>

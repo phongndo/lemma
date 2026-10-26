@@ -207,6 +207,12 @@
   background: var(--bg-active);
 }
 
+/* On a filled row, what a model offers steps up a shade, so it still reads, as a menu's hint does. */
+.model-row[aria-selected="true"] .model-meta,
+.model-row[data-active="true"] .model-meta {
+  color: var(--text-2);
+}
+
 .model-current {
   display: inline-grid;
   place-items: center;
@@ -251,6 +257,32 @@
 .model-star .icon {
   width: 14px;
   height: 14px;
+}
+
+/* Under the list: the keys it takes beyond a menu's, as plain text, as the palette's footer has them. */
+.model-foot {
+  flex: none;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 14px;
+  padding: 6px 12px;
+  border-top: 1px solid var(--border);
+  color: var(--text-3);
+  font-size: var(--font-size-xs);
+}
+
+.model-foot kbd {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font-family: var(--font-ui);
+  font-size: inherit;
+}
+
+.model-foot kbd + kbd {
+  margin-left: 4px;
 }
 
 /* At the search's end: connecting another provider, quieter than the search. */
