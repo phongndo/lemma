@@ -3,6 +3,8 @@ import type { AssistantMessage, LlmFailure, ThinkingLevel, ToolCall, ToolResultM
 import type { HandlerCredit, ResultCredit } from "@lemma/contracts";
 import { createMessageCount } from "./derive.ts";
 import type { Contribution, EventData, ProviderAnswer, RequestRestart, SectionUpdate, SessionEvent, Timing, TurnEndReason } from "./sessions.ts";
+import { createTurnProjector } from "./turns.ts";
+import type { TurnFold } from "./turns.ts";
 
 /**
  * The trajectory of a branch: per turn, per step, what the model was sent,
@@ -276,14 +278,6 @@ interface MutableTurn {
   usage: Usage;
 }
 
-/** A branch's trajectory as it is read, an event at a time: `trajectory` reads a branch whole, and a projector as it grows. */
-interface TrajectoryFold {
-  /** The turns so far, changed in place as events are fed. */
-  readonly turns: MutableTurn[];
-  /** Folds in `branch[position]`, every event before it fed already; returns the ids of the turns it may change. */
-  readonly feed: (branch: readonly SessionEvent[], position: number) => readonly string[];
-}
-
 /** Turns in branch order. Events outside a turn (titles, compactions) are not part of it. */
 export function trajectory(branch: readonly SessionEvent[]): TrajectoryTurn[] {
   const fold = foldTrajectory();
@@ -291,11 +285,13 @@ export function trajectory(branch: readonly SessionEvent[]): TrajectoryTurn[] {
   return fold.turns;
 }
 
-/** A fold of a branch's events into its turns. */
-function foldTrajectory(): TrajectoryFold {
+/** A branch's trajectory as it is read, an event at a time: `trajectory` reads a branch whole, and a projector as it grows. */
+function foldTrajectory(): TurnFold<MutableTurn> & { readonly turns: MutableTurn[] } {
   const turns: MutableTurn[] = [];
   const turnById = new Map<string, MutableTurn>();
   const stepById = new Map<string, MutableStep>();
+  /** The turn each step is in, by its id: an event names a step by its id alone. */
+  const turnOfStep = new Map<string, MutableTurn>();
   // Resolved header state, as `requestState` folds it, plus what the previous request contributed.
   let system: string | undefined;
   let contributions: readonly Contribution[] = [];
@@ -339,20 +335,20 @@ function foldTrajectory(): TrajectoryFold {
     if (previous !== undefined) previous.after = { kind: "step" };
     turn.steps.push(step);
     stepById.set(stepId, step);
+    turnOfStep.set(stepId, turn);
     return step;
   };
 
-  const feed = (branch: readonly SessionEvent[], position: number): readonly string[] => {
+  const feed = (branch: readonly SessionEvent[], position: number): MutableTurn[] => {
     const event = branch[position]!;
     history.note(branch, position);
     const data = event.data;
-    // The turn it names, and the one whose step it names: a step is found by its id alone.
+    // The turn it names, and the one whose step it names: what it may change.
     const named = (data as { readonly turnId?: string }).turnId;
     const stepId = (data as { readonly stepId?: string }).stepId;
-    const owner = stepId === undefined ? undefined : stepById.get(stepId)?.turnId;
-    const changes = [...(named === undefined ? [] : [named]), ...(owner === undefined ? [] : [owner])];
+    const changes = [named === undefined ? undefined : turnById.get(named), stepId === undefined ? undefined : turnOfStep.get(stepId)];
     apply(event, data);
-    return changes;
+    return changes.filter((turn) => turn !== undefined);
   };
   const apply = (event: SessionEvent, data: EventData): void => {
     switch (data.type) {
@@ -538,32 +534,11 @@ const settledTurn = (turn: MutableTurn): TrajectoryTurn => ({
 });
 
 /**
- * `trajectory` for one branch as it grows, as a view following a thread reads it: given the branch it had with more at
- * the end, it folds in only the events appended, and the turns they did not touch are the objects it returned before
- * (`createLedgerProjector` keeps their records). Unlike `trajectory`'s, the turns it returns never change.
+ * `trajectory` for one branch as it grows, as a view following a thread reads it (`createTurnProjector`): given the
+ * branch it had with more at the end, it folds in only the events appended, and the turns they did not touch are the
+ * objects it returned before (`createLedgerProjector` keeps their records). Unlike `trajectory`'s, the turns it returns
+ * never change.
  */
 export function createTrajectoryProjector(): (branch: readonly SessionEvent[]) => readonly TrajectoryTurn[] {
-  // `read`: how many of the branch's events were fed, as a caller may grow the branch it passed in place since.
-  let last:
-    | {
-        readonly read: number;
-        readonly first: SessionEvent | undefined;
-        readonly end: SessionEvent | undefined;
-        readonly fold: TrajectoryFold;
-        readonly turns: readonly TrajectoryTurn[];
-      }
-    | undefined;
-  return (branch) => {
-    const read = last?.read ?? 0;
-    // Grown at its end, whether a new array or the one before grown in place.
-    const appended = last !== undefined && read > 0 && branch.length >= read && branch[0] === last.first && branch[read - 1] === last.end;
-    if (appended && branch.length === read) return last!.turns;
-    const fold = appended ? last!.fold : foldTrajectory();
-    /** The turns the events fed may change; all of them, folded afresh. */
-    const touched = new Set<string>();
-    for (let position = appended ? read : 0; position < branch.length; position++) for (const turnId of fold.feed(branch, position)) touched.add(turnId);
-    const turns = fold.turns.map((turn, at) => (appended && !touched.has(turn.turnId) && last!.turns[at] !== undefined ? last!.turns[at]! : settledTurn(turn)));
-    last = { read: branch.length, first: branch[0], end: branch.at(-1), fold, turns };
-    return turns;
-  };
+  return createTurnProjector(foldTrajectory, settledTurn);
 }
