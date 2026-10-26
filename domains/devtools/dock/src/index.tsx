@@ -1,6 +1,6 @@
 import { For, Show, createEffect, createSignal, createUniqueId } from "solid-js";
 import { dragEdge } from "@lemma/web/drag";
-import { radioStep, typing, withKeys } from "@lemma/web/keys";
+import { radioGroupKey, typing, withKeys } from "@lemma/web/keys";
 import { shownKeys, Actions } from "@lemma/actions";
 import { Docks } from "@lemma/frame";
 import { Client, HostPlugins, Router, Slots, WebPlugins, defineWebPlugin, Contained } from "@lemma/web";
@@ -80,21 +80,11 @@ export default defineWebPlugin({
       };
       // The tabs are one Tab stop, the shown one's; arrows, Home, and End move between them, as a tab list's do.
       const id = createUniqueId();
-      let strip!: HTMLDivElement;
-      const tabKeys = (event: KeyboardEvent) => {
-        // A tab's own keys: not on the close button beside them, nor with a modifier (Alt+← is back).
-        if (event.key === "ArrowUp" || event.key === "ArrowDown" || event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
-        if (!(event.target instanceof Element) || !event.target.matches('[role="tab"]')) return;
-        const list = panels();
-        const index = radioStep(
-          event.key,
-          list.findIndex((item) => item.id === current()?.id),
-          list.length,
-        );
-        if (index === undefined || list[index] === undefined) return;
-        event.preventDefault();
-        setPanel(list[index].id);
-        strip.querySelectorAll<HTMLElement>("[role=tab]")[index]?.focus();
+      const tabKeys = (event: KeyboardEvent & { currentTarget: HTMLDivElement }) => {
+        // ← → Home End, from the tab focused (not the close button beside them); ↑ and ↓ are a panel's rows'.
+        if (event.key === "ArrowUp" || event.key === "ArrowDown") return;
+        const item = panels()[radioGroupKey(event, undefined, "tab") ?? -1];
+        if (item !== undefined) setPanel(item.id);
       };
       // "/" (when not typing) and Ctrl/Cmd+F go to the shown panel's filter, as in a browser's devtools, never to the
       // app's (the prompt, the thread's find bar), which leaves a key handled here alone. A panel without one has none.
@@ -134,7 +124,7 @@ export default defineWebPlugin({
             onDblClick={() => fit(HEIGHT)}
             onKeyDown={resizeKeys}
           />
-          <div class="dt-tabs" role="tablist" aria-label="Devtools panels" ref={strip} onKeyDown={tabKeys}>
+          <div class="dt-tabs" role="tablist" aria-label="Devtools panels" onKeyDown={tabKeys}>
             <For each={panels()}>
               {(item) => (
                 <button

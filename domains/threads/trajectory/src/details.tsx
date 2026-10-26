@@ -7,7 +7,7 @@ import { RECORD_KIND_LABEL, promptDiff, rebuildRequest, recordRequest } from "@l
 import type { AssistantRecord, LedgerRecord, SystemRecord, Timing, TrajectoryRequest } from "@lemma/sessions";
 import { inputTokens } from "./scale.ts";
 import { clockTime } from "@lemma/web/format";
-import { radioStep } from "@lemma/web/keys";
+import { radioGroupKey } from "@lemma/web/keys";
 import { ToolViews, TrajectoryTabs, formatThroughput, throughput } from "@lemma/threads";
 import { CopyIcon, Markdown, XIcon } from "@lemma/look";
 import { Contained, usePlugin } from "@lemma/web";
@@ -500,26 +500,17 @@ export function createDetails(view: View) {
     const active = () => props.tabs.find((candidate) => candidate.id === tab()) ?? props.tabs[0];
     // One Tab stop, the shown tab's; ← and → (Home, End) move between them, as a tab list's do.
     const id = createUniqueId();
-    let strip!: HTMLDivElement;
-    const onKeyDown = (event: KeyboardEvent) => {
-      // A tab's own keys: not on the controls beside them (the close button), nor with a modifier (Alt+← is back).
-      if (event.key === "ArrowUp" || event.key === "ArrowDown" || event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
-      if (!(event.target instanceof Element) || !event.target.matches('[role="tab"]')) return;
-      const index = radioStep(
-        event.key,
-        props.tabs.findIndex((candidate) => candidate.id === active()?.id),
-        props.tabs.length,
-      );
-      const next = index === undefined ? undefined : props.tabs[index];
+    const onKeyDown = (event: KeyboardEvent & { currentTarget: HTMLDivElement }) => {
+      // ← → Home End, from the tab focused (not the close button beside them); ↑ and ↓ move the selection.
+      if (event.key === "ArrowUp" || event.key === "ArrowDown") return;
+      const next = props.tabs[radioGroupKey(event, undefined, "tab") ?? -1];
       if (next === undefined) return;
-      event.preventDefault();
       event.stopPropagation();
       setTab(next.id);
-      strip.querySelector<HTMLElement>(`[data-tab="${CSS.escape(next.id)}"]`)?.focus();
     };
     return (
       <>
-        <div class="dt-tabs" role="tablist" aria-label="Event details" ref={strip} onKeyDown={onKeyDown}>
+        <div class="dt-tabs" role="tablist" aria-label="Event details" onKeyDown={onKeyDown}>
           {props.lead}
           <For each={props.tabs}>
             {(candidate, index) => (
