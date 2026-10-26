@@ -3560,6 +3560,9 @@ importers:
       '@lemma/web':
         specifier: workspace:*
         version: link:../../../packages/web
+      '@lemma/workspace':
+        specifier: workspace:*
+        version: link:../../workspace/contract
       effect:
         specifier: 4.0.5
         version: 4.0.5
@@ -3567,6 +3570,9 @@ importers:
       '@lemma/tools-registry':
         specifier: workspace:*
         version: link:../registry
+      '@lemma/workspace-search-fff':
+        specifier: workspace:*
+        version: link:../../workspace/search-fff
       '@types/node':
         specifier: 24.19.2
         version: 24.19.2
@@ -3787,6 +3793,9 @@ importers:
 
   domains/workspace/contract:
     dependencies:
+      '@ff-labs/fff-node':
+        specifier: 0.11.0
+        version: 0.11.0
       '@lemma/contracts':
         specifier: workspace:*
         version: link:../../../packages/contracts

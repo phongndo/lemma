@@ -5,7 +5,7 @@ import type { GrepCursor, GrepMode, Result } from "@ff-labs/fff-node";
 import { keepHead, outputBudget } from "@lemma/tools";
 import type { Tool, ToolResult } from "@lemma/tools";
 import { text, throwIfAborted } from "@lemma/tools/files";
-import type { Finder, Indexes } from "./indexes.ts";
+import type { FffIndex, FffIndexesService } from "@lemma/workspace/fff";
 import { scopeOf } from "./scope.ts";
 
 export const DEFAULT_GREP_LIMIT = 20;
@@ -86,7 +86,7 @@ const offsetOf = (cursor: string | undefined): number => {
 const grepCursor = (offset: number): GrepCursor => ({ __brand: "GrepCursor", _offset: offset });
 
 /** Waits for a new index's first scan, up to `SCAN_WAIT_MS` or until the call is cancelled; true while it still runs. */
-async function scanned(finder: Finder, signal: AbortSignal): Promise<boolean> {
+async function scanned(finder: FffIndex, signal: AbortSignal): Promise<boolean> {
   if (finder.isScanning()) {
     let stop!: () => void;
     const cancelled = new Promise<void>((resolve) => {
@@ -141,7 +141,7 @@ const modeOf = (pattern: string): GrepMode => {
   }
 };
 
-export const grepTool = (indexes: Indexes): Tool<GrepInput> => ({
+export const grepTool = (indexes: FffIndexesService): Tool<GrepInput> => ({
   name: "grep",
   description: `Search file contents, in the working directory or path, leaving out what .gitignore ignores. A pattern is plain text unless it is a valid regex using regex syntax; case is ignored unless the pattern has a capital letter or caseSensitive is set. When a plain pattern matches nothing, close fuzzy matches are shown instead. Files changed recently come first, and files git sees changed are tagged; matches within a file stay in order. Prefer a bare identifier as the pattern. Narrow with path ('src', '*.ts') and drop noise with exclude ('test/,*.min.js'). After one or two searches, read the best match rather than searching again. Returns up to ${DEFAULT_GREP_LIMIT} matches by default.`,
   input: GrepInput,
@@ -213,7 +213,7 @@ export const grepTool = (indexes: Indexes): Tool<GrepInput> => ({
   },
 });
 
-export const findTool = (indexes: Indexes): Tool<FindInput> => ({
+export const findTool = (indexes: FffIndexesService): Tool<FindInput> => ({
   name: "find",
   description: `Find files by path. Fuzzy and typo-tolerant, it matches the whole path relative to the working directory, not just the file name: 'profile' finds chrome/browser/profiles/x.cc too. More words narrow it, in any order; keep to one or two. Use it first when the user names a concept, feature, or file. For an exact name use a glob in path ('**/profile.h', 'src/**/*.ts'); an empty pattern with a folder as path lists the folder. For contents, use grep. Files changed recently rank higher, and files git sees changed are tagged. Returns up to ${DEFAULT_FIND_LIMIT} files by default, and only a few when the best match is weak.`,
   input: FindInput,

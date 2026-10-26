@@ -8,8 +8,10 @@ import { makeCore } from "@lemma/core";
 import { ToolRunner } from "@lemma/tools";
 import { attempt, call, context, textOf } from "@lemma/tools/testing";
 import registry from "@lemma/tools-registry";
-import search, { findTool, grepTool, makeIndexes } from "../src/index.ts";
-import type { Finder, Indexes, SearchDetails } from "../src/index.ts";
+import fileSearch, { makeIndexes } from "@lemma/workspace-search-fff";
+import type { Indexes } from "@lemma/workspace-search-fff";
+import search, { findTool, grepTool } from "../src/index.ts";
+import type { SearchDetails } from "../src/index.ts";
 
 beforeAll(() => {
   process.env.GIT_CONFIG_GLOBAL = "/dev/null";
@@ -155,7 +157,7 @@ describe("the plugin", () => {
     const listed = await Effect.runPromise(
       Effect.scoped(
         Effect.gen(function* () {
-          const core = yield* makeCore([registry, search]);
+          const core = yield* makeCore([registry, fileSearch, search]);
           return yield* core.run(Effect.flatMap(ToolRunner, (runner) => runner.list));
         }),
       ),
@@ -167,48 +169,5 @@ describe("the plugin", () => {
     const grepSpec = listed.find((tool) => tool.spec.name === "grep")!.spec.parameters;
     expect(grepSpec).toMatchObject({ type: "object", required: ["pattern"] });
     expect(JSON.stringify(listed)).not.toContain("$schema");
-  });
-});
-
-describe("the indexes", () => {
-  const fake = (): Finder & { destroyed: number } => {
-    const finder = {
-      destroyed: 0,
-      grep: () => ({ ok: false as const, error: "unused" }),
-      fileSearch: () => ({ ok: false as const, error: "unused" }),
-      isScanning: () => false,
-      waitForScan: async () => ({ ok: true as const, value: true }),
-      getScanProgress: () => ({ ok: true as const, value: { scannedFilesCount: 3, isScanning: false, isWatcherReady: true, isWarmupComplete: true } }),
-      destroy: () => {
-        finder.destroyed++;
-      },
-    };
-    return finder;
-  };
-
-  it("opens one per directory for calls that arrive together, and closes it once idle", async () => {
-    const opened: string[] = [];
-    const finder = fake();
-    const pool = makeIndexes({ idleMs: 20, open: async (root) => (opened.push(root), finder) });
-    await Promise.all([pool.use("/a", async () => undefined), pool.use("/a", async () => undefined)]);
-    expect(opened).toEqual(["/a"]);
-    expect(await pool.snapshot()).toMatchObject([{ root: "/a", files: 3, searching: 0 }]);
-    await vi.waitFor(() => expect(finder.destroyed).toBe(1), { timeout: 2_000, interval: 5 });
-    expect(await pool.snapshot()).toEqual([]);
-  });
-
-  it("tries a failed open again on the next call", async () => {
-    let attempts = 0;
-    const pool = makeIndexes({
-      idleMs: 60_000,
-      open: async () => {
-        attempts++;
-        if (attempts === 1) throw new Error("no native library");
-        return fake();
-      },
-    });
-    await expect(pool.use("/a", async () => undefined)).rejects.toThrow("File search is unavailable here: no native library");
-    await expect(pool.use("/a", async () => "ok")).resolves.toBe("ok");
-    pool.close();
   });
 });

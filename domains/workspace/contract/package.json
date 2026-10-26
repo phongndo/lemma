@@ -2,10 +2,11 @@
   "name": "@lemma/workspace",
   "version": "0.1.0",
   "private": true,
-  "description": "The workspace domain's contract: projects, git, directories, and file search",
+  "description": "The workspace domain's contract: projects, git, directories, and file search; fff's indexes for plugins that search with them (`/fff`)",
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
+    "./fff": "./src/fff.ts",
     "./web": "./src/web/index.ts"
   },
   "scripts": {
@@ -13,6 +14,7 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@ff-labs/fff-node": "0.11.0",
     "@lemma/contracts": "workspace:*",
     "@lemma/core": "workspace:*",
     "@lemma/frame": "workspace:*",
