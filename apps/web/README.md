@@ -230,7 +230,7 @@ what it follows or subscribes to ends when it stops, and a call it made rejects 
 answer into a plugin that is gone. A
 `config` Schema (from `api.Schema`, which is Effect's Schema as it is) becomes
 the plugin's settings form. `styles` apply while it runs.
-`api: 4` says which version of
+`api: 5` says which version of
 the contracts it is written for (`contracts.WEB_API`), so a later incompatible
 version leaves it out, saying so, rather than letting it fail at a call;
 `routes` lists the routes it shows pages at, so their addresses name it while
