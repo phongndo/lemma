@@ -48,12 +48,15 @@ Use:
   plugin that contributed it.
 - Document a contract where it is declared. A README holds what a user or
   plugin author needs: use, configuration, constraints, and reasons the code
-  does not show. It links to other docs rather than repeating them.
+  does not show. It links to other docs rather than repeating them. Write docs
+  and comments in plain sentences, one fact to a sentence, leading with what
+  the reader does.
 
 ## Verification
 
 `nix develop -c pnpm check` and `nix develop -c pnpm test` run locally without
 credentials; run them, and the focused package tests while working, without
 asking. A web app change also runs `ui:check` ([its AGENTS.md](apps/web/AGENTS.md)).
-Commit and push from inside `nix develop` so the hooks run. Report the commands run and
-any failing or blocked checks.
+Commit and push from inside `nix develop` so the hooks run. A commit or pull
+request subject says what changed in plain words, in 72 characters or fewer;
+the body says why. Report the commands run and any failing or blocked checks.

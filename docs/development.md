@@ -296,13 +296,6 @@ build never reaches your sessions and settings. Each has its own
   instead. Log in to a provider there once.
 - Every checkout shares `~/.lemma-dev`, which has one host at a time.
 
-## Writing
-
-- Keep commit and pull request subjects to 72 characters or fewer, in plain
-  words. Put the details in the body.
-- Write docs in plain sentences, one fact per sentence. Lead with the command
-  or the action, and put lists in bullets or tables.
-
 ## Releases
 
 A release is an archive for each platform ([installation](installation.md)).
