@@ -7,7 +7,7 @@ import { CliChecks } from "@lemma/cli";
 import type { CheckOutcome } from "@lemma/cli";
 import { Channels, Notice, resultOf } from "@lemma/contracts";
 import type { ChannelCall } from "@lemma/contracts";
-import { pathsPlugin } from "@lemma/contracts/testing";
+import { hostControlPlugin, pathsPlugin } from "@lemma/contracts/testing";
 import { Events, makeCore, Registries } from "@lemma/core";
 import { ReleaseChannels } from "@lemma/release";
 import type { ReleaseStatus, UpdateResult } from "@lemma/release";
@@ -63,18 +63,24 @@ const release = (fields: Record<string, unknown> = {}) => ({
 /** What the installer's `lemma update --check` answers: its own version, the channel it follows, and that channel's newest. */
 const checked = (newest: string, channel = "nightly", version = "0.2.7") => ({ version, channel, newest, newer: false });
 
-/** Runs the plugin over the stand-ins, handing `body` its channels, its doctor check, and the notices it publishes. */
+/**
+ * Runs the plugin over the stand-ins, in a host `startedBy` started, handing `body` its channels, its doctor check, and
+ * the notices it publishes.
+ */
 const withPlugin = <A>(
   body: (plugin: {
     readonly channels: Record<keyof typeof ReleaseChannels, ChannelCall>;
     readonly doctor: Effect.Effect<CheckOutcome, unknown>;
     readonly notices: readonly { readonly level: string; readonly message: string }[];
   }) => Effect.Effect<A, unknown>,
+  startedBy?: string,
 ) =>
   Effect.runPromise(
     Effect.scoped(
       Effect.gen(function* () {
-        const core = yield* makeCore([pathsPlugin(join(dir, "home")), updates], { configs: { "release.updates": { cli: join(dir, "lemma"), check: false } } });
+        const core = yield* makeCore([pathsPlugin(join(dir, "home")), hostControlPlugin([], startedBy), updates], {
+          configs: { "release.updates": { cli: join(dir, "lemma"), check: false } },
+        });
         return yield* core.run(
           Effect.gen(function* () {
             const notices: { level: string; message: string }[] = [];
@@ -304,6 +310,21 @@ describe("release.updates", () => {
     expect(await withPlugin(({ channels }) => resultOf(channels.update, {}))).toEqual({ version: "0.2.9", updated: true, restarting: true });
     await settled(() => readFile(join(dir, "restarted"), "utf8"), undefined, 10_000);
     expect(await asked()).toContain("link restart --force");
+  });
+
+  it("says to reopen the app Homebrew's cask replaced when the host runs in it", async () => {
+    await write(
+      "version.json",
+      release({ installer: "homebrew-cask", update: "brew upgrade --cask phongndo/tap/lemma", channel: "stable", dataDir: undefined }),
+    );
+    await write("update.json", { updated: true, version: "0.2.9", reopen: true, command: join(dir, "link") });
+    expect(await withPlugin(({ channels }) => resultOf(channels.update, {}), "desktop")).toEqual({
+      version: "0.2.9",
+      updated: true,
+      restarting: false,
+      reopen: true,
+    });
+    expect(await asked()).not.toContain("link restart --force");
   });
 
   it("tells of a newer release for Nix's, with how to update it, and replaces nothing", async () => {

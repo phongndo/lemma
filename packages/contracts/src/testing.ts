@@ -29,8 +29,11 @@ export const pathsPlugin = (home: string, paths: Partial<Context.Service.Shape<t
       }),
   });
 
-/** A plugin providing `HostControl` with `plugins` as its plugins, for a plugin that reads them; the rest is unused. */
-export const hostControlPlugin = (plugins: readonly PluginInfo[] = []) =>
+/**
+ * A plugin providing `HostControl` with `plugins` as its plugins, and `startedBy` as what started the host, for a plugin
+ * that reads them; the rest is unused.
+ */
+export const hostControlPlugin = (plugins: readonly PluginInfo[] = [], startedBy?: string) =>
   definePlugin({
     id: "host",
     provides: { host: HostControl },
@@ -38,7 +41,7 @@ export const hostControlPlugin = (plugins: readonly PluginInfo[] = []) =>
       Effect.succeed({
         host: {
           runtime: [HostControl.key],
-          process: { pid: process.pid, startedAt: 0 },
+          process: { pid: process.pid, startedAt: 0, ...(startedBy === undefined ? {} : { startedBy }) },
           plugins: Effect.succeed(plugins),
           composition: Effect.succeed({ id: "test", plugins: [] }),
           restart: () => Effect.succeed({}),

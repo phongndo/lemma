@@ -16,7 +16,8 @@ import { settled } from "./e2e.ts";
  * outside the checkout, with a `node` on PATH that fails (dist-trial.ts): the AppImage itself, the Debian package by
  * its desktop entry, unpacked or, with `--installed`, as apt installed it, or the app in its disk image. It starts a
  * host from the release it carries, on Electron, which does what every release's host does (dist-trial.ts); quitting
- * the app stops that host. Linux needs a display (`xvfb-run`).
+ * the app stops that host. Then the app's own `lemma` starts one, on the app's Electron as Node.js, which does the same
+ * (not an AppImage's, whose files go once it quits). Linux needs a display (`xvfb-run`).
  *
  *   pnpm dist:desktop:check dist/lemma-desktop-v0.2.7-linux-x64.AppImage
  *   sudo apt install ./dist/lemma-desktop-v0.2.7-linux-x64.deb && pnpm dist:desktop:check --installed dist/lemma-desktop-v0.2.7-linux-x64.deb
@@ -108,8 +109,19 @@ try {
   assert.ok(quit, `the app did not quit within ${QUIT_MS / 1000} s:\n${app.output()}`);
   assert.ok(await settled(async () => (alive(host!) ? undefined : true), undefined, 30_000), "quitting the app stops its host");
   assert.ok(!existsSync(join(trial.lemmaHome, "desktop.json")), "a quit app no longer says it runs");
+
+  // A host the app's `lemma` starts itself, as the cask's does in a terminal: on the app's Electron run as Node.js, in
+  // the foreground and again in the background (`lemma restart`). Not the AppImage's, whose files went with it.
+  const own = existsSync(lemma);
+  if (own) {
+    trial.launch(lemma, ["serve", "--no-open"]);
+    await settled(() => trial.command(lemma, ["status"]), undefined, 60_000);
+    host = (JSON.parse(await trial.command(lemma, ["restart", "--json"])) as { pid: number }).pid;
+    await trial.checkHost(lemma, version);
+    await trial.command(lemma, ["stop"]);
+  }
   console.log(
-    `desktop (${format}${values.installed ? ", installed" : ""}): the window, its host, plugins, web app, file search, the agent's CLI, a turn, and quitting passed`,
+    `desktop (${format}${values.installed ? ", installed" : ""}): the window, its host, plugins, web app, file search, the agent's CLI, a turn, and quitting${own ? ", and the host its lemma starts," : ""} passed`,
   );
 } finally {
   await trial.stop();

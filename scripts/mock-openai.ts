@@ -99,7 +99,7 @@ const server = createServer((request, response) => {
         ? "echo started && while kill -0 $PPID 2>/dev/null; do sleep 0.1; done && echo finished"
         : prompt.includes("tally")
           ? `echo ${id} >> tally.log && sleep 0.5 && echo tallied ${id}`
-          : "echo hello from lemma, INIT_CWD=${INIT_CWD:-unset} && uname -s";
+          : "echo hello from lemma, INIT_CWD=${INIT_CWD:-unset}, ELECTRON_RUN_AS_NODE=${ELECTRON_RUN_AS_NODE:-unset} && uname -s";
       send(chunk({ content: "Let me check with bash." }));
       await pause(40);
       send(chunk({ tool_calls: [{ index: 0, id, type: "function", function: { name: "bash", arguments: "" } }] }));

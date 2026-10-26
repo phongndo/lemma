@@ -253,8 +253,9 @@ app from its archive in `dist/` (`scripts/dist-desktop.ts` says what it holds):
 a disk image on macOS, and an AppImage and a Debian package on Linux, which
 builds either architecture's. `nix develop .#desktop -c pnpm dist:desktop:check`
 opens one as a user would, outside the checkout, and runs it: its window, the
-host it starts on Electron, what that host does as the archive's does, and
-quitting (`scripts/dist-desktop-check.ts`; on Linux in a virtual display,
+host it starts on Electron, what that host does as the archive's does,
+quitting, and then a host the app's own `lemma` starts, on its Electron run as
+Node.js (`scripts/dist-desktop-check.ts`; on Linux in a virtual display,
 `xvfb-run -a` before `pnpm`). With `--installed`, it opens the Debian package
 apt installed. The `desktop` shell brings what Linux needs for both: nixpkgs'
 fpm for the Debian package, and on NixOS the libraries Electron loads through

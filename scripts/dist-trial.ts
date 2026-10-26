@@ -151,6 +151,11 @@ export const startTrial = async (name: string): Promise<Trial> => {
       turn.some((line) => line.includes("hello from lemma")),
       "the turn's tool ran",
     );
+    // The desktop app's lemma runs on its Electron as Node.js (scripts/dist-desktop.ts), which its shells must not.
+    assert.ok(
+      turn.some((line) => line.includes("ELECTRON_RUN_AS_NODE=unset")),
+      "the agent's shell is not told to run Electron as Node.js",
+    );
     assert.deepEqual(
       (({ type, reason, toolCalls }) => ({ type, reason, toolCalls }))(JSON.parse(turn.at(-1)!)),
       { type: "result", reason: "done", toolCalls: 1 },

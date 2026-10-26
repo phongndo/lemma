@@ -2,6 +2,7 @@
 import { spawn } from "node:child_process";
 import { createInterface } from "node:readline";
 import { run } from "./cli.ts";
+import { nodeCommand } from "./release.ts";
 
 const argv = process.argv.slice(2);
 // `lemma sessions inspect … | head` closes the pipe early; that ends the output, it is not a failure.
@@ -108,7 +109,8 @@ process.exitCode = await run(argv, {
     await import(hostModule);
   },
   // The script node started, `bin/lemma.js` when that chose this: a host started again (`serve --detach`, a service) chooses again.
-  self: [process.execPath, ...process.execArgv, process.argv[1]!],
+  // On the release's Node.js (`nodeCommand`), which in the desktop app is not `process.execPath`, the app.
+  self: [nodeCommand, ...process.execArgv, process.argv[1]!],
 });
 // Whatever still holds the event loop (a socket closing) does not keep an interrupted command alive.
 if (interrupt.signal.aborted) process.exit();
