@@ -8,6 +8,7 @@
     ".": "./src/index.ts",
     "./addresses": "./src/addresses.ts",
     "./discovery": "./src/discovery.ts",
+    "./frontmatter": "./src/frontmatter.ts",
     "./fs": "./src/fs.ts",
     "./profiles": "./src/profiles.ts",
     "./testing": "./src/testing.ts"

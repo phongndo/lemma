@@ -9,7 +9,7 @@ import { SkillChannels, SKILLS_CONTRACT } from "@lemma/skills";
 import { Config } from "./config.ts";
 import { expandHome, makeSkillFinder, mentionedSkills, skillBlock, skillsSection } from "./skills.ts";
 
-export { parseSkill, makeSkillFinder, mentionedSkills, skillBlock, skillsSection } from "./skills.ts";
+export { makeSkillFinder, mentionedSkills, skillBlock, skillsSection } from "./skills.ts";
 
 /** The names of a project's skill directories, looked for in a session's directory and each above it. */
 const PROJECT_DIRS = [path.join(".agents", "skills"), path.join(".lemma", "skills")];

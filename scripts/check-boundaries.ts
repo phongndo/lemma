@@ -179,6 +179,7 @@ const RUNTIME_CONTRACTS = [
   "config.ts",
   "credit.ts",
   "discovery.ts",
+  "frontmatter.ts",
   "fs.ts",
   "host.ts",
   "ids.ts",

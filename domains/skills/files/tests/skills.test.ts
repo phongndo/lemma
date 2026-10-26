@@ -9,7 +9,7 @@ import type { PromptDecision, PromptInput, SectionRequest } from "@lemma/agent";
 import type { PluginInfo } from "@lemma/contracts";
 import { hostControlPlugin, pathsPlugin } from "@lemma/contracts/testing";
 import { Sessions } from "@lemma/sessions";
-import skillsFiles, { makeSkillFinder, mentionedSkills, parseSkill, skillBlock } from "../src/index.ts";
+import skillsFiles, { makeSkillFinder, mentionedSkills, skillBlock } from "../src/index.ts";
 
 let dir: string;
 beforeEach(async () => {
@@ -24,35 +24,6 @@ const put = async (file: string, content: string) => {
   await fs.writeFile(path.join(dir, file), content);
 };
 const skill = (name: string, description: string, body = `Do ${name}.`) => `---\nname: ${name}\ndescription: ${description}\n---\n\n${body}\n`;
-
-describe("parseSkill", () => {
-  it("reads flat frontmatter: plain, quoted, continued, and block values", () => {
-    const { fields, body } = parseSkill(
-      [
-        "---",
-        "name: review",
-        'description: "Review a diff: find bugs"',
-        "summary: one",
-        "  two",
-        "folded: >-",
-        "  a",
-        "  b",
-        "literal: |",
-        "  x",
-        "  y",
-        "---",
-        "",
-        "The body.",
-      ].join("\n"),
-    );
-    expect(fields).toEqual({ name: "review", description: "Review a diff: find bugs", summary: "one two", folded: "a b", literal: "x\ny" });
-    expect(body).toBe("The body.");
-  });
-
-  it("takes a file with no frontmatter as all body", () => {
-    expect(parseSkill("Just text.\n")).toEqual({ fields: {}, body: "Just text." });
-  });
-});
 
 describe("makeSkillFinder", () => {
   it("finds the user's skills, then the project's from the root down, the nearest winning a name", async () => {

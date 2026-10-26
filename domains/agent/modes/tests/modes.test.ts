@@ -47,6 +47,17 @@ describe("a mode file", () => {
     expect(parseMode("plain", "Just a prompt.", "project")).toEqual({ name: "plain", prompt: "Just a prompt.", source: "project" });
   });
 
+  it("reads a description over several lines, continued or as a block, and lists of quoted items", () => {
+    const description = (lines: readonly string[]) => parseMode("p", ["---", ...lines, "tools: read", "---", "Body"].join("\n"), "user");
+    expect(description(["description: Drafts and edits", "  prose for the user"])).toMatchObject({
+      description: "Drafts and edits prose for the user",
+      tools: ["read"],
+    });
+    expect(description(["description: >", "  Drafts and edits", "  prose"]).description).toBe("Drafts and edits prose");
+    expect(description(["description: |", "  Drafts.", "  Edits."]).description).toBe("Drafts.\nEdits.");
+    expect(parseMode("p", '---\nsections: "*", "!project-context"\n---\n', "user").sections).toEqual(["*", "!project-context"]);
+  });
+
   it("says where it is offered: threads, agents, or both, as when it names neither", () => {
     const use = (line: string) => parseMode("p", `---\n${line}\n---\nBody`, "user").use;
     expect(use("use: agent")).toEqual(["agent"]);
