@@ -34,7 +34,9 @@ A target is one of `ref` (from the tab's latest snapshot), `locator`, `selector`
 - **Images stay in the script** unless it shows them: `browser_screenshot`
   resolves to an image block, which `image()` shows the model and an image
   classifier (`models.classify` with `images`) judges without it.
-- **`html_preview`** draws a page as the chat's `html_render` would show it:
+- **`html_preview`** draws a page as the chat's `html_render` would show it,
+  and its description sends the model to `html_render`'s for how to write one,
+  so the rules for a page's layout and theme are in one description:
   the theme `@lemma/tools/html` gives (its variables on `:root`, in the dark or
   light default), absolute paths to local images inlined
   (`inlineLocalImages` in `@lemma/tools/files`, `missingImages` naming those

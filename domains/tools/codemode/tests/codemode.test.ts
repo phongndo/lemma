@@ -21,7 +21,7 @@ import read from "@lemma/tools-read";
 import write from "@lemma/tools-write";
 import codemode, { codemodeTool } from "../src/index.ts";
 import { Journals } from "../src/journal.ts";
-import type { CodemodeDetails } from "../src/index.ts";
+import type { CodemodeDeps, CodemodeDetails } from "../src/index.ts";
 
 /** What the fake classifier was asked, by ref. */
 const asked: { ref: string; context: ClassifierContext }[] = [];
@@ -530,6 +530,12 @@ describe("classifier models", () => {
     instructions: "How does the user feel?",
     criteria: { positive: "Happy", negative: "Unhappy" },
   };
+
+  it("are described on demand, in the models namespace, rather than in the tool's description", async () => {
+    const result = await run(`const space = await describeNamespace("models"); return [space.tools, space.instructions.includes("models.classify(model")];`);
+    expect(textOf(result)).toContain("[[],true]");
+    expect(codemodeTool({} as CodemodeDeps).description).not.toContain("models.classify");
+  });
 
   it("are listed, and asked through Llm, with what each call used in the details", async () => {
     asked.length = 0;

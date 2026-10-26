@@ -1,8 +1,8 @@
 # tools.codemode
 
 The `codemode` tool: JavaScript in pi's QuickJS sandbox that calls the other
-tools, and classifier and image models. Adds it to `Tools`, and a system prompt
-section (`PromptSections`) naming the namespaces of the tools only scripts call,
+tools, and classifier and image models. Adds it to `Tools`, the `models`
+namespace to `ToolNamespaces`, and a system prompt section (`PromptSections`) naming the namespaces of the tools only scripts call,
 which it settles once a request's tools are chosen (`AgentRequestHook`); requires `ToolRunner`, which its scripts call the other tools through, `Llm`,
 which they call models through, `Sessions`, where `store()` lives, and `Paths`,
 where scripts keep their journals. No config. Its web half (`./web`) shows a
@@ -27,8 +27,11 @@ What a script has:
 | `models.classify(model, { state, images?, questions })`                           | Asks a classifier (`Llm.classify`), named by an entry, a ref, or `{ provider, id }`. A context of the wrong shape or an unknown model fails the script; a provider's failure is the result's `stopReason: "error"`. `models.classifiers({ available })` lists classifiers as `Llm.classifiers` does.                                                                                                                                                                                                               |
 | `models.generateImages(model, { input })`                                         | Makes images with an image model (`Llm.generateImages`).                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
 
-At most four `models` calls run at once per script; what they used is in the
-result's `details.usage`. Each call a script makes streams as a line of the
+How to run these models is the instructions of a `models` namespace the plugin
+adds to `ToolNamespaces` (`describeNamespace("models")`), which the tool's
+description points to, so a request that runs none does not carry them. At most
+four `models` calls run at once per script; what they used is in the result's
+`details.usage`. Each call a script makes streams as a line of the
 codemode call's own output (`✓ bash 12ms {"command":"ls"}`), and the result's
 `details.calls` keeps the first 500, in the order the script made them.
 

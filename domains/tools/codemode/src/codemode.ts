@@ -106,11 +106,21 @@ const DESCRIPTION = `Run JavaScript that calls other tools. The code is raw Java
 Globals:
 - \`text(value)\`, \`image(imageBlockOrDataUrl)\`, \`console.log(...)\`, and top-level \`return\` add output; \`exit()\` ends the script. \`image()\` also saves the image to a temp file whose path the output names.
 - \`store(key, value)\` and \`load(key)\` keep small JSON values (ids, cursors, results to reuse) across codemode calls on this branch of the session; a script's writes are kept when it succeeds.
-- \`models\` runs models that are not chat models with the session's credentials, four calls at a time:
-  - Classifiers answer typed questions about JSON state (and images, where \`input\` includes "image") with calibrated probabilities, fast and cheaply, such as TypeSafe's Jev. List them with \`await models.getAvailableOfType("classifier")\` (\`{ ref, provider, id, name, input }\`; \`getModelsOfType\` lists all, \`getModelOfType(type, provider, id)\` finds one). \`await models.classify(model, { state, images?, questions })\`, \`model\` an entry or a ref such as "typesafe/jev-latest", \`questions\` mapping ids to \`{ type: "choice", instructions, criteria: { <label>: <meaning> } }\`, \`{ type: "score", instructions, criteria: [<lowest level>, ..., <highest level>] }\`, or \`{ type: "bool", instructions, criteria: { true: <meaning>, false: <meaning> } }\`, resolves to \`{ answers, stopReason, errorMessage? }\`, answers by id: \`{ choice, probabilities, confidence }\`, \`{ score, confidence }\` (the expected level index), or \`{ probability }\` (of true). It does not throw on a provider's failure: check \`stopReason === "stop"\`. Ask about many items or steps with one call each, ask each factor of a judgment as its own question and combine the answers in code, and act only on confident answers.
-  - Image models: \`await models.getAvailableOfType("image")\`, then \`await models.generateImages(model, { input: [{ type: "text", text }, ...imageBlocks] })\` resolves to \`{ output, stopReason, errorMessage? }\`; show \`output\` images with \`image(block)\`, never print their data.
+- \`models\` runs classifier and image models with the session's credentials: read how with \`await describeNamespace("models")\` before using it.
 
 Use codemode to batch independent tool calls (Promise.allSettled), chain them, filter large output, or loop a classifier over many items or steps, instead of many separate calls.`;
+
+/**
+ * The `models` global, as a namespace a script reads with `describeNamespace("models")`: how to run classifier and image
+ * models, which the description only names, so a request that never runs one does not carry it.
+ */
+export const MODELS_NAMESPACE: ToolNamespace = {
+  name: "models",
+  description: "The models global: classifier and image models, run with the session's credentials",
+  instructions: `\`models\` runs models that are not chat models with the session's credentials, four calls at a time:
+- Classifiers answer typed questions about JSON state (and images, where \`input\` includes "image") with calibrated probabilities, fast and cheaply, such as TypeSafe's Jev. List them with \`await models.getAvailableOfType("classifier")\` (\`{ ref, provider, id, name, input }\`; \`getModelsOfType\` lists all, \`getModelOfType(type, provider, id)\` finds one). \`await models.classify(model, { state, images?, questions })\`, \`model\` an entry or a ref such as "typesafe/jev-latest", \`questions\` mapping ids to \`{ type: "choice", instructions, criteria: { <label>: <meaning> } }\`, \`{ type: "score", instructions, criteria: [<lowest level>, ..., <highest level>] }\`, or \`{ type: "bool", instructions, criteria: { true: <meaning>, false: <meaning> } }\`, resolves to \`{ answers, stopReason, errorMessage? }\`, answers by id: \`{ choice, probabilities, confidence }\`, \`{ score, confidence }\` (the expected level index), or \`{ probability }\` (of true). It does not throw on a provider's failure: check \`stopReason === "stop"\`. Ask about many items or steps with one call each, ask each factor of a judgment as its own question and combine the answers in code, and act only on confident answers.
+- Image models: \`await models.getAvailableOfType("image")\`, then \`await models.generateImages(model, { input: [{ type: "text", text }, ...imageBlocks] })\` resolves to \`{ output, stopReason, errorMessage? }\`; show \`output\` images with \`image(block)\`, never print their data.`,
+};
 
 /** Like the script's `text()`: strings as is, other values as compact JSON. */
 const valueText = (value: unknown): string => (typeof value === "string" ? value : (JSON.stringify(value) ?? String(value)));

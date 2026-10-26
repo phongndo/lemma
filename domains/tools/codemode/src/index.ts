@@ -6,11 +6,11 @@ import { Llm } from "@lemma/llm";
 import { SessionAppended, Sessions } from "@lemma/sessions";
 import { ToolNamespaces, ToolRunner, Tools } from "@lemma/tools";
 import type { ToolContribution, ToolNamespace } from "@lemma/tools";
-import { codemodeTool } from "./codemode.ts";
+import { codemodeTool, MODELS_NAMESPACE } from "./codemode.ts";
 import type { CodemodeDetails } from "./details.ts";
 import { Journals } from "./journal.ts";
 
-export { codemodeTool, CodemodeInput } from "./codemode.ts";
+export { codemodeTool, CodemodeInput, MODELS_NAMESPACE } from "./codemode.ts";
 export type { CodemodeBranch, CodemodeDeps } from "./codemode.ts";
 export type { CodemodeCallRecord, CodemodeDetails, CodemodeDisplay } from "./details.ts";
 
@@ -75,6 +75,8 @@ export default definePlugin({
           );
 
     yield* owner.add(Tools, codemodeTool({ registry: runner, llm, namespaces: () => namespaces, branch, journals, closing }));
+    // How scripts run classifier and image models, read on demand rather than in every request's description.
+    yield* owner.add(ToolNamespaces, MODELS_NAMESPACE);
     // Where codemode is offered, the namespaces of the tools it alone calls there.
     const listedIn = (tools: readonly ToolContribution[]): readonly ToolNamespace[] => {
       if (!tools.some((tool) => tool.spec.name === "codemode")) return [];
