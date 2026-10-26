@@ -12,8 +12,8 @@
 
 .theme-cards {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(118px, 1fr));
-  gap: 10px;
+  grid-template-columns: repeat(auto-fill, minmax(104px, 1fr));
+  gap: 12px;
 }
 
 .theme-card {
@@ -53,12 +53,14 @@
   outline-color: var(--card-ring);
 }
 
+/*
+ * The keyboard's focus rings the whole card, name and all, a gap outside the ring that marks the theme showing (the
+ * cards' gap leaves it room).
+ */
 .theme-card:focus-visible {
-  outline: none;
-}
-
-.theme-card:focus-visible .theme-card-sample {
-  outline-color: var(--card-ring);
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 6px;
+  border-radius: var(--radius);
 }
 
 .theme-card-top {

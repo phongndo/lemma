@@ -28,7 +28,6 @@
 
 .shortcut-row .setting-title {
   min-width: 0;
-  font-weight: 450;
 }
 
 .shortcut-category {
@@ -85,7 +84,9 @@
   color: var(--text);
 }
 
+/* After the key in the markup (Tab reaches the key first), before it on the screen. */
 .shortcut-tools {
+  order: -1;
   position: absolute;
   right: 100%;
   top: 50%;

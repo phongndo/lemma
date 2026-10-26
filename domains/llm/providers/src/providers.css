@@ -19,13 +19,9 @@
   gap: 12px;
 }
 
+/* A provider is a settings row (`.setting-row`, its logo the lead), kept compact: the list is long. */
 .provider {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  column-gap: 14px;
-  row-gap: 8px;
-  min-height: 48px;
+  min-height: 52px;
   padding: 6px 0;
 }
 
@@ -33,23 +29,8 @@
   color: var(--text);
 }
 
-.provider-info {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  min-width: 0;
-  flex: 1;
-}
-
-.provider-name {
-  font-size: var(--font-size-md);
-  font-weight: 500;
-  color: var(--text);
-}
-
+/* What it offers, on one line, cut to fit. */
 .provider-desc {
-  font-size: var(--font-size-sm);
-  color: var(--text-3);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -59,14 +40,6 @@
   flex: none;
   min-width: 76px;
   justify-content: center;
-}
-
-.provider-waiting {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  font-size: var(--font-size-sm);
-  color: var(--text-3);
 }
 
 .settings-intro {

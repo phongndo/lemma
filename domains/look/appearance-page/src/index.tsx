@@ -218,12 +218,16 @@ export default defineWebPlugin({
           <p class="callout">The appearance plugin is off, so the system scheme and Lemma's own look show. These settings apply when it is on.</p>
         </Show>
       ),
+      // Always there, so the first change moves nothing on the page; it does something once a setting is not its default.
       actions: () => (
-        <Show when={customized()}>
-          <button class="button small" data-tip="Return every appearance setting to its default" onClick={plugin.action("reset appearance", reset)}>
-            Reset
-          </button>
-        </Show>
+        <button
+          class="button small"
+          disabled={!customized()}
+          data-tip={customized() ? "Return every appearance setting to its default" : "Every appearance setting is its default"}
+          onClick={plugin.action("reset appearance", reset)}
+        >
+          Reset
+        </button>
       ),
     });
     slots.add(SettingsGroups, {

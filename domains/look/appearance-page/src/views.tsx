@@ -1,7 +1,8 @@
-import { For, Show, createSignal, onCleanup } from "solid-js";
+import { For, Index, Show, createSignal, onCleanup } from "solid-js";
 import type { Accessor } from "solid-js";
 import { fontAvailable } from "./fonts.ts";
 import { onLookChange, tokenColor } from "@lemma/web/paint";
+import { radioStep } from "@lemma/web/keys";
 import {
   CORNERS,
   SCHEMES,
@@ -45,6 +46,20 @@ const SAMPLE = [
   'import { boot } from "./ui/boot.tsx"; // the entry point',
   "```",
 ].join("\n");
+
+/**
+ * A radio group's keys, as the kit's segmented control has them: the group is one Tab stop (its checked option), and
+ * the arrows, Home, and End move the focus along its options, `pick`ing the one moved to.
+ */
+const radioKeys = (pick: (index: number) => void) => (event: KeyboardEvent & { currentTarget: HTMLElement }) => {
+  const radios = [...event.currentTarget.querySelectorAll<HTMLElement>("[role=radio]")];
+  const from = radios.indexOf(event.target as HTMLElement);
+  const next = from < 0 ? undefined : radioStep(event.key, from, radios.length);
+  if (next === undefined) return;
+  event.preventDefault();
+  radios[next]!.focus();
+  pick(next);
+};
 
 const missingNote = (deps: Deps, field: Field, fallback: string) => {
   const missing = deps.look().missing.find((choice) => choice.field === field);
@@ -92,6 +107,13 @@ export function ThemeCards(props: { readonly deps: Deps; readonly scheme: Scheme
   const shown = () => themeFor(props.deps.settings(), props.deps.choices().themes, props.scheme);
   const fallback = () => defaultTheme(props.deps.choices().themes, props.scheme);
   const title = props.scheme === "light" ? "Light theme" : "Dark theme";
+  const pick = (theme: SlotItem<Theme>) => props.deps.set(field, theme.id === fallback()?.id ? undefined : theme.id);
+  /** The group's Tab stop: the theme showing, or the first while none of these is. */
+  const checked = () =>
+    Math.max(
+      0,
+      offered().findIndex((theme) => theme.id === shown()?.id),
+    );
   const description = () =>
     missingNote(props.deps, field, fallback()?.title ?? "the stylesheet's own") ??
     (props.scheme === "light"
@@ -103,18 +125,20 @@ export function ThemeCards(props: { readonly deps: Deps; readonly scheme: Scheme
         <div class="setting-title">{title}</div>
         <div class="setting-desc">{description()}</div>
       </div>
-      <div role="radiogroup" aria-label={title} class="theme-cards">
-        <For each={offered()}>
-          {(theme) => (
+      {/* By place, not by object: a theme plugin starting again offers its themes anew, and the focused card stays. */}
+      <div role="radiogroup" aria-label={title} class="theme-cards" onKeyDown={radioKeys((index) => pick(offered()[index]!))}>
+        <Index each={offered()}>
+          {(theme, index) => (
             <button
               type="button"
               role="radio"
               class="theme-card"
-              aria-checked={shown()?.id === theme.id}
-              aria-label={theme.title}
-              onClick={() => props.deps.set(field, theme.id === fallback()?.id ? undefined : theme.id)}
+              aria-checked={shown()?.id === theme().id}
+              aria-label={theme().title}
+              tabIndex={index === checked() ? 0 : -1}
+              onClick={() => pick(theme())}
             >
-              <span class="theme-card-sample" data-theme={props.scheme} style={themeTokens(theme)} aria-hidden="true">
+              <span class="theme-card-sample" data-theme={props.scheme} style={themeTokens(theme())} aria-hidden="true">
                 <span class="theme-card-top">
                   <span class="theme-card-type">Aa</span>
                   <span class="theme-card-accent" />
@@ -124,14 +148,14 @@ export function ThemeCards(props: { readonly deps: Deps; readonly scheme: Scheme
                 </span>
               </span>
               <span class="theme-card-name">
-                {theme.title}
-                <Show when={shown()?.id === theme.id}>
+                {theme().title}
+                <Show when={shown()?.id === theme().id}>
                   <CheckIcon />
                 </Show>
               </span>
             </button>
           )}
-        </For>
+        </Index>
       </div>
     </div>
   );
@@ -146,8 +170,9 @@ export function PluginSwitch(props: { readonly title: string; readonly descripti
   );
 }
 
+/** An accent's swatch: ringed in muted text while checked, and in the focus ring's color while focused. */
 const DOT =
-  "tw:size-[22px] tw:shrink-0 tw:rounded-full tw:border-0 tw:p-0 tw:shadow-[inset_0_0_0_1px_var(--border-strong)] tw:outline-2 tw:outline-offset-2 tw:outline-transparent tw:aria-checked:outline-text-3";
+  "tw:size-6 tw:shrink-0 tw:rounded-full tw:border-0 tw:p-0 tw:shadow-[inset_0_0_0_1px_var(--border-strong)] tw:outline-2 tw:outline-offset-2 tw:outline-transparent tw:aria-checked:outline-text-3 tw:focus-visible:outline-(--focus-ring)";
 const WHEEL = "var(--color-wheel)";
 
 /** The theme's own accent, the accents plugins offer, and any other color. */
@@ -161,12 +186,35 @@ export function AccentPicker(props: { readonly deps: Deps }) {
   // The native picker takes a hex color: the accent showing, as one (a preset's is oklch, say).
   const hex = () => tokenColor("--accent");
   const own = () => themeTokens(themeFor(props.deps.settings(), props.deps.choices().themes, scheme()));
+  /** The checked option: the theme's own (0), an offered accent, or another color (last). */
+  const checked = () => (value() === undefined ? 0 : custom() ? accents().length + 1 : accents().findIndex((accent) => accent.id === value()) + 1);
+  /** The option with focus, while one has it. Moving to another color only focuses it, so the focused option, not the checked one, is the group's one Tab stop. */
+  const [focused, setFocused] = createSignal<number>();
+  const stop = (index: number) => ((focused() ?? checked()) === index ? 0 : -1);
+  // Moving to another color only focuses it: picking one opens the color picker, which Enter or Space does.
+  const pick = (index: number) => {
+    if (index === 0) props.deps.set("accent", undefined);
+    else if (index <= accents().length) props.deps.set("accent", accents()[index - 1]!.id);
+  };
   return (
     <SettingRow title="Accent" description={missingNote(props.deps, "accent", "the theme's accent") ?? "Buttons, links, and selection."}>
-      <div role="radiogroup" aria-label="Accent" class="tw:flex tw:items-center tw:gap-2.5">
+      <div
+        role="radiogroup"
+        aria-label="Accent"
+        class="tw:flex tw:items-center tw:gap-2.5"
+        onKeyDown={radioKeys(pick)}
+        onFocusIn={(event) => {
+          const index = [...event.currentTarget.querySelectorAll("[role=radio]")].indexOf(event.target as Element);
+          if (index >= 0) setFocused(index);
+        }}
+        onFocusOut={(event) => {
+          if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setFocused(undefined);
+        }}
+      >
         <button
           role="radio"
           aria-checked={value() === undefined}
+          tabIndex={stop(0)}
           aria-label="The theme's own"
           data-tip="The theme's own"
           data-theme={scheme()}
@@ -174,22 +222,24 @@ export function AccentPicker(props: { readonly deps: Deps }) {
           class={`${DOT} tw:bg-accent`}
           onClick={() => props.deps.set("accent", undefined)}
         />
-        <For each={accents()}>
-          {(accent) => (
+        <Index each={accents()}>
+          {(accent, index) => (
             <button
               role="radio"
-              aria-checked={value() === accent.id}
-              aria-label={accent.title}
-              data-tip={accent.title}
+              aria-checked={value() === accent().id}
+              tabIndex={stop(index + 1)}
+              aria-label={accent().title}
+              data-tip={accent().title}
               class={DOT}
-              style={{ background: colorOf(accent) }}
-              onClick={() => props.deps.set("accent", accent.id)}
+              style={{ background: colorOf(accent()) }}
+              onClick={() => props.deps.set("accent", accent().id)}
             />
           )}
-        </For>
+        </Index>
         <button
           role="radio"
           aria-checked={custom()}
+          tabIndex={stop(accents().length + 1)}
           aria-label="Another color"
           data-tip={custom() ? value() : "Another color"}
           class={DOT}
@@ -243,7 +293,7 @@ export function FontSetting(props: { readonly deps: Deps; readonly kind: "ui" | 
     <SettingRow title={props.title} description={props.description}>
       <div class="tw:grid tw:w-50 tw:gap-1.5">
         <select
-          class="field tw:h-[30px] tw:text-md"
+          class="field"
           aria-label={props.title}
           onChange={(event) => {
             const next = event.currentTarget.value;
@@ -269,7 +319,7 @@ export function FontSetting(props: { readonly deps: Deps; readonly kind: "ui" | 
         <Show when={selected() === CUSTOM}>
           <input
             ref={input}
-            class="field tw:h-[30px] tw:text-md"
+            class="field"
             aria-label={`${props.title}: a CSS font-family list`}
             spellcheck={false}
             placeholder={props.kind === "ui" ? "Inter, sans-serif" : "Iosevka, monospace"}

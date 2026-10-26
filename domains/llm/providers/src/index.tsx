@@ -1,5 +1,5 @@
 import { For, Match, Show, Switch, createEffect, createMemo, createSignal, on, onMount } from "solid-js";
-import type { JSX } from "solid-js";
+import type { Accessor, JSX } from "solid-js";
 import { Schema } from "effect";
 import { asksAnswer } from "@lemma/llm";
 import type { AuthType, ProviderInfo, SignIn } from "@lemma/llm";
@@ -67,52 +67,90 @@ function CustomItems(props: { provider: ProviderInfo; custom: CustomActions; clo
   );
 }
 
-function ProviderRow(props: { models: ModelsService; provider: ProviderInfo; login: Login; logout: (provider: ProviderInfo) => void; custom: CustomActions }) {
+/** The provider whose row takes focus back once this client's sign-in to it ends, and how to say it has. */
+interface Returning {
+  readonly id: Accessor<string | undefined>;
+  readonly done: () => void;
+}
+
+function ProviderRow(props: {
+  models: ModelsService;
+  provider: ProviderInfo;
+  login: Login;
+  logout: (provider: ProviderInfo) => void;
+  custom: CustomActions;
+  returning: Returning;
+}) {
   /** A sign-in to it runs on the host, whichever client started it. */
   const busy = () =>
     props.models.loggingIn() === props.provider.id ||
     props.models.signIns().some((signIn) => signIn.provider === props.provider.id && signIn.ended === undefined);
-  const locked = () => props.models.loggingIn() !== undefined;
+  /** This client's sign-in to it: its dialog gives focus back to the button it was started from, so that stays (it does nothing meanwhile). */
+  const mine = () => props.models.loggingIn() === props.provider.id;
+  /** Another sign-in runs: this client's to another provider, or another client's to this one. */
+  const blocked = () => !mine() && (props.models.loggingIn() !== undefined || busy());
   const methods = () => props.provider.auth;
   const login = (type: AuthType) => props.login(props.provider, type);
   const logout = () => props.logout(props.provider);
   /** Signing in first: it needs nothing pasted. */
   const ways = () => [...methods()].sort((a, b) => (a.type === b.type ? 0 : a.type === "oauth" ? -1 : 1));
+  /** Its sign-in stopped working: signing in again is what to do. */
+  const again = () => props.provider.expired !== undefined && methods().some((method) => method.type === "oauth");
+  // Once its sign-in ends, focus left on nothing (the dialog's button gone, as the row moves to Connected) goes to the
+  // row's first button: Connect, or Manage once connected.
+  let control!: HTMLSpanElement;
+  createEffect(() => {
+    if (props.returning.id() !== props.provider.id || busy()) return;
+    queueMicrotask(() => {
+      // Started a moment ago, it may not be listed as running yet.
+      if (props.returning.id() !== props.provider.id || busy()) return;
+      props.returning.done();
+      const active = document.activeElement;
+      if (active === null || active instanceof HTMLBodyElement) control.querySelector<HTMLElement>("button:not(:disabled)")?.focus();
+    });
+  });
   return (
-    <div class="provider" classList={{ configured: props.provider.configured }}>
-      <ProviderLogo id={props.provider.id} name={props.provider.name} custom={props.provider.logo} />
-      <span class="provider-info">
-        <span class="provider-name">{props.provider.name}</span>
-        <span class="provider-desc">{describeProvider(props.provider)}</span>
+    <div class="setting-row provider" classList={{ configured: props.provider.configured }}>
+      <span class="setting-lead">
+        <ProviderLogo id={props.provider.id} name={props.provider.name} custom={props.provider.logo} />
       </span>
-      <Show
-        when={props.provider.configured}
-        fallback={
-          <Show
-            when={!busy()}
-            fallback={
-              <span class="provider-waiting">
-                <Spinner />
-                Connecting…
-              </span>
-            }
-          >
+      <span class="setting-text provider-info">
+        <span class="setting-title provider-name">{props.provider.name}</span>
+        <span class="setting-desc provider-desc">{describeProvider(props.provider)}</span>
+      </span>
+      <span class="setting-control" ref={control}>
+        <Show
+          when={props.provider.configured}
+          fallback={
             <Show
               when={methods().length > 1 || props.provider.custom}
               fallback={
-                <button class="button small provider-connect" disabled={locked()} onClick={() => methods()[0] && login(methods()[0]!.type)}>
-                  Connect
+                <button
+                  class="button small provider-connect"
+                  aria-label={`Connect ${props.provider.name}`}
+                  aria-disabled={busy() || undefined}
+                  data-tip={busy() ? "Connecting…" : undefined}
+                  disabled={blocked()}
+                  onClick={() => !busy() && methods()[0] && login(methods()[0]!.type)}
+                >
+                  <Show when={busy()} fallback="Connect">
+                    <Spinner />
+                  </Show>
                 </button>
               }
             >
               {/* Several ways in (or a custom provider's own options): Connect opens a menu, as Manage does. */}
               <Popover
                 label={`Connect ${props.provider.name}`}
-                tip="Choose how to connect"
-                disabled={locked()}
+                tip={busy() ? "Connecting…" : "Choose how to connect"}
+                disabled={blocked()}
                 triggerClass="button small provider-connect"
                 placement="bottom-end"
-                trigger="Connect"
+                trigger={
+                  <Show when={busy()} fallback="Connect">
+                    <Spinner />
+                  </Show>
+                }
               >
                 {(close) => (
                   <>
@@ -124,42 +162,49 @@ function ProviderRow(props: { models: ModelsService; provider: ProviderInfo; log
                 )}
               </Popover>
             </Show>
-          </Show>
-        }
-      >
-        <Show when={busy()}>
-          <Spinner />
-        </Show>
-        {/* Its sign-in stopped working: signing in again is what to do. */}
-        <Show when={props.provider.expired !== undefined && !busy() && methods().some((method) => method.type === "oauth")}>
-          <button class="button small button-primary provider-connect" disabled={locked()} title={props.provider.expired} onClick={() => login("oauth")}>
-            Sign in again
-          </button>
-        </Show>
-        <Popover
-          label={`${props.provider.name} options`}
-          tip="Options"
-          disabled={locked()}
-          triggerClass="button small provider-connect"
-          placement="bottom-end"
-          trigger="Manage"
+          }
         >
-          {(close) => (
-            <>
-              <For each={methods()}>
-                {(method) => <MenuItem label={method.type === "oauth" ? "Sign in again" : "Replace API key"} close={close} run={() => login(method.type)} />}
-              </For>
-              <Show when={!fromEnv(props.provider.source) && props.provider.source !== "no key required"}>
-                <div class="menu-sep" />
-                <MenuItem label="Log out" close={close} run={logout} danger />
+          <Show when={busy() && !again()}>
+            <Spinner />
+          </Show>
+          <Show when={again()}>
+            <button
+              class="button small button-primary provider-connect"
+              aria-disabled={busy() || undefined}
+              disabled={blocked()}
+              data-tip={busy() ? "Connecting…" : props.provider.expired}
+              onClick={() => !busy() && login("oauth")}
+            >
+              <Show when={busy()} fallback="Sign in again">
+                <Spinner />
               </Show>
-              <Show when={props.provider.custom}>
-                <CustomItems provider={props.provider} custom={props.custom} close={close} />
-              </Show>
-            </>
-          )}
-        </Popover>
-      </Show>
+            </button>
+          </Show>
+          <Popover
+            label={`${props.provider.name} options`}
+            tip="Options"
+            disabled={blocked()}
+            triggerClass="button small provider-connect"
+            placement="bottom-end"
+            trigger="Manage"
+          >
+            {(close) => (
+              <>
+                <For each={methods()}>
+                  {(method) => <MenuItem label={method.type === "oauth" ? "Sign in again" : "Replace API key"} close={close} run={() => login(method.type)} />}
+                </For>
+                <Show when={!fromEnv(props.provider.source) && props.provider.source !== "no key required"}>
+                  <div class="menu-sep" />
+                  <MenuItem label="Log out" close={close} run={logout} danger />
+                </Show>
+                <Show when={props.provider.custom}>
+                  <CustomItems provider={props.provider} custom={props.custom} close={close} />
+                </Show>
+              </>
+            )}
+          </Popover>
+        </Show>
+      </span>
     </div>
   );
 }
@@ -222,17 +267,21 @@ function LogoutDialog(props: { provider: ProviderInfo; logout: () => void; close
 /** The row that adds a provider of the user's; its form is a dialog. */
 function CustomProviderRow(props: { open: () => void }) {
   return (
-    <div class="provider">
-      <span class="provider-mark" aria-hidden="true">
-        <PlusIcon />
+    <div class="setting-row provider">
+      <span class="setting-lead">
+        <span class="provider-mark" aria-hidden="true">
+          <PlusIcon />
+        </span>
       </span>
-      <span class="provider-info">
-        <span class="provider-name">Custom provider</span>
-        <span class="provider-desc">Any OpenAI-, Anthropic-, or Gemini-compatible endpoint, like Ollama or a gateway</span>
+      <span class="setting-text provider-info">
+        <span class="setting-title provider-name">Custom provider</span>
+        <span class="setting-desc provider-desc">Any OpenAI-, Anthropic-, or Gemini-compatible endpoint, like Ollama or a gateway</span>
       </span>
-      <button class="button small provider-connect" onClick={props.open}>
-        Add
-      </button>
+      <span class="setting-control">
+        <button class="button small provider-connect" onClick={props.open}>
+          Add
+        </button>
+      </span>
     </div>
   );
 }
@@ -290,11 +339,14 @@ export default defineWebPlugin({
           if (section !== SECTION) {
             setQuery("");
             setFilter("all");
+            setReturning(undefined);
           }
         },
         { defer: true },
       ),
     );
+    /** The provider whose row takes focus back once this client's sign-in to it ends (`Returning`). */
+    const [returning, setReturning] = createSignal<string>();
     /** The login this client started, shown in the connect dialog until it ends or is cancelled. */
     const [connecting, setConnecting] = createSignal<{ readonly provider: ProviderInfo; readonly method?: string }>();
     /** A provider whose sign-in this page answers itself (a new custom provider's key), so no dialog shows for it. */
@@ -321,6 +373,7 @@ export default defineWebPlugin({
         // "Sign in with GitHub Copilot" under "Connect GitHub Copilot" says nothing new.
         const label = method === undefined || method.name === provider.name ? undefined : type === "api_key" ? "API key" : methodLabel(method);
         setConnecting({ provider, ...(label === undefined ? {} : { method: label }) });
+        setReturning(provider.id);
       }
       try {
         const ok = await models.login(provider, type);
@@ -458,7 +511,14 @@ export default defineWebPlugin({
       id: "providers.row",
       phase: "default",
       component: (props: ProviderRowProps) => (
-        <ProviderRow models={models} provider={props.provider} login={(_, type) => props.login(type)} logout={logout} custom={custom} />
+        <ProviderRow
+          models={models}
+          provider={props.provider}
+          login={(_, type) => props.login(type)}
+          logout={logout}
+          custom={custom}
+          returning={{ id: returning, done: () => setReturning(undefined) }}
+        />
       ),
     });
     const row = (provider: ProviderInfo) => () => <ProviderRowView provider={provider} login={(type) => void login(provider, type)} />;

@@ -1,4 +1,4 @@
-import { For, Show, createMemo, createSignal, mapArray } from "solid-js";
+import { For, Show, createMemo, createSignal, mapArray, onCleanup } from "solid-js";
 import { bindingOf, formatKeys } from "@lemma/web/keys";
 import { KEYMAP_PLUGIN, bindingRows, conflicts, defaultKeys, formatBindings, keysFor, labelOf, overridesFrom, withOverride, Actions } from "@lemma/actions";
 import type { KeyOverrides, Action } from "@lemma/actions";
@@ -10,8 +10,17 @@ import { CommandIcon, PlusIcon, Popover, RefreshIcon, SearchField, SearchIcon, X
 import styles from "./keys-page.css?inline";
 
 const SECTION = SectionIds.keyboard;
+/** The page's group for actions in no category. */
+const GENERAL = "General";
 
 type Item = SlotItem<Action>;
+
+/** A line's key, in the list and in `Deps.lines`: its action and its key, none for a line that gives it one. */
+const lineOf = (id: string, key: string | undefined) => JSON.stringify([id, key ?? null]);
+/** The page's + button, in `Deps.lines`. */
+const ADD = "+";
+/** Keys that, pressed alone, press what has focus: never a shortcut on their own. */
+const NOT_SHORTCUTS = new Set(["enter", "space"]);
 
 interface Deps {
   readonly slots: SlotsService;
@@ -20,17 +29,28 @@ interface Deps {
   readonly save: (next: KeyOverrides) => Promise<void>;
   /** Every action's keys now, for finding conflicts. */
   readonly bound: () => readonly { readonly id: string; readonly keys: readonly string[] }[];
+  /**
+   * How to focus each line drawn (its key, or the button that gives it one), by `lineOf`, and the page's + (`ADD`): a
+   * key recorded, removed, or reset draws lines anew, and focus goes to what takes their place.
+   */
+  readonly lines: Map<string, () => void>;
 }
 
 /** Sets an action's keys, dropping the override when they are its own again. */
 const setKeys = (deps: Deps, action: Item, next: readonly string[] | undefined) =>
   void deps.save(withOverride(deps.overrides(), action.id, next, defaultKeys(action.keys)));
 
+/** Once the list has drawn again, focuses the first of the action's lines for `keys` that is there, else the page's +. */
+const focusLine = (deps: Deps, id: string, keys: readonly (string | undefined)[]) =>
+  queueMicrotask(() => [...keys.map((key) => lineOf(id, key)), ADD].map((line) => deps.lines.get(line)).find((focus) => focus !== undefined)?.());
+
 /**
- * Listens for one shortcut while focused: the first non-modifier press is it.
- * Escape cancels; focus leaving cancels too.
+ * Listens for one shortcut while focused: the first non-modifier press is it,
+ * though not Enter or Space alone. Escape cancels (`refocus`, to put focus back
+ * where recording started); focus leaving cancels too, as Tab does, which
+ * moves it on.
  */
-function Recorder(props: { onKeys: (binding: string) => void; onCancel: () => void }) {
+function Recorder(props: { onKeys: (binding: string) => void; onCancel: (refocus: boolean) => void }) {
   return (
     <span
       class="key-recorder"
@@ -38,14 +58,16 @@ function Recorder(props: { onKeys: (binding: string) => void; onCancel: () => vo
       role="textbox"
       aria-label="Press a shortcut"
       ref={(el) => queueMicrotask(() => el.focus())}
-      onBlur={() => props.onCancel()}
+      onBlur={() => props.onCancel(false)}
       onKeyDown={(event) => {
         // Nothing else (the keymap, the settings' Escape) sees keys pressed here.
-        event.preventDefault();
         event.stopPropagation();
-        if (event.key === "Escape") return props.onCancel();
+        // Tab, with Shift or without, moves focus on as it does anywhere; leaving cancels.
+        if (event.key === "Tab" && !event.ctrlKey && !event.metaKey && !event.altKey) return;
+        event.preventDefault();
+        if (event.key === "Escape") return props.onCancel(true);
         const binding = bindingOf(event);
-        if (binding !== undefined) props.onKeys(binding);
+        if (binding !== undefined && !NOT_SHORTCUTS.has(binding)) props.onKeys(binding);
       }}
     >
       Press keys…
@@ -53,11 +75,11 @@ function Recorder(props: { onKeys: (binding: string) => void; onCancel: () => vo
   );
 }
 
-/** An action's name, its category muted before it. */
-function ActionName(props: { action: Item }) {
+/** An action's name, with its category muted before it where nothing around it names that (`showCategory`). */
+function ActionName(props: { action: Item; showCategory: boolean }) {
   return (
     <>
-      <Show when={props.action.category}>{(category) => <span class="shortcut-category">{category()}: </span>}</Show>
+      <Show when={props.showCategory && props.action.category}>{(category) => <span class="shortcut-category">{category()}: </span>}</Show>
       {props.action.title}
     </>
   );
@@ -66,9 +88,10 @@ function ActionName(props: { action: Item }) {
 /**
  * One line of the list: an action and one of its keys, to change by pressing
  * new ones or to remove; without a key, a button to give it one. Reset puts
- * back the action's own keys once the user changed them.
+ * back the action's own keys once the user changed them. `showCategory` names
+ * the action's category, where no heading above it does.
  */
-function BindingLine(props: { deps: Deps; action: Item; binding: string | undefined }) {
+function BindingLine(props: { deps: Deps; action: Item; binding: string | undefined; showCategory: boolean }) {
   const { deps } = props;
   const keys = () => keysFor(props.action.id, props.action.keys, deps.overrides());
   const defaults = () => defaultKeys(props.action.keys);
@@ -83,16 +106,22 @@ function BindingLine(props: { deps: Deps; action: Item; binding: string | undefi
     const userSet = (action: Item) => !defaultKeys(action.keys).includes(key);
     return users.filter((other) => other.id !== props.action.id && (userSet(props.action) || userSet(other))).map(labelOf);
   });
+  let target: HTMLButtonElement | undefined;
+  const line = lineOf(props.action.id, props.binding);
+  const focus = () => target?.focus();
+  deps.lines.set(line, focus);
+  onCleanup(() => deps.lines.get(line) === focus && deps.lines.delete(line));
   const record = (binding: string) => {
     setRecording(false);
     const at = props.binding;
     setKeys(deps, props.action, at === undefined ? [...keys(), binding] : keys().map((key) => (key === at ? binding : key)));
+    focusLine(deps, props.action.id, [binding]);
   };
   return (
     <div class="setting-row shortcut-row" classList={{ unbound: props.binding === undefined }}>
       <div class="setting-text">
         <div class="setting-title" data-tip={props.action.id}>
-          <ActionName action={props.action} />
+          <ActionName action={props.action} showCategory={props.showCategory} />
           <Show when={props.binding !== undefined && !defaults().includes(props.binding)}>
             <span class="shortcut-custom">custom</span>
           </Show>
@@ -102,14 +131,45 @@ function BindingLine(props: { deps: Deps; action: Item; binding: string | undefi
         </Show>
       </div>
       <div class="setting-control shortcut-keys">
-        {/* Shown on hover beside the key, so the keys stay against the edge. */}
+        <Show
+          when={!recording()}
+          fallback={
+            <Recorder
+              onKeys={record}
+              onCancel={(refocus) => {
+                setRecording(false);
+                if (refocus) focusLine(deps, props.action.id, [props.binding]);
+              }}
+            />
+          }
+        >
+          <Show
+            when={props.binding}
+            fallback={
+              <button ref={target} class="shortcut-assign" aria-label={`Add a shortcut for ${labelOf(props.action)}`} onClick={() => setRecording(true)}>
+                <PlusIcon />
+                Add shortcut
+              </button>
+            }
+          >
+            {(key) => (
+              <button ref={target} class="shortcut-key" aria-label={`Change ${formatKeys(key())}`} data-tip="Change" onClick={() => setRecording(true)}>
+                <kbd>{formatKeys(key())}</kbd>
+              </button>
+            )}
+          </Show>
+        </Show>
+        {/* Shown on hover beside the key, so the keys stay against the edge; after it, so Tab and the settings search reach the key first. */}
         <span class="shortcut-tools">
           <Show when={customized()}>
             <button
               class="icon-button"
               aria-label={`Reset ${labelOf(props.action)}`}
               data-tip={defaults().length === 0 ? "Reset to none" : `Reset to ${defaults().map(formatKeys).join(", ")}`}
-              onClick={() => setKeys(deps, props.action, undefined)}
+              onClick={() => {
+                setKeys(deps, props.action, undefined);
+                focusLine(deps, props.action.id, [props.binding, ...defaults(), undefined]);
+              }}
             >
               <RefreshIcon />
             </button>
@@ -120,49 +180,32 @@ function BindingLine(props: { deps: Deps; action: Item; binding: string | undefi
                 class="icon-button"
                 aria-label={`Remove ${formatKeys(key())} from ${labelOf(props.action)}`}
                 data-tip="Remove"
-                onClick={() =>
-                  setKeys(
-                    deps,
-                    props.action,
-                    keys().filter((other) => other !== key()),
-                  )
-                }
+                onClick={() => {
+                  const rest = keys().filter((other) => other !== key());
+                  setKeys(deps, props.action, rest);
+                  focusLine(deps, props.action.id, [...rest, undefined]);
+                }}
               >
                 <XIcon />
               </button>
             )}
           </Show>
         </span>
-        <Show when={!recording()} fallback={<Recorder onKeys={record} onCancel={() => setRecording(false)} />}>
-          <Show
-            when={props.binding}
-            fallback={
-              <button class="shortcut-assign" aria-label={`Add a shortcut for ${labelOf(props.action)}`} onClick={() => setRecording(true)}>
-                <PlusIcon />
-                Add shortcut
-              </button>
-            }
-          >
-            {(key) => (
-              <button class="shortcut-key" aria-label={`Change ${formatKeys(key())}`} data-tip="Change" onClick={() => setRecording(true)}>
-                <kbd>{formatKeys(key())}</kbd>
-              </button>
-            )}
-          </Show>
-        </Show>
       </div>
     </div>
   );
 }
 
-/** A line for each of an action's keys, or one to give it a key: what the settings search shows for an action. */
+/**
+ * A line for each of an action's keys, or one to give it a key: what the settings search shows for an action. The line
+ * without a key is in the list (`null`), not `<For>`'s fallback, which draws again whenever the list does.
+ */
 function ActionLines(props: { deps: Deps; action: Item }) {
-  const keys = () => [...new Set(keysFor(props.action.id, props.action.keys, props.deps.overrides()))];
-  return (
-    <For each={keys()} fallback={<BindingLine deps={props.deps} action={props.action} binding={undefined} />}>
-      {(key) => <BindingLine deps={props.deps} action={props.action} binding={key} />}
-    </For>
-  );
+  const keys = () => {
+    const keys = [...new Set(keysFor(props.action.id, props.action.keys, props.deps.overrides()))];
+    return keys.length === 0 ? [null] : keys;
+  };
+  return <For each={keys()}>{(key) => <BindingLine deps={props.deps} action={props.action} binding={key ?? undefined} showCategory />}</For>;
 }
 
 /** The new binding's line at the top of the list: the action picked, waiting for its keys. */
@@ -172,7 +215,7 @@ function NewBinding(props: { deps: Deps; action: Item; onDone: () => void }) {
     <div class="setting-row shortcut-row shortcut-new">
       <div class="setting-text">
         <div class="setting-title">
-          <ActionName action={props.action} />
+          <ActionName action={props.action} showCategory />
         </div>
         <Show when={keys().length > 0}>
           <div class="setting-desc">Adds to {keys().map(formatKeys).join(", ")}</div>
@@ -183,15 +226,24 @@ function NewBinding(props: { deps: Deps; action: Item; onDone: () => void }) {
           onKeys={(binding) => {
             props.onDone();
             setKeys(props.deps, props.action, [...keys(), binding]);
+            focusLine(props.deps, props.action.id, [binding]);
           }}
-          onCancel={props.onDone}
+          onCancel={(refocus) => {
+            props.onDone();
+            if (refocus) focusLine(props.deps, props.action.id, []);
+          }}
         />
+        {/* The pointer's way out (keys have Escape): Tab passes it by, on to the list, as leaving the recorder cancels. */}
         <button
           class="icon-button shortcut-cancel"
           aria-label="Cancel"
           data-tip="Cancel"
+          tabindex="-1"
           onPointerDown={(event) => event.preventDefault()}
-          onClick={props.onDone}
+          onClick={() => {
+            props.onDone();
+            focusLine(props.deps, props.action.id, []);
+          }}
         >
           <XIcon />
         </button>
@@ -244,7 +296,7 @@ function AddBinding(props: { deps: Deps; onPick: (action: Item) => void }) {
                   }}
                 >
                   <span class="menu-label">
-                    <ActionName action={action} />
+                    <ActionName action={action} showCategory />
                   </span>
                   <span class="menu-hint">{keysFor(action.id, action.keys, props.deps.overrides()).map(formatKeys).join(" ")}</span>
                 </button>
@@ -257,7 +309,10 @@ function AddBinding(props: { deps: Deps; onPick: (action: Item) => void }) {
   );
 }
 
-/** One continuous list of every binding, by action name; the search finds actions without keys too, to give them one. */
+/**
+ * Every binding, a group per category (those in none first, under General), by action name within it; the search finds
+ * actions without keys too, to give them one.
+ */
 function KeysBody(props: { deps: Deps }) {
   const { deps } = props;
   const [query, setQuery] = createSignal("");
@@ -265,8 +320,17 @@ function KeysBody(props: { deps: Deps }) {
   const keymapOn = () => deps.webPlugins.list().some((plugin) => plugin.id === KEYMAP_PLUGIN && plugin.state === "active");
   const actions = createMemo(() => new Map(deps.slots.list(Actions).map((action) => [action.id, action])));
   const rows = createMemo(() => bindingRows([...actions().values()], deps.overrides(), query(), formatKeys));
-  // A line per row by its action and key, so one being re-recorded survives the list updating.
-  const lines = createMemo(() => rows().map((row) => JSON.stringify([row.action.id, row.key ?? null])));
+  // A line per row by its action and key, and a group by its category's name, so one being re-recorded survives the
+  // list updating.
+  const lines = createMemo(() => {
+    const byCategory = new Map<string, string[]>();
+    for (const row of rows()) {
+      const category = row.action.category ?? GENERAL;
+      byCategory.set(category, [...(byCategory.get(category) ?? []), lineOf(row.action.id, row.key)]);
+    }
+    return byCategory;
+  });
+  const categories = createMemo(() => [...lines().keys()].sort((a, b) => (a === GENERAL ? -1 : b === GENERAL ? 1 : a.localeCompare(b))));
   const bound = () => rows().filter((row) => row.key !== undefined).length;
   // What other plugins add to this section comes first: each group's entries in a memo of its own, as Settings asks
   // them (`SettingsGroup.entries`), and the search choosing among them, so neither another group's change nor a
@@ -280,8 +344,12 @@ function KeysBody(props: { deps: Deps }) {
       },
     ),
   );
+  let page!: HTMLDivElement;
+  const add = () => page.querySelector<HTMLElement>(".shortcut-add")?.focus();
+  deps.lines.set(ADD, add);
+  onCleanup(() => deps.lines.get(ADD) === add && deps.lines.delete(ADD));
   return (
-    <div class="keys-page">
+    <div class="keys-page" ref={page}>
       <SearchField value={query()} onInput={setQuery} placeholder="Search by command or keys" label="Search shortcuts">
         <span class="shortcut-count">
           {bound()} {bound() === 1 ? "shortcut" : "shortcuts"}
@@ -303,20 +371,32 @@ function KeysBody(props: { deps: Deps }) {
           </Show>
         )}
       </For>
-      <section class="settings-group">
-        <h3 class="settings-group-title">Shortcuts</h3>
-        <div class="settings-rows shortcut-list">
-          <Show when={adding()} keyed>
-            {(action) => <NewBinding deps={deps} action={action} onDone={() => setAdding(undefined)} />}
-          </Show>
-          <For each={lines()} fallback={<p class="settings-empty">No commands or keys match “{query().trim()}”</p>}>
-            {(line) => {
-              const [id, key] = JSON.parse(line) as [string, string | null];
-              return <Show when={actions().get(id)}>{(action) => <BindingLine deps={deps} action={action()} binding={key ?? undefined} />}</Show>;
-            }}
-          </For>
-        </div>
-      </section>
+      <Show when={adding()} keyed>
+        {(action) => (
+          <div class="settings-rows">
+            <NewBinding deps={deps} action={action} onDone={() => setAdding(undefined)} />
+          </div>
+        )}
+      </Show>
+      <For each={categories()} fallback={<p class="settings-empty">No commands or keys match “{query().trim()}”</p>}>
+        {(category) => (
+          <section class="settings-group">
+            <h3 class="settings-group-title">{category}</h3>
+            <div class="settings-rows">
+              <For each={lines().get(category) ?? []}>
+                {(line) => {
+                  const [id, key] = JSON.parse(line) as [string, string | null];
+                  return (
+                    <Show when={actions().get(id)}>
+                      {(action) => <BindingLine deps={deps} action={action()} binding={key ?? undefined} showCategory={false} />}
+                    </Show>
+                  );
+                }}
+              </For>
+            </div>
+          </section>
+        )}
+      </For>
     </div>
   );
 }
@@ -352,7 +432,7 @@ export default defineWebPlugin({
       }
     };
     const bound = () => slots.list(Actions).map((action) => ({ id: action.id, keys: keysFor(action.id, action.keys, overrides()) }));
-    const deps: Deps = { slots, webPlugins, overrides, save, bound };
+    const deps: Deps = { slots, webPlugins, overrides, save, bound, lines: new Map() };
 
     slots.add(SettingsSections, {
       id: SECTION,
@@ -369,18 +449,20 @@ export default defineWebPlugin({
       ),
       body: () => <KeysBody deps={deps} />,
     });
-    // Browsing shows the body; these answer the settings search.
-    slots.add(SettingsGroups, {
-      id: SECTION,
-      order: 10,
-      section: SECTION,
-      title: "Shortcuts",
-      entries: () =>
-        slots.list(Actions).map((action) => ({
-          text: `shortcut keybinding hotkey ${labelOf(action)} ${keysFor(action.id, action.keys, overrides()).map(formatKeys).join(" ")}`,
+    // Browsing shows the body; these answer the settings search. An entry per action for as long as it is there, its
+    // text read anew as its keys change, so a key changed in the search's results keeps its row, and focus in it.
+    const entries = createMemo(
+      mapArray(
+        () => slots.list(Actions),
+        (action) => ({
+          get text() {
+            return `shortcut keybinding hotkey ${labelOf(action)} ${keysFor(action.id, action.keys, overrides()).map(formatKeys).join(" ")}`;
+          },
           view: () => <ActionLines deps={deps} action={action} />,
-        })),
-    });
+        }),
+      ),
+    );
+    slots.add(SettingsGroups, { id: SECTION, order: 10, section: SECTION, title: "Shortcuts", entries });
     slots.add(Actions, {
       id: "keys-page.open",
       order: 12,

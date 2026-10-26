@@ -131,14 +131,19 @@ body:has(.resizing) .browser-page {
   pointer-events: none;
 }
 
-/* Settings › General › Browser: the engine, and an address of one's own under it. */
+/*
+ * Settings › General › Browser: the engine, as wide as the other settings' selects (the fonts'), and an address of one's
+ * own under it, wider, for a URL; both end at the row's edge.
+ */
 .browser-search-setting {
   display: grid;
+  justify-items: end;
   gap: 6px;
   width: 260px;
+  max-width: 100%;
 }
 
-.browser-search-setting .field {
-  height: 30px;
-  font-size: var(--font-size-md);
+.browser-search-setting select.field {
+  width: 200px;
+  max-width: 100%;
 }

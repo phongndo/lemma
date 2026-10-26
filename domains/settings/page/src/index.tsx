@@ -94,6 +94,10 @@ export default defineWebPlugin({
   provides: { settings: Settings },
   setup: ({ slots, router, webPlugins, layout }) => {
     const [focus, setFocus] = createSignal<() => void>();
+    /** Focuses the first control in the search's results, while the page shows; false when it has none. */
+    const [toResults, setToResults] = createSignal<() => boolean>();
+    /** Focuses the section's own search, else its first control, while the page shows. */
+    const [toSection, setToSection] = createSignal<() => void>();
     const here = () => router.matchOf(SettingsRoute);
     const section = createMemo(() => {
       const found = here();
@@ -181,10 +185,16 @@ export default defineWebPlugin({
     function Nav(props: { onPick: () => void }) {
       let search!: HTMLInputElement;
       const previous = document.activeElement as HTMLElement | null;
-      onMount(() => queueMicrotask(() => search.focus()));
+      // Opened at General, the search takes focus; opened at another section (a way straight to it, as the composer's
+      // Connect is), that section's first control does, as it does while the search is out of sight in a closed drawer.
+      onMount(() => queueMicrotask(() => (section() === SectionIds.general && !layout.sidebarHidden() ? search.focus() : toSection()?.())));
       setFocus(() => () => {
-        search.focus();
-        search.select();
+        // Out of sight (a closed drawer, a collapsed sidebar), the search comes into view first.
+        if (layout.sidebarHidden()) layout.toggleSidebar();
+        queueMicrotask(() => {
+          search.focus();
+          search.select();
+        });
       });
       onCleanup(() => {
         setFocus(undefined);
@@ -213,6 +223,8 @@ export default defineWebPlugin({
                   event.stopPropagation();
                   setQuery("");
                 }
+                // Enter or Down goes on to the results, as a list being searched does.
+                if ((event.key === "Enter" || event.key === "ArrowDown") && searching() && toResults()?.()) event.preventDefault();
               }}
             />
             <Show when={query() === ""}>
@@ -262,18 +274,47 @@ export default defineWebPlugin({
       if (opened()) onCleanup(untrack(() => slots.add(SidebarRegion, { id: "settings", order: -10, component: Nav })));
     });
 
+    /** What Tab stops at, less what is turned off or not shown, faded out included (a row's tools, shown on hover). */
+    const controls = (within: HTMLElement, selector: string) =>
+      [...within.querySelectorAll<HTMLElement>(selector)].filter(
+        (control) =>
+          !control.matches(':disabled, [tabindex="-1"], [aria-disabled="true"]') &&
+          control.checkVisibility({ opacityProperty: true, visibilityProperty: true }),
+      );
+    const tabStop = "button, input, select, textarea, a[href], [tabindex]";
+
     function Page() {
       let main!: HTMLDivElement;
       createEffect(on([section, searching], () => main.scrollTo({ top: 0 }), { defer: true }));
+      // The first result's first control, else its section's link.
+      setToResults(() => () => {
+        const first = controls(main, `.settings-result .settings-rows :is(${tabStop})`)[0] ?? controls(main, ".settings-result-title")[0];
+        first?.focus();
+        return first !== undefined;
+      });
+      setToSection(() => () => {
+        const content = main.querySelector<HTMLElement>(".settings-content") ?? main;
+        (controls(content, 'input[type="search"]')[0] ?? controls(content, tabStop)[0])?.focus();
+      });
+      onCleanup(() => {
+        setToResults(undefined);
+        setToSection(undefined);
+      });
       return (
         <div class="settings" role="region" aria-label="Settings" ref={main}>
           <header class="settings-head">
-            <button class="icon-button" aria-label="Toggle sidebar" data-tip="Toggle sidebar" data-sidebar-toggle onClick={() => layout.toggleSidebar()}>
+            <button
+              class="icon-button"
+              aria-label="Toggle sidebar"
+              data-tip={withKeys("Toggle sidebar", keysOf("shell.toggle-sidebar"))}
+              data-sidebar-toggle
+              onClick={() => layout.toggleSidebar()}
+            >
               <SidebarIcon />
             </button>
             <span class="muted">Settings</span>
             <span class="settings-crumb-sep">/</span>
-            <span>{searching() ? "Search" : current()?.title}</span>
+            <span class="settings-crumb">{searching() ? "Search" : current()?.title}</span>
             <span class="spacer" />
             <button class="icon-button" aria-label="Close settings" data-tip={withKeys("Close", keysOf("settings.close"))} onClick={() => open(undefined)}>
               <XIcon />

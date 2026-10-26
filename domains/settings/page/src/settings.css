@@ -43,6 +43,8 @@
 }
 
 .settings-nav {
+  /* The error color, a shade toward the text: on the open section's fill, where the error color falls short of 4.5:1. */
+  --settings-nav-err-strong: color-mix(in srgb, var(--err) 85%, var(--text));
   flex: 1;
   min-width: 0;
   display: flex;
@@ -63,15 +65,19 @@
   app-region: drag;
 }
 
+/* Its icon and text on the sections' lines below it. */
 .settings-nav .search-box {
   flex: none;
+  gap: 10px;
   margin-bottom: 6px;
+  padding: 0 10px;
 }
 
+/* On the search box's fill, where muted text falls short of 4.5:1: a step brighter. */
 .search-key {
   flex: none;
   font-size: var(--font-size-sm);
-  color: var(--text-3);
+  color: var(--text-2);
 }
 
 .search-box:focus-within .search-key {
@@ -103,8 +109,9 @@
   font-weight: 500;
 }
 
-.settings-nav-item.dim {
-  opacity: 0.45;
+.settings-nav-item.dim:not(:hover) {
+  /* A section with no match while searching, dimmed by its color rather than faded, so its name still reads. */
+  color: var(--text-3);
 }
 
 .settings-nav-label {
@@ -120,6 +127,15 @@
 
 .settings-nav-count.err {
   color: var(--err);
+}
+
+/* On the open section's fill, a count steps up a shade, so it still reads. */
+.settings-nav-item.active .settings-nav-count {
+  color: var(--text-2);
+}
+
+.settings-nav-item.active .settings-nav-count.err {
+  color: var(--settings-nav-err-strong);
 }
 
 .settings {
@@ -147,6 +163,11 @@
 
 .settings-crumb-sep {
   color: var(--text-3);
+}
+
+/* Where the page is: the head's one strong word. */
+.settings-crumb {
+  font-weight: 600;
 }
 
 /* Every section, forms and inspectors alike, has the same centered column. */
@@ -204,14 +225,15 @@
   gap: 8px;
 }
 
+/* A group's heading reads above its rows' titles: a step larger, and as strong as the text gets. */
 .settings-group-title {
   display: flex;
   align-items: center;
   gap: 6px;
   margin: 0;
-  font-size: var(--font-size-sm);
-  font-weight: 500;
-  color: var(--text-3);
+  font-size: var(--font-size-base);
+  font-weight: 600;
+  color: var(--text);
 }
 
 /* Rows sit on the page, divided by hairlines; no boxes around them. */
