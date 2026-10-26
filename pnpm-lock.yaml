@@ -3487,6 +3487,9 @@ importers:
 
   domains/tools/patch:
     dependencies:
+      '@lemma/agent':
+        specifier: workspace:*
+        version: link:../../agent/contract
       '@lemma/core':
         specifier: workspace:*
         version: link:../../../packages/core
