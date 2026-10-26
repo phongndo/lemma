@@ -13,4 +13,15 @@ describe("format", () => {
       "1h 3m",
     ]);
   });
+
+  test("rounds across a unit's end into the next unit", () => {
+    expect([
+      formatDuration(999.4),
+      formatDuration(999.7),
+      formatDuration(9_949),
+      formatDuration(9_999.6),
+      formatDuration(59_960),
+      formatDuration(3_599_600),
+    ]).toEqual(["999ms", "1.0s", "9.9s", "10s", "1m", "1h 0m"]);
+  });
 });

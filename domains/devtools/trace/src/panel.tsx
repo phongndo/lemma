@@ -1,13 +1,12 @@
-import { For, Match, Show, Switch, createMemo, createSignal, onMount } from "solid-js";
+import { For, Match, Show, Switch, createMemo, createSignal, onMount, untrack } from "solid-js";
 import type { Accessor, JSX } from "solid-js";
-import { formatDuration } from "@lemma/client/format";
 import type { PluginStatus, SpanRecord } from "@lemma/contracts";
 import { PLUGIN_PANEL, clearsOnEscape, rowKeys } from "@lemma/devtools/web";
 import { XIcon } from "@lemma/look";
 import { ThreadRoute } from "@lemma/sessions";
 import { usePlugin } from "@lemma/web";
 import { clockTime } from "@lemma/web/format";
-import { createTrace, hostTrace, pageTrace } from "./model.ts";
+import { createTrace, hostTrace, pageTrace, spanTime as ms } from "./model.ts";
 import type { TraceModel, TraceSource } from "./model.ts";
 import { matcher, narrowedBy, parseQuery, turnOrder } from "./query.ts";
 import { contains, flatten, forest, profile } from "./tree.ts";
@@ -28,20 +27,10 @@ const MODES: readonly { readonly id: Mode; readonly label: string }[] = [
 ];
 
 /**
- * A time with its unit: from 100ms, as the trajectory writes one (`formatDuration`: `614ms`, `1.8s`, `1m 15s`); below,
- * finer, as a span's time is often a fraction of a millisecond (`<0.01ms`, `3.46ms`, `45.7ms`).
- */
-const ms = (value: number) => {
-  if (!Number.isFinite(value) || value <= 0) return "0ms";
-  if (value >= 99.95) return formatDuration(value);
-  if (value < 0.01) return "<0.01ms";
-  return value < 9.995 ? `${value.toFixed(2)}ms` : `${value.toFixed(1)}ms`;
-};
-/**
  * Focus goes back to the Spans view's table in the panel `root` (the trace's `.trc`), on the row of `id` when it shows:
  * where a view or the details that had it went away from (Enter on a plugin, a fault; closing the details).
  */
-const focusSpans = (root: Element | null | undefined, id?: string) =>
+const focusSpans = (root: Element | undefined, id?: string) =>
   queueMicrotask(() => {
     const table = root?.querySelector<HTMLElement>('table[aria-label="Spans"]');
     const row = id === undefined ? null : (table?.querySelector<HTMLElement>(`tbody tr[data-key="${CSS.escape(id)}"]`) ?? null);
@@ -60,6 +49,8 @@ interface Shown {
   readonly selected: Accessor<string | undefined>;
   readonly select: (id: string | undefined) => void;
   readonly deps: Deps;
+  /** The panel's element (`.trc`), in which focus finds where to go back to as a view or the details go. */
+  readonly root: () => HTMLElement | undefined;
 }
 
 /** A plugin's id, linking to it in the Plugins panel. */
@@ -90,11 +81,10 @@ function SpanDetails(props: { shown: Shown; span: SpanRecord }) {
     props.shown.select(undefined);
   };
   /** Closes the details, focus going back to the span's row. */
-  const close = (from: Element) => {
+  const close = () => {
     const id = span().id;
-    const root = from.closest(".trc");
     props.shown.select(undefined);
-    focusSpans(root, id);
+    focusSpans(props.shown.root(), id);
   };
   return (
     <aside
@@ -104,12 +94,12 @@ function SpanDetails(props: { shown: Shown; span: SpanRecord }) {
         if (event.key !== "Escape" || event.defaultPrevented) return;
         event.preventDefault();
         event.stopPropagation();
-        close(event.currentTarget);
+        close();
       }}
     >
       <div class="dt-details-title">
         <strong class="dt-code trc-title">{span().name}</strong>
-        <button class="dt-close trc-end" aria-label="Close details" data-tip="Close (Esc)" onClick={(event) => close(event.currentTarget)}>
+        <button class="dt-close trc-end" aria-label="Close details" data-tip="Close (Esc)" onClick={close}>
           <XIcon />
         </button>
       </div>
@@ -238,7 +228,13 @@ function SpansView(props: { shown: Shown }) {
     for (let index = all.length - 1; index >= 0 && found.length < ROOTS; index--) if (contains(all[index]!, matches())) found.push(all[index]!);
     return found;
   });
-  const [open, setOpen] = createSignal<ReadonlySet<string>>(new Set());
+  // Shown with a span in a trace selected (a fault's, from the Faults view), its trace opens, so its row shows.
+  const opened = untrack(() => {
+    const id = props.shown.selected();
+    const root = id === undefined ? undefined : roots().find((candidate) => candidate.span.id !== id && contains(candidate, (span) => span.id === id));
+    return root === undefined ? [] : [root.span.id];
+  });
+  const [open, setOpen] = createSignal<ReadonlySet<string>>(new Set(opened));
   const toggle = (id: string) =>
     setOpen((was) => {
       const next = new Set(was);
@@ -341,11 +337,10 @@ function PluginsView(props: { shown: Shown }) {
   });
   const [chosen, choose] = createSignal<string>();
   const narrowTo = (plugin: string) => {
-    const root = document.activeElement?.closest(".trc");
     props.shown.setQuery(narrowedBy(props.shown.query(), "plugin", plugin));
     props.shown.setMode("spans");
     // This view goes, with the row focused: focus goes on to the spans it narrowed to.
-    focusSpans(root);
+    focusSpans(props.shown.root());
   };
   return (
     <div class="dt-main" tabindex="-1">
@@ -476,11 +471,10 @@ function FaultsView(props: { shown: Shown; plugins: Accessor<readonly PluginStat
   const [chosen, choose] = createSignal<string>();
   /** A failed span, in the Spans view: among its turn's, or every failed one's. */
   const showSpan = (span: SpanRecord) => {
-    const root = document.activeElement?.closest(".trc");
     props.shown.setQuery(span.attributes["turn.id"] === undefined ? "status:error" : `turn:${String(span.attributes["turn.id"])}`);
     props.shown.select(span.id);
     props.shown.setMode("spans");
-    focusSpans(root, span.id);
+    focusSpans(props.shown.root(), span.id);
   };
   return (
     <div class="dt-main" tabindex="-1">
@@ -583,6 +577,7 @@ function TraceView(props: {
   setMode: (mode: Mode) => void;
   query: Accessor<string>;
   setQuery: (query: string) => void;
+  root: () => HTMLElement | undefined;
 }) {
   const plugin = usePlugin();
   const trace = createTrace(props.source);
@@ -597,6 +592,7 @@ function TraceView(props: {
     selected,
     select,
     deps: props.deps,
+    root: props.root,
   };
   return (
     <>
@@ -646,8 +642,9 @@ export function TracePanel(props: { deps: Deps }) {
     host: createMemo(() => hostTrace(props.deps.client)),
     page: createMemo(() => pageTrace(props.deps.page)),
   };
+  let panel: HTMLDivElement | undefined;
   return (
-    <div class="dt-scope trc" aria-label="Trace panel">
+    <div class="dt-scope trc" aria-label="Trace panel" ref={panel}>
       <div class="dt-toolbar" role="toolbar" aria-label="Which trace">
         <For each={["host", "page"] as const}>
           {(name) => (
@@ -666,7 +663,18 @@ export function TracePanel(props: { deps: Deps }) {
         </For>
       </div>
       <Show when={which()} keyed>
-        {(name) => <TraceView which={name} source={sources[name]()} deps={props.deps} mode={mode} setMode={setMode} query={query} setQuery={setQuery} />}
+        {(name) => (
+          <TraceView
+            which={name}
+            source={sources[name]()}
+            deps={props.deps}
+            mode={mode}
+            setMode={setMode}
+            query={query}
+            setQuery={setQuery}
+            root={() => panel}
+          />
+        )}
       </Show>
     </div>
   );

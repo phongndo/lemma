@@ -159,14 +159,15 @@ export function createTrajectory(deps: TrajectoryDeps): () => JSX.Element {
       // The details keep their own keys (a text's selection), but on their tabs, whose ← and → are theirs, ↑ and ↓ still
       // move the selection, as they do from the table.
       if (typing || !(event.target instanceof Element)) return;
-      if (event.target.closest(".trj-details") !== null && !event.target.matches('[role="tab"]')) return;
+      const onTab = event.target.matches('[role="tab"]') && event.target.closest(".trj-details") !== null;
+      if (event.target.closest(".trj-details") !== null && !onTab) return;
       // Enter or Space on a row opens its details, as a click does.
       if ((event.key === "Enter" || event.key === " ") && event.target instanceof HTMLTableRowElement && event.target.dataset.record !== undefined) {
         event.preventDefault();
         select({ type: "record", id: event.target.dataset.record });
         return;
       }
-      if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
+      if ((event.key !== "ArrowDown" && event.key !== "ArrowUp") || event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
       event.preventDefault();
       const rows = [...root.querySelectorAll<HTMLTableRowElement>("tbody tr[data-record]")];
       const s = selection();
@@ -174,8 +175,11 @@ export function createTrajectory(deps: TrajectoryDeps): () => JSX.Element {
       const next = rows[stepFor(event.key, current, rows.length)!];
       if (next === undefined) return;
       select({ type: "record", id: next.dataset.record! }, tab());
-      // The focus goes with the selection, so its ring is not left on the row clicked.
-      next.focus({ preventScroll: true });
+      // The focus goes with the selection, so its ring is not left on the row clicked; from a details tab it goes to the
+      // tab shown for the next record, its tabs drawn anew, which reads it in its turn.
+      if (onTab)
+        queueMicrotask(() => (root.querySelector<HTMLElement>('.trj-details [role="tab"][aria-selected="true"]') ?? next).focus({ preventScroll: true }));
+      else next.focus({ preventScroll: true });
       next.scrollIntoView({ block: "nearest" });
     };
     const clearFilter = () => {

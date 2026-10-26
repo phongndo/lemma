@@ -1,7 +1,19 @@
+import { formatDuration } from "@lemma/client/format";
 import { batch, createSignal, onCleanup } from "solid-js";
 import type { CompositionChange, SpanRecord } from "@lemma/contracts";
 import { TraceChannels } from "@lemma/devtools";
 import type { ClientService, PageTraceService } from "@lemma/web";
+
+/**
+ * A time with its unit: from 100ms, as the trajectory writes one (`formatDuration`: `614ms`, `1.8s`, `1m 15s`); below,
+ * finer, as a span's time is often a fraction of a millisecond (`<0.01ms`, `3.46ms`, `45.7ms`).
+ */
+export const spanTime = (value: number): string => {
+  if (!Number.isFinite(value) || value <= 0) return "0ms";
+  if (value >= 99.95) return formatDuration(value);
+  if (value < 0.01) return "<0.01ms";
+  return value < 9.995 ? `${value.toFixed(2)}ms` : `${value.toFixed(1)}ms`;
+};
 
 /** How many spans a view holds of each trace: the newest. */
 export const KEPT = 5000;

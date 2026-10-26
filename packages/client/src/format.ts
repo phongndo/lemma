@@ -18,10 +18,10 @@ export const formatCost = (usd: number): string => {
 
 /** `420ms`, `4.2s`, `42s`, `2m 5s`, `1h 3m`. */
 export const formatDuration = (ms: number): string => {
-  if (ms < 1_000) return `${Math.max(0, Math.round(ms))}ms`;
-  if (ms < 60_000) return `${(ms / 1_000).toFixed(ms < 10_000 ? 1 : 0)}s`;
-  const minutes = Math.floor(ms / 60_000);
-  const seconds = Math.round((ms % 60_000) / 1_000);
+  if (ms < 999.5) return `${Math.max(0, Math.round(ms))}ms`;
+  if (ms < 59_500) return `${(ms / 1_000).toFixed(ms < 9_950 ? 1 : 0)}s`;
+  const minutes = Math.floor(Math.round(ms / 1_000) / 60);
+  const seconds = Math.round(ms / 1_000) % 60;
   if (minutes < 60) return seconds === 0 ? `${minutes}m` : `${minutes}m ${seconds}s`;
   return `${Math.floor(minutes / 60)}h ${minutes % 60}m`;
 };

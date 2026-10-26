@@ -1,5 +1,6 @@
-/* The dock; its panels draw with the foundation's `.dt-*` vocabulary, each a `.dt-scope`. The dock is not one, so focus
-   on its edge or tabs is not focus in a panel; it takes a scope's type and colours. */
+/* The dock. Its panel's body is a `.dt-scope` (the foundation's `.dt-*` vocabulary), so any panel draws in it, a bundled
+   one with a scope of its own inside; its chrome (the edge, the tabs, the close button) is outside it, so focus there is
+   not focus in a panel's table, and takes a scope's type and colours here. */
 .devtools {
   position: relative;
   flex: none;
