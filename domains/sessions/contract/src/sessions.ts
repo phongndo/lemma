@@ -320,8 +320,9 @@ export type SessionInfo = typeof SessionInfo.Type;
 export class SessionError extends Data.TaggedError("SessionError")<{
   readonly sessionId?: string;
   /**
-   * `Busy`: `remove` or `relocate` refused, as the session is held (`Sessions.hold`). `NotEmpty`: `relocate` refused, as something has gone into the session. `ReadOnly`: a write refused, as
-   * the session's log is damaged (`SessionInfo.damaged`): `fork` it to go on.
+   * `Busy`: `remove` or `relocate` refused, as the session is held (`Sessions.hold`). `NotEmpty`: `relocate` refused,
+   * as something has gone into the session. `ReadOnly`: a write refused, as the session's log is damaged
+   * (`SessionInfo.damaged`): `fork` it to go on.
    */
   readonly reason: "NotFound" | "Corrupt" | "Io" | "InvalidParent" | "Busy" | "NotEmpty" | "ReadOnly";
   readonly message: string;
