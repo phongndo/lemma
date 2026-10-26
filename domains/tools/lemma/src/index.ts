@@ -10,8 +10,6 @@ import { DEFAULT_CONFIRM, EVERY_READ, termsOf, toolName } from "./policy.ts";
 export { DEFAULT_CONFIRM, EVERY_READ, NEVER, termsOf, toolName } from "./policy.ts";
 
 const ids = (defaults: readonly string[]) => Schema.Array(Schema.String).pipe(Schema.withDecodingDefaultType(Effect.sync(() => [...defaults])));
-const count = (fallback: number) =>
-  Schema.Number.check(Schema.isInt(), Schema.isGreaterThan(0)).pipe(Schema.withDecodingDefaultType(Effect.sync(() => fallback)));
 
 const Config = Schema.Struct({
   channels: ids([EVERY_READ]).annotate({
@@ -22,10 +20,6 @@ const Config = Schema.Struct({
   confirm: ids(DEFAULT_CONFIRM).annotate({
     title: "Channels that ask first",
     description: "Channel ids offered as tools whose every call asks you first, showing what it sends: by default those that change something.",
-  }),
-  maxOutputChars: count(20_000).annotate({
-    title: "Output kept (characters)",
-    description: "Text characters of a result the model reads when it calls one directly; scripts get the whole result.",
   }),
 });
 
@@ -46,14 +40,13 @@ const INSTRUCTIONS = `Lemma itself, through the channels its plugins serve clien
  */
 export default definePlugin({
   id: "tools.lemma",
-  uses: ["lemma/agent@2", "lemma/llm@3", "lemma/sessions@1", "lemma/tools@1"],
+  uses: ["lemma/agent@2", "lemma/llm@3", "lemma/sessions@1", "lemma/tools@2"],
   version: "0.1.0",
   config: Config,
   requires: { interaction: Interaction },
   setup: function* ({ interaction }, owner) {
     const registries = yield* Registries;
     const config = owner.config;
-    const budget = config.maxOutputChars;
 
     yield* owner.add(ToolNamespaces, {
       name: NAMESPACE,
@@ -82,7 +75,7 @@ export default definePlugin({
         }
         for (const [name, { channel, confirm }] of wanted) {
           if (added.has(name)) continue;
-          const made = Result.try(() => channelTool(channel, { registries, interaction, confirm, budget }));
+          const made = Result.try(() => channelTool(channel, { registries, interaction, confirm }));
           if (Result.isFailure(made)) {
             if (!unoffered.has(channel))
               yield* Effect.logWarning(`tools.lemma: "${channel.id}" was not offered: its schemas have no JSON form (${String(made.failure)})`);

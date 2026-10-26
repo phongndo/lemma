@@ -1,7 +1,7 @@
 import { watch } from "node:fs";
 import { mkdir } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
-import { Effect, Schema, Stream } from "effect";
+import { Effect, Stream } from "effect";
 import type { Context } from "effect";
 import { definePlugin, Events, Registries } from "@lemma/core";
 import { Channels, Paths } from "@lemma/contracts";
@@ -11,15 +11,6 @@ import { ToolNamespaces, Tools } from "@lemma/tools";
 import { Servers } from "./servers.ts";
 
 const VERSION = "0.1.0";
-
-const Config = Schema.Struct({
-  maxOutputChars: Schema.Number.check(Schema.isInt(), Schema.isGreaterThan(0))
-    .pipe(Schema.withDecodingDefaultType(Effect.sync(() => 40_000)))
-    .annotate({
-      title: "Output kept (characters)",
-      description: "Text characters of a tool's result the model reads; the rest goes to a temp file the model can read.",
-    }),
-});
 
 /**
  * What tells the model where its MCP tools are. True whether a request handler keeps the tool that runs them or not:
@@ -43,7 +34,6 @@ export default definePlugin({
   id: "mcp.servers",
   implements: [MCP_CONTRACT],
   version: VERSION,
-  config: Config,
   requires: { paths: Paths },
   provides: { mcp: Mcp },
   setup: function* ({ paths }, owner) {
@@ -65,7 +55,7 @@ export default definePlugin({
         changed: (state) => void run(events.publish(McpChanged, state)).catch(() => {}),
         warn: (message) => void run(Effect.logWarning(`mcp: ${message}`)).catch(() => {}),
       },
-      { file, authFile: join(paths.home, "mcp-auth.json"), maxOutputChars: owner.config.maxOutputChars, version: VERSION, env: process.env },
+      { file, authFile: join(paths.home, "mcp-auth.json"), version: VERSION, env: process.env },
     );
     yield* Effect.addFinalizer(() => Effect.promise(() => servers.close()));
     yield* Effect.promise(async () =>

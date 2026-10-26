@@ -7,9 +7,16 @@ confining them is a policy, and `Guards` is where a plugin sets one
 ([approvals](../../examples/approvals/README.md)). Writes replace a file whole
 or not at all, keeping its mode and writing through symlinks (`replaceFile`);
 a file another user owns, or in a directory the user cannot add to, is written
-in place. Output too long for a result goes to a temp file only the user can
-read, which the host keeps while it is written and then among its newest 100
-while it runs (`outputFile`).
+in place.
+
+Every tool's output is bounded by one budget, the text characters a result
+keeps: `tools.registry`'s `maxResultChars`, which a call reads as
+`ToolContext.maxResultChars`. Past it, a text keeps its start and its end around
+one marker saying what was left out and where the whole is (`keepEnds`,
+`boundOutput`), and the whole goes to a temp file only the user can read, which
+the host keeps while it is written and then among its newest 100 while it runs
+(`outputFile`). A tool that pages or ranks what it returns (`read`, `grep`)
+keeps the start instead, its marker saying how to go on (`keepHead`).
 
 | Plugin                                     | Halves     | What it does                                                                                                                                                   |
 | ------------------------------------------ | ---------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |

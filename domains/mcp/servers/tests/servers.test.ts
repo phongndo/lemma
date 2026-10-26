@@ -151,8 +151,8 @@ describe("a server in mcp.json", () => {
           yield* until(connected("fixture"));
           const result = yield* call("mcp__fixture__big", { chars: 100_000 });
           const text = textOf(result);
-          expect(text).toContain("\n\nstartx");
-          expect(text).toContain("tokens truncated");
+          expect(text).toMatch(/^start/);
+          expect(text).toContain("characters left out: showing the start and the end of its one line. Full output: ");
           const path = (result.details as { fullOutputPath: string }).fullOutputPath;
           expect(text).toContain(path);
           expect((yield* Effect.promise(() => readFile(path, "utf8"))).length).toBe(100_008);
@@ -161,7 +161,7 @@ describe("a server in mcp.json", () => {
     );
   });
 
-  it("cuts a long result to fit the registry's cap, so the note naming the whole of it survives", async () => {
+  it("keeps a long result within the registry's budget, so the note naming the whole of it survives", async () => {
     await withCore(
       { fixture: local },
       (core) =>
@@ -171,8 +171,7 @@ describe("a server in mcp.json", () => {
             const result = yield* call("mcp__fixture__big", { chars: 100_000 });
             const text = textOf(result);
             expect(text.length).toBeLessThanOrEqual(5_000);
-            expect(text).not.toContain("[Output truncated:");
-            expect(text).toContain(`[Full output: ${(result.details as { fullOutputPath: string }).fullOutputPath}`);
+            expect(text).toContain(`Full output: ${(result.details as { fullOutputPath: string }).fullOutputPath}]`);
           }),
         ),
       [],

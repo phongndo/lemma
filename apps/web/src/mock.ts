@@ -510,8 +510,8 @@ export const createMockHost = (): Host => {
       }),
     }),
     "tools.registry": Schema.Struct({
-      maxResultChars: Schema.Int.pipe(Schema.check(Schema.isGreaterThan(0)), Schema.withDecodingDefaultType(Effect.sync(() => 100_000))).annotate({
-        description: "Total text characters one result may carry to the model.",
+      maxResultChars: Schema.Int.pipe(Schema.check(Schema.isGreaterThan(0)), Schema.withDecodingDefaultType(Effect.sync(() => 50_000))).annotate({
+        description: "Text characters one result carries to the model, every tool's output bounded by it.",
       }),
     }),
     "workspace.tidy": Schema.Struct({

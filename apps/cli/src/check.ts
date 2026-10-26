@@ -309,7 +309,7 @@ export const checkPlugin = (path: string | undefined, io: Io, run: Runner): Effe
         ...(status.requires.length === 0 ? [] : [`  requires ${status.requires.join(", ")}`]),
         ...(status.uses === undefined
           ? [
-              `  warning: it names no contract versions (uses: ["lemma/tools@1", …], or [] for none), so a change to a contract it uses will not be caught when it loads`,
+              `  warning: it names no contract versions (uses: ["lemma/tools@2", …], or [] for none), so a change to a contract it uses will not be caught when it loads`,
             ]
           : status.uses.length === 0
             ? []

@@ -76,7 +76,7 @@ export const report = (stats: Stats): string =>
 export default definePlugin({
   id: "writing",
   version: "0.1.0",
-  uses: ["lemma/agent@2", "lemma/tools@1"],
+  uses: ["lemma/agent@2", "lemma/tools@2"],
   config: Config,
   setup: (_deps, { add, config }) => {
     add(Tools, {

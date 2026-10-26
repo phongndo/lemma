@@ -51,7 +51,10 @@ export interface ToolContext {
    * it from there.
    */
   readonly leafId?: string;
-  /** Text characters a result keeps before the registry cuts it; a tool that truncates its own output fits under it. */
+  /**
+   * Text characters a result keeps (`DEFAULT_MAX_RESULT_CHARS` when absent): the registry cuts a result past them, and a
+   * tool bounding its own output keeps it to `outputBudget` of them.
+   */
   readonly maxResultChars?: number;
 }
 

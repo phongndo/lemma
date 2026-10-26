@@ -87,9 +87,13 @@ that ran to its end):
 
 ```
 <agent_result title="Map callers of rebuildRequest" session="…" ended="done">
-…its answer, cut to maxOutputChars…
+…its answer…
 </agent_result>
 ```
+
+An answer longer than a result's default budget (`DEFAULT_MAX_RESULT_CHARS` in
+`@lemma/tools`) keeps its start and its end there, the whole in a temp file the
+model can read, as the call's own result does past the call's budget.
 
 Once the thread logged it (`SessionAppended`), the file goes; until then the
 notice is published again every 15 seconds, since one no agent hears (as
@@ -123,7 +127,6 @@ it (`explore`) is told nothing of agents.
 | `maxDelegations` | `4`     | Agents working at once at each depth, across every thread on the host; more wait for one to finish |
 | `maxDepth`       | `1`     | How deep delegations go: an agent this many levels down hands no task on; `0`: off                 |
 | `confirm`        | `false` | Ask the person before each new agent                                                               |
-| `maxOutputChars` | `20000` | Characters of an agent's answer the model reads; the rest stays in the agent's thread              |
 
 ## In the web app
 

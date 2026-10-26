@@ -495,13 +495,12 @@ describe("pi codemode", () => {
     expect(textOf(result)).toContain("session:s");
   });
 
-  it("cuts its output to fit the registry's cap, so the note naming the full output survives", async () => {
+  it("keeps its output within the call's budget, so the note naming the full output survives the registry's cut", async () => {
     const result = await call(`text("x".repeat(20_000));`, { maxResultChars: 3_000 });
     const text = textOf(result);
     expect(text.length).toBeLessThanOrEqual(3_000);
-    expect(text).not.toContain("[Output truncated:");
     const saved = (result.details as { fullOutputPath?: string }).fullOutputPath!;
-    expect(text).toContain(`[Full output: ${saved}`);
+    expect(text).toContain(`characters left out: showing the start and the end of its one line. Full output: ${saved}]`);
     expect(await fs.readFile(saved, "utf8")).toBe("x".repeat(20_000));
     await fs.rm(saved, { force: true });
   });

@@ -7,8 +7,8 @@ import type { Tool } from "@lemma/tools";
 import { fsMessage, resolveReadPath, sniffImage, throwIfAborted } from "@lemma/tools/files";
 import { readLines } from "./lines.ts";
 import type { LineWindow } from "./lines.ts";
-import { DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES, formatSize, truncateHead } from "@lemma/tools";
-import type { Truncation } from "@lemma/tools";
+import { formatSize, keepHead, outputBudget } from "@lemma/tools";
+import type { Cut } from "@lemma/tools";
 
 export const ReadInput = Schema.Struct({
   path: Schema.String.annotate({ description: "Path to the file to read (relative or absolute)" }),
@@ -23,9 +23,14 @@ export type ReadOutput = typeof ReadOutput.Type;
 
 export interface ReadDetails {
   readonly path: string;
-  /** How the text was cut, when it was: the counts, its text being the result's own, which the log keeps once. */
-  readonly truncation?: Omit<Truncation, "content">;
+  /** How the text was cut to the result's budget, when it was: the counts, its text being the result's own, which the log keeps once. */
+  readonly truncation?: Cut;
 }
+
+/** The lines a page holds when the call names no `limit`. */
+const PAGE_LINES = 2000;
+/** Past this much of a file, reading stops at the page's end rather than count the rest of its lines. */
+const COUNT_BYTES = Number.POSITIVE_INFINITY;
 
 async function readHead(file: string, length: number): Promise<Uint8Array> {
   const handle = await open(file, "r");
@@ -40,13 +45,13 @@ async function readHead(file: string, length: number): Promise<Uint8Array> {
 
 export const readTool: Tool<ReadInput> = {
   name: "read",
-  description: `Read the contents of a file. Supports text files and images (jpg, png, gif, webp). Images are sent as attachments. For text files, output is truncated to ${DEFAULT_MAX_LINES} lines or ${DEFAULT_MAX_BYTES / 1024}KB (whichever is hit first). Use offset/limit for large files. When you need the full file, continue with offset until complete. Use it to examine files instead of cat or sed.`,
+  description: `Read the contents of a file. Supports text files and images (jpg, png, gif, webp). Images are sent as attachments. Text comes a page at a time: up to ${PAGE_LINES} lines, fewer when they are long, with a note saying where to continue. Use offset/limit for large files. When you need the full file, continue with offset until complete. Use it to examine files instead of cat or sed.`,
   input: ReadInput,
   output: ReadOutput,
   // It only reads: cut off by a host restart, it runs again, and reads the model asks for together run together.
   replay: "safe",
   parallel: "safe",
-  execute: async ({ path, offset, limit }, { cwd, signal }) => {
+  execute: async ({ path, offset, limit }, { cwd, signal, maxResultChars }) => {
     throwIfAborted(signal);
     const absolute = await resolveReadPath(path, cwd);
     try {
@@ -76,40 +81,31 @@ export const readTool: Tool<ReadInput> = {
       });
     }
 
-    // Paged as `split("\n")` of the whole file would page it, a chunk at a time: memory is the page, not the file.
+    // A page at a time, read only as far as the page and, in a file up to `COUNT_BYTES`, on to count its lines.
     const startLine = offset !== undefined && offset > 0 ? Math.floor(offset) - 1 : 0;
-    const startDisplay = startLine + 1;
-    const asked = limit === undefined ? undefined : startLine + Math.max(1, Math.floor(limit));
+    const budget = outputBudget(maxResultChars);
     const handle = await open(absolute, "r");
     let window: LineWindow;
     try {
-      window = await readLines(handle, startLine, asked, { maxLines: DEFAULT_MAX_LINES, maxBytes: DEFAULT_MAX_BYTES }, signal);
+      const end = startLine + (limit === undefined ? PAGE_LINES : Math.max(1, Math.floor(limit)));
+      // Three bytes a character at most, so a window over the budget reads as one.
+      window = await readLines(handle, startLine, end, { headBytes: 3 * (budget + 1), countBytes: COUNT_BYTES }, signal);
     } finally {
       await handle.close();
     }
-    const { fileLines, selection } = window;
-    if (selection === undefined) throw new Error(`Offset ${offset} is beyond end of file (${fileLines} lines total)`);
-    const userLimited = asked === undefined ? undefined : Math.min(asked, fileLines) - startLine;
-
-    // The head holds what `truncateHead` keeps of the whole selection, and is over the limits when the whole is.
-    const kept = truncateHead(selection.head);
-    const truncation: Truncation = kept.truncated ? { ...kept, totalLines: selection.lines, totalBytes: selection.bytes } : kept;
-    let output: string;
-    if (truncation.firstLineExceedsLimit) {
-      const size = formatSize(selection.firstLineBytes);
-      output = `[Line ${startDisplay} is ${size}, exceeds ${formatSize(DEFAULT_MAX_BYTES)} limit. Use bash: sed -n '${startDisplay}p' ${path} | head -c ${DEFAULT_MAX_BYTES}]`;
-    } else if (truncation.truncated) {
-      const endDisplay = startDisplay + truncation.outputLines - 1;
-      const limitNote = truncation.truncatedBy === "lines" ? "" : ` (${formatSize(DEFAULT_MAX_BYTES)} limit)`;
-      output = `${truncation.content}\n\n[Showing lines ${startDisplay}-${endDisplay} of ${fileLines}${limitNote}. Use offset=${endDisplay + 1} to continue.]`;
-    } else if (userLimited !== undefined && startLine + userLimited < fileLines) {
-      const remaining = fileLines - (startLine + userLimited);
-      output = `${truncation.content}\n\n[${remaining} more lines in file. Use offset=${startLine + userLimited + 1} to continue.]`;
-    } else {
-      output = truncation.content;
-    }
-    const { content: _, ...counts } = truncation;
-    const details: ReadDetails = { path: absolute, ...(truncation.truncated ? { truncation: counts } : {}) };
-    return new ToolResult({ content: [{ type: "text", text: output }], details, structured: output });
+    const { lines, text } = window;
+    if (text === undefined || (startLine > 0 && lines !== undefined && startLine >= lines))
+      throw new Error(`Offset ${offset} is beyond end of file (${lines} lines total)`);
+    const size = lines === undefined ? formatSize((await stat(absolute)).size) : undefined;
+    const kept = keepHead(text, budget, {
+      from: startLine + 1,
+      of: lines,
+      rest: ({ next, partial, kept }) =>
+        partial
+          ? `Read on in it with bash: sed -n '${next}p' ${path} | cut -c ${kept + 1}-${kept + budget}`
+          : `Use offset=${next} to continue${size === undefined ? "" : `; the file is ${size}`}.`,
+    });
+    const details: ReadDetails = { path: absolute, ...(kept.cut === undefined ? {} : { truncation: kept.cut }) };
+    return new ToolResult({ content: [{ type: "text", text: kept.text }], details, structured: kept.text });
   },
 };

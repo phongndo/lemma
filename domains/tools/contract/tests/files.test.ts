@@ -143,13 +143,21 @@ describe("outputFile", () => {
 });
 
 describe("boundOutput", () => {
-  it("saves the whole text to a private output file", async () => {
+  it("keeps text within the budget as it is", async () => {
+    const content = [{ type: "text" as const, text: "short" }];
+    expect(await boundOutput(content, { budget: 100, name: "test" })).toEqual({ content });
+  });
+
+  it("keeps the start and the end of longer text, the whole saved to a private output file, and the images after it", async () => {
     const long = "x".repeat(5_000);
-    const { content, fullOutputPath } = await boundOutput([{ type: "text", text: long }], { budget: 100, name: "test" });
+    const image = { type: "image" as const, data: "AA==", mimeType: "image/png" };
+    const { content, fullOutputPath, cut } = await boundOutput([{ type: "text", text: long }, image], { budget: 400, name: "test" });
     expect(fullOutputPath).toBeDefined();
     expect(await fs.readFile(fullOutputPath!, "utf8")).toBe(long);
     expect(await modeOf(fullOutputPath!)).toBe(0o600);
-    expect(content[0]).toMatchObject({ type: "text", text: expect.stringContaining(`[Full output: ${fullOutputPath} (read with offset/limit)]`) });
+    expect(content).toEqual([{ type: "text", text: expect.stringContaining(`Full output: ${fullOutputPath}]`) }, image]);
+    expect((content[0] as { text: string }).text.length).toBeLessThanOrEqual(400);
+    expect(cut).toMatchObject({ chars: 5_000, lines: 1 });
   });
 });
 

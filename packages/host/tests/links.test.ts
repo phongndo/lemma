@@ -44,6 +44,6 @@ describe("linking what plugin files import", () => {
     const file = join(home, "plugins", "probe.mjs");
     await writeFile(file, 'import { TOOLS_CONTRACT } from "@lemma/tools";\nconsole.log(TOOLS_CONTRACT);\n');
     const { stdout } = await promisify(execFile)(process.execPath, ["--conditions=lemma-source", file]);
-    expect(stdout.trim()).toBe("lemma/tools@1");
+    expect(stdout.trim()).toBe("lemma/tools@2");
   });
 });

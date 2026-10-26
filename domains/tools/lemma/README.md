@@ -14,8 +14,8 @@ A channel `<domain>.<name>` is the tool `lemma_<domain>_<name>`, `.` and `-`
 as `_` (`sessions.set-title` is `lemma_sessions_set_title`). Its input is the
 channel's payload as JSON, the JSON a client sends (`lemma channels call`),
 and its result is the result's JSON: whole as what a script's call resolves to
-(`structured`), and as text the model reads, cut to `maxOutputChars` with the
-rest in a temp file.
+(`structured`), and as text the model reads, its start and end past the call's
+budget (`tools.registry`'s `maxResultChars`) with the whole in a temp file.
 
 | Channel takes                                              | The tool takes                                                                     |
 | ---------------------------------------------------------- | ---------------------------------------------------------------------------------- |
@@ -41,11 +41,10 @@ channel and the code (`"sessions.get" failed (NotFound): …`).
 
 ## Config
 
-| Key              | Default                 | What it does                                                                                  |
-| ---------------- | ----------------------- | --------------------------------------------------------------------------------------------- |
-| `channels`       | `["*"]`                 | Channel ids offered as tools, called freely; `*` is every channel that declares it only reads |
-| `confirm`        | the writing list, below | Channel ids offered as tools whose every call asks the person first, showing the payload      |
-| `maxOutputChars` | `20000`                 | Text characters of a result the model reads when it calls a tool directly                     |
+| Key        | Default                 | What it does                                                                                  |
+| ---------- | ----------------------- | --------------------------------------------------------------------------------------------- |
+| `channels` | `["*"]`                 | Channel ids offered as tools, called freely; `*` is every channel that declares it only reads |
+| `confirm`  | the writing list, below | Channel ids offered as tools whose every call asks the person first, showing the payload      |
 
 A channel says what calling it does (`access` in its declaration): `read`,
 `operate`, `change`, or `secret`. `channels` holds `*` by default, every

@@ -5,13 +5,14 @@ import { callHere } from "@lemma/cli";
 import { Channels, Interaction, Paths, serveChannel } from "@lemma/contracts";
 import { AgentChannels, AgentRequestHook, ModelNotice, PromptSections } from "@lemma/agent";
 import { SessionAppended, SessionChannels, SessionRemoved } from "@lemma/sessions";
-import { Tools } from "@lemma/tools";
+import { outputBudget, Tools } from "@lemma/tools";
+import { boundOutput } from "@lemma/tools/files";
 import { DelegateChannels } from "./channels.ts";
 import { DELEGATE, delegateTool, depthSlots, discard, failure, isCode, modesSection, outcomeOf, place, sessionGone, stopTurn } from "./delegate.ts";
 import type { Settled } from "./delegate.ts";
 import { jobFiles, workingSection } from "./jobs.ts";
 import type { Job } from "./jobs.ts";
-import { bounded, depthOf, SOURCE } from "./lineage.ts";
+import { depthOf, SOURCE } from "./lineage.ts";
 
 export { DelegateChannels } from "./channels.ts";
 export { DELEGATE, DelegateInput, DelegateOutput, Ended } from "./delegate.ts";
@@ -36,10 +37,6 @@ export const Config = Schema.Struct({
     title: "Ask before starting an agent",
     description: "Ask you before each new agent starts.",
   }),
-  maxOutputChars: count(20_000).annotate({
-    title: "Answer kept (characters)",
-    description: "Text characters of an agent's answer the model reads; the rest stays in the agent's thread.",
-  }),
 });
 
 /** The section naming the modes offered to agents and the thread's agents at work. */
@@ -53,13 +50,16 @@ const GONE: Settled = { ended: "error", answer: "", error: "Its thread was delet
 /** How a background agent ended that was stopped before its prompt was placed: dropped, or its prompt withdrawn. */
 const STOPPED: Settled = { ended: "cancelled", answer: "", error: "It was stopped before it started." };
 
-/** What a finished agent tells the thread that started it, and the line a transcript shows for it. */
-const noticeOf = (job: Job, settled: Settled, budget: number) => {
+/**
+ * What a finished agent tells the thread that started it, and the line a transcript shows for it. Its answer is bounded
+ * as a result is by default, the whole in a temp file and in the agent's thread.
+ */
+const noticeOf = async (job: Job, settled: Settled) => {
   const done = settled.ended === "done" || settled.ended === "handled";
   const display = done ? `${job.title} finished` : settled.ended === "cancelled" ? `${job.title} was stopped` : `${job.title} failed`;
-  const body = [settled.error === undefined ? "" : `Error: ${settled.error}`, bounded(settled.answer, budget, job.child)]
-    .filter((part) => part !== "")
-    .join("\n\n");
+  const { content } = await boundOutput([{ type: "text", text: settled.answer }], { budget: outputBudget(undefined), name: "delegate" });
+  const answer = content.flatMap((part) => (part.type === "text" ? [part.text] : [])).join("");
+  const body = [settled.error === undefined ? "" : `Error: ${settled.error}`, answer].filter((part) => part !== "").join("\n\n");
   const text = `<agent_result title="${job.title.replaceAll('"', "'")}" session="${job.child}" ended="${settled.ended}">\n${body}\n</agent_result>`;
   return { text, display };
 };
@@ -72,7 +72,7 @@ const noticeOf = (job: Job, settled: Settled, budget: number) => {
  */
 export default definePlugin({
   id: "tools.delegate",
-  uses: ["lemma/agent@2", "lemma/sessions@1", "lemma/tools@1"],
+  uses: ["lemma/agent@2", "lemma/sessions@1", "lemma/tools@2"],
   version: "0.1.0",
   config: Config,
   requires: { interaction: Interaction, paths: Paths },
@@ -148,7 +148,7 @@ export default definePlugin({
         if (Exit.isFailure(parent) || parent.value) return yield* forget(job);
         working.delete(key(job));
         owed.set(key(job), job);
-        const { text, display } = noticeOf(job, settled, config.maxOutputChars);
+        const { text, display } = yield* Effect.promise(() => noticeOf(job, settled));
         const owing = () => owed.has(key(job));
         // Told again until the thread logs it (`SessionAppended`, below): one no agent heard, as while one reloads, is
         // not lost, and the agent places one id once.
@@ -192,7 +192,6 @@ export default definePlugin({
         maxDelegations: config.maxDelegations,
         maxDepth: config.maxDepth,
         confirm: config.confirm,
-        budget: config.maxOutputChars,
         slotsAt,
         placing,
         background: {

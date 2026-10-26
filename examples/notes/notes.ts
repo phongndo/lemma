@@ -76,7 +76,7 @@ const text = (value: string) => new ToolResult({ content: [{ type: "text", text:
 export default definePlugin({
   id: "notes",
   version: "0.1.0",
-  uses: ["lemma/agent@2", "lemma/tools@1"],
+  uses: ["lemma/agent@2", "lemma/tools@2"],
   config: Config,
   setup: (_deps, { add, config }) => {
     const folder = (cwd: string) => path.resolve(cwd, config.dir);

@@ -9,7 +9,7 @@ import type { Context } from "effect";
 import { CoreClosed } from "@lemma/core";
 import { addUsage, ClassifierContext, contentText, ImagesContext } from "@lemma/llm";
 import type { Llm, Usage } from "@lemma/llm";
-import { ToolInvocation, ToolResult } from "@lemma/tools";
+import { outputBudget, ToolInvocation, ToolResult } from "@lemma/tools";
 import type { ImageBlock, Tool, ToolContribution, ToolNamespace, ToolRunner } from "@lemma/tools";
 import { boundOutput, outputFile } from "@lemma/tools/files";
 import type { CodemodeCallRecord, CodemodeDetails, CodemodeDisplay } from "./details.ts";
@@ -73,9 +73,6 @@ interface Settled {
 const MEMORY_LIMIT_BYTES = 256 * 1024 * 1024;
 /** A script without a `timeout_ms` stops after this. */
 const DEFAULT_TIMEOUT_MS = 300_000;
-/** Output budget without a `max_output_tokens` option. */
-const DEFAULT_MAX_OUTPUT_TOKENS = 10_000;
-const CHARS_PER_TOKEN = 4;
 /** What a call of a tool that declares no output resolves to: its text (or `{ text, images }`, which the description names). */
 const TEXT_OUTPUT = { type: "string" };
 /** Results of `searchTools` without a `limit`. */
@@ -104,7 +101,7 @@ const ARGS_CHARS = 160;
 const DESCRIPTION = `Run JavaScript that calls other tools. The code is raw JavaScript (no code fence), run as an async function body in a QuickJS sandbox: top-level \`await\` and \`return\` work. No Node, file system, network, or timers.
 - \`await tools.<name>({ ...args })\` calls any of your other tools with the same arguments (characters not valid in identifiers become \`_\`). It resolves to what the tool's declaration says (\`bash\` to \`{ output, exitCode, truncated, fullOutputPath?, wallTimeSeconds }\` with up to 1 MiB of output, \`read\` to text or an image block; one declared \`Promise<string>\` to \`{ text, images }\` instead when its result has images), and rejects with an Error on failure; a tool declaring an object resolves on failure too, so check its fields. Calls still running when the script ends are cancelled.
 - Some tools are not in your tool list: only scripts call them, in namespaces the system prompt names. Find them with \`await searchTools(query, { limit?, namespace? })\`, \`await describeTool(name)\` (its declaration), and \`await describeNamespace(name)\` (how its tools work together), or \`ALL_TOOLS\`.
-- Optional first line: \`// @options: {"max_output_tokens": 10000, "timeout_ms": 60000}\`. Without \`timeout_ms\`, a script stops after 300 seconds; image generation can take minutes.
+- Optional first line: \`// @options: {"timeout_ms": 60000}\`. Without it, a script stops after 300 seconds; image generation can take minutes.
 
 Globals:
 - \`text(value)\`, \`image(imageBlockOrDataUrl)\`, \`console.log(...)\`, and top-level \`return\` add output; \`exit()\` ends the script. \`image()\` also saves the image to a temp file whose path the output names.
@@ -647,9 +644,8 @@ export const codemodeTool = (deps: CodemodeDeps): Tool<CodemodeInput> => ({
           text: `[Not shown to the person, though they ran: ${names.join(", ")} (${limit}). Show what matters from another script.]`,
         });
       }
-      const budget = (options.maxOutputTokens ?? DEFAULT_MAX_OUTPUT_TOKENS) * CHARS_PER_TOKEN;
-      // Under the registry's cap with room for the header, so the note naming the full output survives it.
-      const { content, fullOutputPath } = yield* Effect.promise(() => boundOutput(items, { budget, maxResultChars, name: "codemode" }));
+      // Under the call's budget with room for the header, so the note naming the full output survives the registry's cut.
+      const { content, fullOutputPath } = yield* Effect.promise(() => boundOutput(items, { budget: outputBudget(maxResultChars), name: "codemode" }));
       const wallTime = ((performance.now() - started) / 1000).toFixed(1);
       const head = `${result.ok ? "Script completed" : "Script failed"}${resumed === undefined ? "" : " (resumed after a host restart)"}\nWall time ${wallTime} seconds\nOutput:\n`;
       const writes = result.ok && (Object.keys(result.storeWrites.set).length > 0 || result.storeWrites.delete.length > 0) ? result.storeWrites : undefined;

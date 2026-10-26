@@ -4,9 +4,9 @@ The `read` tool: a file's text, a page at a time, or an image. Adds it to `Tools
 No config. Its behavior, description, and limits follow pi's. Its web half
 (`./web`) shows a call as the file and the lines read.
 
-| Input                                 | Behavior                                                                                                                                                                               |
-| ------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `path`, `offset?` (1-based), `limit?` | Raw text, cut at 2000 lines or 50KB with a `Use offset=N to continue` notice. PNG/JPEG/GIF/WebP (by magic bytes) come back as an image part; images over 3.75MB are described instead. |
+| Input                                 | Behavior                                                                                                                                                                                                                                                                                                                                                                                                 |
+| ------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `path`, `offset?` (1-based), `limit?` | Raw text, a page of 2000 lines (or `limit`), fewer past the result's budget (`tools.registry`'s `maxResultChars`), with a marker saying what was left out and `Use offset=N to continue` (`keepHead`). A first line longer than the budget shows its start, and how to read on in it with bash. PNG/JPEG/GIF/WebP (by magic bytes) come back as an image part; images over 3.75MB are described instead. |
 
 A codemode script's call resolves to the text, or to an image as a block
 (`{ type: "image", data, mimeType, note }`, `ReadOutput`) that the script shows
@@ -28,8 +28,9 @@ call will touch).
   (the `of N` note), so the whole file is read, but memory stays at the page:
   on a 40MB, million-line file the first page took 27ms and 18MB of memory
   instead of 181ms and 381MB (2026-10-21), and a file past V8's string limit
-  (about 512MB) reads instead of failing. `details.truncation` holds the
-  counts, not a second copy of the text.
+  (about 512MB) reads instead of failing. A line is what `wc -l` counts, plus
+  a last one without a newline. `details.truncation` holds the counts of a
+  page cut to the budget, not a second copy of the text.
 - **No image resizing** (pi resizes with a native dependency). The size cap keeps
   an oversized image from entering the history, where it would fail every later
   request.

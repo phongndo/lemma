@@ -10,9 +10,9 @@ call as its script's first line; opened, the script, each call it made (as they
 settle, while it runs), and its output; and outside the fold, the pages its
 `display` calls drew.
 
-| Input  | Behavior                                                                                                                                                                                                                                                                                                                                                |
-| ------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `code` | Raw JavaScript, run as an async function body. A `// @options:` first line sets `max_output_tokens` (10,000 by default) and `timeout_ms` (300 seconds by default). Output past the budget, or past what `tools.registry`'s `maxResultChars` leaves room for, keeps its start and end, the rest in a temp file (`boundOutput`, in `@lemma/tools/files`). |
+| Input  | Behavior                                                                                                                                                                                                                                                                                                                          |
+| ------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `code` | Raw JavaScript, run as an async function body. A `// @options:` first line sets `timeout_ms` (300 seconds by default); pi's `max_output_tokens` there is ignored. Output past the call's budget (`tools.registry`'s `maxResultChars`) keeps its start and end, the whole in a temp file (`boundOutput`, in `@lemma/tools/files`). |
 
 What a script has:
 
@@ -43,7 +43,7 @@ codemode call's own output (`✓ bash 12ms {"command":"ls"}`), and the result's
 - **Values, not text.** A script filters and combines what tools return, so a
   tool says what a call resolves to (`Tool.output`) and hands it over beside
   what the model reads (`ToolResult.structured`, never logged): a command's
-  whole output where the model sees its last 50KB, an image as a block a script
+  whole output where the model sees its start and end, an image as a block a script
   shows or hands to a classifier. A tool that declares nothing resolves to its
   text, and is declared so.
 - **Classifiers, not chat models.** A classifier such as TypeSafe's Jev

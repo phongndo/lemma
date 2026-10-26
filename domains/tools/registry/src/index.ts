@@ -1,13 +1,14 @@
 import { Effect, Schema } from "effect";
 import { definePlugin } from "@lemma/core";
-import { ToolRunner, TOOLS_CONTRACT } from "@lemma/tools";
+import { DEFAULT_MAX_RESULT_CHARS, ToolRunner, TOOLS_CONTRACT } from "@lemma/tools";
 import { makeRegistry } from "./registry.ts";
 
 const ToolsConfig = Schema.Struct({
   maxResultChars: Schema.Int.check(Schema.isGreaterThan(0))
-    .pipe(Schema.withDecodingDefaultType(Effect.sync(() => 100_000)))
+    .pipe(Schema.withDecodingDefaultType(Effect.sync(() => DEFAULT_MAX_RESULT_CHARS)))
     .annotate({
-      description: "Total text characters one result may carry to the model; longer results are cut with a marker.",
+      description:
+        "Text characters one result carries to the model, every tool's output bounded by it; longer text keeps its start and its end, the whole in a temp file.",
     }),
 });
 type ToolsConfig = typeof ToolsConfig.Type;

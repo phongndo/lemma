@@ -190,11 +190,11 @@ Effect. The [kernel's README](../packages/core/README.md) covers the rest:
 ## Contract versions
 
 Each domain's contract has a version, which its package exports
-(`TOOLS_CONTRACT` is `"lemma/tools@1"`) and the plugin serving the domain
+(`TOOLS_CONTRACT` is `"lemma/tools@2"`) and the plugin serving the domain
 implements. Say which versions yours is written against, as literals:
 
 ```ts
-export default definePlugin({ id: "greet", uses: ["lemma/tools@1"], setup: … });
+export default definePlugin({ id: "greet", uses: ["lemma/tools@2"], setup: … });
 ```
 
 After an incompatible change to a contract (something removed or renamed, or a

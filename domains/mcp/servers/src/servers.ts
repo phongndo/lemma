@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { McpError, SERVER_NAME } from "@lemma/mcp";
 import type { McpAuthStatus, McpServer, McpServerChange, McpServerConfig, McpServerState, McpServerStatus, McpState, McpToolInfo } from "@lemma/mcp";
-import { ToolResult } from "@lemma/tools";
+import { outputBudget, ToolResult } from "@lemma/tools";
 import type { Tool, ToolNamespace } from "@lemma/tools";
 import { boundOutput } from "@lemma/tools/files";
 import { bearer, callbackParams, finishSignIn, needsSignIn, newState, SignInStore, startSignIn, unionScopes } from "./auth.ts";
@@ -46,8 +46,6 @@ export interface Options {
   readonly file: string;
   /** Where the sign-ins Lemma holds are kept, `<home>/mcp-auth.json`. */
   readonly authFile: string;
-  /** Text characters a result keeps before the rest goes to a temp file. */
-  readonly maxOutputChars: number;
   /** Sent to servers as the client's version. */
   readonly version: string;
   /** Where `${VAR}` is read from. */
@@ -676,11 +674,7 @@ export class Servers {
           // What reaches the model shows a `${VAR}`'s reference, as the page does.
           throw new Error(this.redact(entry, messageOf(cause)), { cause });
         }
-        const { content, fullOutputPath } = await boundOutput(toContent(result), {
-          budget: this.options.maxOutputChars,
-          maxResultChars: context.maxResultChars,
-          name: "mcp",
-        });
+        const { content, fullOutputPath } = await boundOutput(toContent(result), { budget: outputBudget(context.maxResultChars), name: "mcp" });
         return new ToolResult({
           content: content.length === 0 ? [{ type: "text", text: "(no output)" }] : [...content],
           ...(result.isError === true ? { isError: true } : {}),

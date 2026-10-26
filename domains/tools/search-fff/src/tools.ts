@@ -2,7 +2,7 @@
 // which fff's author tunes against agents.
 import { Schema } from "effect";
 import type { GrepCursor, GrepMode, Result } from "@ff-labs/fff-node";
-import { DEFAULT_MAX_BYTES, formatSize, truncateHead } from "@lemma/tools";
+import { keepHead, outputBudget } from "@lemma/tools";
 import type { Tool, ToolResult } from "@lemma/tools";
 import { text, throwIfAborted } from "@lemma/tools/files";
 import type { Finder, Indexes } from "./indexes.ts";
@@ -118,11 +118,10 @@ const clip = (line: string) => {
   return trimmed.length <= LINE_MAX ? trimmed : `${trimmed.slice(0, LINE_MAX)}...`;
 };
 
-/** The body, cut to the tools' output limit, then the notices in brackets. */
-function finish(body: string, notices: readonly string[], details: SearchDetails): ToolResult {
-  const cut = truncateHead(body);
-  const all = cut.truncated ? [...notices, `Output cut at ${formatSize(DEFAULT_MAX_BYTES)}: narrow the search, or lower context or limit`] : notices;
-  return text(all.length === 0 ? cut.content : `${cut.content}\n\n[${all.join(". ")}]`, details);
+/** The body, cut to the call's budget, then the notices in brackets. */
+function finish(body: string, notices: readonly string[], details: SearchDetails, maxResultChars: number | undefined): ToolResult {
+  const kept = keepHead(body, outputBudget(maxResultChars), { rest: () => "Narrow the search, or lower context or limit." });
+  return text(notices.length === 0 ? kept.text : `${kept.text}\n\n[${notices.join(". ")}]`, details);
 }
 
 const INDEXING = "Still indexing: files not read yet are missing";
@@ -149,7 +148,7 @@ export const grepTool = (indexes: Indexes): Tool<GrepInput> => ({
   // It only reads: cut off by a host restart, it runs again, and searches the model asks for together run together.
   replay: "safe",
   parallel: "safe",
-  execute: async (input, { cwd, signal }) => {
+  execute: async (input, { cwd, signal, maxResultChars }) => {
     throwIfAborted(signal);
     const pattern = input.pattern;
     if (pattern.trim() === "") throw new Error("The pattern is empty: give a word or identifier to search for");
@@ -209,7 +208,7 @@ export const grepTool = (indexes: Indexes): Tool<GrepInput> => ({
         );
       }
       const body = lines.length === 0 ? "No matches found" : isFuzzy ? `[No exact matches; these are close]\n${lines.join("\n")}` : lines.join("\n");
-      return finish(body, notices, { root: scope.root, shown: result.items.length, ...(isFuzzy ? { fuzzy: true as const } : {}) });
+      return finish(body, notices, { root: scope.root, shown: result.items.length, ...(isFuzzy ? { fuzzy: true as const } : {}) }, maxResultChars);
     });
   },
 });
@@ -220,7 +219,7 @@ export const findTool = (indexes: Indexes): Tool<FindInput> => ({
   input: FindInput,
   replay: "safe",
   parallel: "safe",
-  execute: async (input, { cwd, signal }) => {
+  execute: async (input, { cwd, signal, maxResultChars }) => {
     throwIfAborted(signal);
     const offset = offsetOf(input.cursor);
     const scope = await scopeOf(input.path, input.exclude, cwd);
@@ -242,7 +241,7 @@ export const findTool = (indexes: Indexes): Tool<FindInput> => ({
       const remaining = result.totalMatched - offset - shown.length;
       if (!weak && remaining > 0) notices.push(`${remaining} more: continue with cursor="${offset + shown.length}"`);
       const body = shown.length === 0 ? "No files found" : shown.map((item) => `${scope.display(item.relativePath)}${annotation(item)}`).join("\n");
-      return finish(body, notices, { root: scope.root, shown: shown.length });
+      return finish(body, notices, { root: scope.root, shown: shown.length }, maxResultChars);
     });
   },
 });
