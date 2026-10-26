@@ -6,7 +6,7 @@ import { Pages } from "@lemma/web";
 import type { NotifyService, Page, RouterService, WebPluginsService, SlotItem, SlotsService } from "@lemma/web";
 
 /** Search keys every navigation keeps: they say how the page runs, not what it shows. */
-const RETAIN = ["safe", "mock"];
+const RETAIN = ["safe"];
 /** Paths the host serves itself, which a link may name without being a page. */
 const HOST_PATHS = /^\/(api|rpc)(\/|$)/;
 const ENTRIES_KEY = "lemma.router.entries";

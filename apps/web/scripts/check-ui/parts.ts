@@ -1,12 +1,28 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
-import { resolve } from "node:path";
-import type { Page } from "playwright";
-import { atBlankThread, boot, checkPlugin, expose, root, settled, switchTo, url } from "./shared.ts";
+import { readdirSync, readFileSync } from "node:fs";
+import { join, resolve } from "node:path";
+import { startHost } from "./hosts.ts";
+import { atBlankThread, boot, checkPlugin, expose, root, settled, showView, switchTo, url } from "./shared.ts";
+
+/** An example folder plugin's files, as a user copies it into the plugin directory: all but its tests and installs. */
+const folder = (name: string, dir = resolve(root, "../../examples", name)): Record<string, string> =>
+  Object.fromEntries(
+    readdirSync(dir, { withFileTypes: true })
+      .filter((entry) => !["node_modules", "tests"].includes(entry.name))
+      .flatMap((entry) =>
+        entry.isDirectory()
+          ? Object.entries(folder(`${name}/${entry.name}`, join(dir, entry.name)))
+          : entry.isFile()
+            ? [[`${name}/${entry.name}`, readFileSync(join(dir, entry.name), "utf8")]]
+            : [],
+      ),
+  );
 
 // 4–7: a part replaced, what plugins add to the extension slots, and the address.
 export const parts = async (): Promise<string> => {
-  const { page, errors, expectNoErrors } = await boot();
+  // With the examples' plugins in its plugin directory, as a user puts them there (checked last).
+  const host = await startHost({ files: { ...folder("todo"), ...folder("glossary") } });
+  const { page, errors, expectNoErrors } = await boot(host);
   // The threads are listed down the sidebar. A sidebar collapsed is remembered across a reload, and opened again it draws.
   await page.waitForSelector(".sidebar .thread-row", { timeout: 5_000 }).catch(() => assert.fail("the threads are not listed down the sidebar"));
   await page.evaluate(() => localStorage.setItem("lemma.sidebar.collapsed", "1"));
@@ -20,7 +36,10 @@ export const parts = async (): Promise<string> => {
   expectNoErrors("a reload with the sidebar collapsed");
   await checkPlugin(page);
 
-  // 4. A replaced part renders instead of the default, everywhere, and the default returns.
+  // 4. A replaced part renders instead of the default, everywhere, and the default returns. In a thread in the project,
+  // so the composer's `@` finds the project's files below.
+  await page.click(".thread-start [aria-label=Project]");
+  await page.click(".project-menu .menu-item >> text=lemma");
   await page.fill("textarea", "hello");
   // The new thread's page becomes the thread's mid-send, keeping its composer (a refused prompt's text returns to it).
   await page.evaluate(() => ((document.querySelector("textarea") as any).checkMark = true));
@@ -405,7 +424,7 @@ export const parts = async (): Promise<string> => {
     return row?.textContent ?? undefined;
   });
   assert(selected !== undefined, "no plugin is selected on the Plugins page");
-  assert.match(await where(), new RegExp(`^/settings/plugins\\?mock=.*plugin=${selected}`), "the selected plugin is not in the address");
+  assert.match(await where(), new RegExp(`^/settings/plugins\\?(.*&)?plugin=${selected}(&|$)`), "the selected plugin is not in the address");
   await page.reload();
   await page
     .waitForSelector(`.inspector-table [aria-selected=true] >> text=${selected}`, { timeout: 10_000 })
@@ -415,14 +434,14 @@ export const parts = async (): Promise<string> => {
   await page
     .waitForFunction(() => location.pathname.startsWith("/threads/"), undefined, { timeout: 5_000 })
     .catch(async () => assert.fail(`closing settings went to ${await where()}`));
-  // A seeded thread (the mock host forgets threads made since it started when the page reloads), opened from its row.
+  // A seeded thread, the newest besides the one made here, opened from its row.
   const created = (await where()).split("/")[2]!.split("?")[0]!;
   const seeded: string = await page.evaluate(async (created) => {
     const { Threads } = (await import("/src/ui/api.ts" as string)).api.contracts;
     const threads = await (window as any).lemma.service(Threads);
     return threads.list().find((session: any) => session.id !== created && session.lastSeq > 0 && session.archived !== true).id;
   }, created);
-  await page.click(`.thread-open[href^="/threads/${seeded}?"]`);
+  await page.click(`.thread-open[href="/threads/${seeded}"]`);
   await page.waitForFunction((id) => location.pathname === `/threads/${id}`, seeded);
   const thread = await where();
   await page.reload();
@@ -672,13 +691,13 @@ export const parts = async (): Promise<string> => {
     void (await (window as any).lemma.service(Threads)).select(undefined);
   });
   await page.click(".archived-head");
-  await page.click(`[data-section=archived] [data-session-row][href^="/threads/${seeded}?"]`);
+  await page.click(`[data-section=archived] [data-session-row][href="/threads/${seeded}"]`);
   await page
     .waitForFunction((id) => location.pathname === `/threads/${id}`, seeded, { timeout: 5_000 })
     .catch(async () => assert.fail(`opening an archived thread from the sidebar ended on ${await where()}`));
   await page.click(".archived-head");
   // Settings › Archived lists it too: its title opens it, and Unarchive on its row brings it back.
-  const archivedRow = `.archived-row:has(a[href^="/threads/${seeded}?"])`;
+  const archivedRow = `.archived-row:has(a[href="/threads/${seeded}"])`;
   const openArchived = () =>
     page.evaluate(async () => {
       const { Settings } = (await import("/src/ui/api.ts" as string)).api.contracts;
@@ -703,7 +722,7 @@ export const parts = async (): Promise<string> => {
   await page.waitForFunction((id) => location.pathname === `/threads/${id}`, seeded);
   await page.waitForSelector(".turn");
   // Unarchived while shown, the thread is listed again.
-  const listedRow = (id: string) => `.thread-section.sorted li:not([data-section=archived]) [data-session-row][href^="/threads/${id}?"]`;
+  const listedRow = (id: string) => `.thread-section.sorted li:not([data-section=archived]) [data-session-row][href="/threads/${id}"]`;
   await page.waitForSelector(listedRow(seeded));
   // Archived from under the pointer, it goes below among the archived and the next thread shows; unarchived from there,
   // it is on top again.
@@ -712,21 +731,26 @@ export const parts = async (): Promise<string> => {
       rows.map((row) => new URL(row.getAttribute("href")!, "http://x").pathname),
     );
   await page.hover(listedRow(seeded));
-  await page.click(`.thread-row:has([data-session-row][href^="/threads/${seeded}?"]) .thread-archive`);
+  await page.click(`.thread-row:has([data-session-row][href="/threads/${seeded}"]) .thread-archive`);
   await page
     .waitForFunction((id) => !location.pathname.endsWith(id), seeded, { timeout: 5_000 })
     .catch(async () => assert.fail(`archiving the thread shown stayed on ${await where()}`));
-  assert(!(await listed()).includes(`/threads/${seeded}`), "an archived thread stayed among the active");
-  await page.click(".archived-head");
-  await page.hover(`[data-section=archived] [data-session-row][href^="/threads/${seeded}?"]`);
-  await page.click(`[data-section=archived] .thread-row:has([data-session-row][href^="/threads/${seeded}?"]) .thread-archive`);
   await page
     .waitForFunction(
       (id) =>
-        document
-          .querySelector(".thread-section.sorted li:not([data-section=archived]) [data-session-row]")
-          ?.getAttribute("href")
-          ?.startsWith(`/threads/${id}?`),
+        ![...document.querySelectorAll(".thread-section.sorted li:not([data-section=archived]) [data-session-row]")].some(
+          (row) => row.getAttribute("href") === `/threads/${id}`,
+        ),
+      seeded,
+      { timeout: 5_000 },
+    )
+    .catch(() => assert.fail("an archived thread stayed among the active"));
+  await page.click(".archived-head");
+  await page.hover(`[data-section=archived] [data-session-row][href="/threads/${seeded}"]`);
+  await page.click(`[data-section=archived] .thread-row:has([data-session-row][href="/threads/${seeded}"]) .thread-archive`);
+  await page
+    .waitForFunction(
+      (id) => document.querySelector(".thread-section.sorted li:not([data-section=archived]) [data-session-row]")?.getAttribute("href") === `/threads/${id}`,
       seeded,
       {
         timeout: 5_000,
@@ -748,7 +772,7 @@ export const parts = async (): Promise<string> => {
   await page.keyboard.press("ControlOrMeta+Shift+KeyO");
   await atBlankThread(page);
   const blankId = new URL(page.url()).pathname.split("/")[2]!;
-  assert.equal(await page.locator(`.thread-list [href^="/threads/${blankId}?"]`).count(), 0, "a thread with nothing sent is listed");
+  assert.equal(await page.locator(`.thread-list [href="/threads/${blankId}"]`).count(), 0, "a thread with nothing sent is listed");
   await page.evaluate(() => (window as any).blankThreads.newThread());
   assert.equal(new URL(page.url()).pathname.split("/")[2], blankId, "a second new thread was made beside an empty one");
   await page.click(`.thread-list a[href="${thread}"]`);
@@ -778,17 +802,17 @@ export const parts = async (): Promise<string> => {
   await page.waitForFunction((path) => `${location.pathname}${location.search}` === path, thread, { timeout: 5_000 });
   const known = await threadIds();
   await page.fill("textarea", "look into it elsewhere");
-  // Held between its steps, so it is still at work when its card is measured below.
-  await page.evaluate(() => (window as any).lemmaMock.holdSteers());
+  // Its answer held after its first words, so it is still at work when its card is measured below.
+  host.mock.hold();
   await page.keyboard.press("ControlOrMeta+Enter");
   const background: string = await page
     .waitForFunction((known) => (window as any).blankThreads.list().find((session: any) => !known.includes(session.id))?.id, known, { timeout: 5_000 })
     .then((handle) => handle.jsonValue() as Promise<string>)
     .catch(async () => assert.fail(`⌘Enter started no thread; ${JSON.stringify(await threadIds())}`));
-  await page.waitForSelector(`.thread-list a[href^="/threads/${background}?"]`);
+  await page.waitForSelector(`.thread-list a[href="/threads/${background}"]`);
   // A card at work is as tall as one at rest, and stays so under the pointer: what it shows never changes its size, so
   // a pointer resting at its foot does not leave and find it again, over and over.
-  const workingRow = `.thread-section.sorted .thread-row:has([data-session-row][href^="/threads/${background}?"])`;
+  const workingRow = `.thread-section.sorted .thread-row:has([data-session-row][href="/threads/${background}"])`;
   // Away from the list first: a card under the pointer shows its buttons where its state goes.
   await page.mouse.move(900, 400);
   await page
@@ -801,7 +825,7 @@ export const parts = async (): Promise<string> => {
   await page.waitForFunction((selector) => document.querySelector(selector)?.matches(":hover") === true, workingRow);
   assert.equal((await page.locator(workingRow).boundingBox())!.height, atRest.height, "a card at work changes its height under the pointer");
   await page.mouse.move(atRest.x + atRest.width + 400, atRest.y);
-  await page.evaluate(() => (window as any).lemmaMock.releaseSteers());
+  host.mock.release();
   assert.equal(await where(), thread, "⌘Enter left the thread shown");
   assert.equal(await page.inputValue("textarea"), "", "⌘Enter left the prompt in the composer");
   // Done while another showed, the background thread needs the person: Alt+Shift+↓ goes to it, though not from the
@@ -878,7 +902,7 @@ export const parts = async (): Promise<string> => {
   const draftId = new URL(page.url()).pathname.split("/")[2]!;
   await page.fill("textarea", "hold this prompt");
   await page.click(`.thread-list a[href="${thread}"]`);
-  const draftRow = `.drafts [data-session-row][href^="/threads/${draftId}?"]`;
+  const draftRow = `.drafts [data-session-row][href="/threads/${draftId}"]`;
   await page.waitForSelector(draftRow, { timeout: 5_000 }).catch(() => assert.fail("a prompt left in a new thread is not held as a draft"));
   await page.reload();
   await page.waitForSelector(draftRow, { timeout: 10_000 }).catch(() => assert.fail("a draft is gone after a reload"));
@@ -906,19 +930,15 @@ export const parts = async (): Promise<string> => {
     page.$$eval(".thread-section.sorted li:not([data-section=archived]) [data-session-row]", (rows) =>
       rows.map((row) => new URL(row.getAttribute("href")!, "http://x").pathname.split("/")[2]!),
     );
-  const rowOf = (id: string) => `.thread-section.sorted .thread-row:has([data-session-row][href^="/threads/${id}?"])`;
+  const rowOf = (id: string) => `.thread-section.sorted .thread-row:has([data-session-row][href="/threads/${id}"])`;
   const before = await sorted();
   const pinning = before.at(-1)!;
   await page.hover(rowOf(pinning));
   await page.click(`${rowOf(pinning)} [aria-label^="Pin "]`);
   await page
-    .waitForFunction(
-      (id) => document.querySelector(".thread-section.sorted [data-session-row]")?.getAttribute("href")?.startsWith(`/threads/${id}?`),
-      pinning,
-      {
-        timeout: 5_000,
-      },
-    )
+    .waitForFunction((id) => document.querySelector(".thread-section.sorted [data-session-row]")?.getAttribute("href") === `/threads/${id}`, pinning, {
+      timeout: 5_000,
+    })
     .catch(async () => assert.fail(`a thread pinned is not on top: ${(await sorted()).join(", ")}`));
   const next = (await sorted())[1]!;
   const from = (await page.locator(rowOf(pinning)).boundingBox())!;
@@ -990,7 +1010,7 @@ export const parts = async (): Promise<string> => {
   await page
     .waitForSelector(".palette-input input[placeholder='Threads']", { timeout: 5_000 })
     .catch(() => assert.fail("Search does not open the palette's threads"));
-  await page.keyboard.type("depend each");
+  await page.keyboard.type("repair fetch");
   await page
     .waitForSelector(".palette-section:has-text('In messages') + .palette-row", { timeout: 5_000 })
     .catch(() => assert.fail("searching threads does not find what was said in them"));
@@ -1015,12 +1035,13 @@ export const parts = async (): Promise<string> => {
     .waitForSelector("[aria-label='Folder path']", { state: "detached", timeout: 5_000 })
     .catch(async () => assert.fail(`Enter in a folder gone into left the picker at ${await folderPath()}`));
   await atBlankThread(page);
-  assert.equal(await page.evaluate(() => (window as any).blankThreads.active().cwd), "~/code/lemma/", "Enter in a folder gone into opened another");
+  const added: string = await page.evaluate(() => (window as any).blankThreads.active().cwd);
+  assert.equal(added.replace(/\/$/, ""), host.projects.lemma, "Enter in a folder gone into opened another");
   // The project goes again, so the checks after see what they did.
-  await page.evaluate(async () => {
+  await page.evaluate(async (added) => {
     const { Workspace } = (await import("/src/ui/api.ts" as string)).api.contracts;
-    (await (window as any).lemma.service(Workspace)).remove("~/code/lemma/");
-  });
+    (await (window as any).lemma.service(Workspace)).remove(added);
+  }, added);
   // The background thread goes once its turn is done, so the checks after see the threads they did.
   await page.waitForFunction((id) => !(window as any).blankThreads.running().includes(id), background, { timeout: 20_000 });
   await page.evaluate((id) => (window as any).blankThreads.remove(id), background);
@@ -1041,7 +1062,7 @@ export const parts = async (): Promise<string> => {
   await page.waitForSelector(".turn");
   // An address from before threads had paths becomes the thread's own; one no page has says so.
   const id = thread.split("/")[2]!.split("?")[0]!;
-  await page.goto(`${url}/?mock#${id}`);
+  await page.goto(`${url}/#${id}`);
   await page
     .waitForFunction((path) => `${location.pathname}${location.search}` === path, thread, { timeout: 10_000 })
     .catch(async () => assert.fail(`/#${id} went to ${await where()}`));
@@ -1106,7 +1127,7 @@ export const parts = async (): Promise<string> => {
     };
   });
   const reads = (id: string) => page.evaluate((id) => (window as any).fetched.filter(([, session]: any) => session === id), id);
-  const row = page.locator(`.thread-open[href^="/threads/${seeded}?"]`);
+  const row = page.locator(`.thread-open[href="/threads/${seeded}"]`);
   await row.hover();
   await page
     .waitForFunction((id) => (window as any).fetched.some(([kind, session]: any) => kind === "events" && session === id), seeded, { timeout: 2_000 })
@@ -1166,10 +1187,10 @@ export const parts = async (): Promise<string> => {
     .catch(() => assert.fail("pasted files that are no images were not said to be left out"));
   await page.fill("textarea", "");
   assert.equal(await unloadAsks(), false, "an empty composer made leaving the page ask");
-  await page.goto(`${url}/nowhere?mock`);
+  await page.goto(`${url}/nowhere`);
   await page.waitForSelector(".page-missing >> text=No page here");
   // A plugin's own route and page, reached by an ordinary link without reloading.
-  await page.goto(`${url}/?mock`);
+  await page.goto(`${url}/`);
   await settled(page);
   await checkPlugin(page);
   await page.evaluate(async () => {
@@ -1199,7 +1220,7 @@ export const parts = async (): Promise<string> => {
   });
   await page.click(".check-link");
   await page.waitForSelector(".check-page >> text=note 7");
-  assert.equal(await where(), "/notes/7?mock=", "the link did not keep ?mock");
+  assert.equal(await where(), "/notes/7", "the link did not go to its address");
   assert.equal(await page.evaluate(() => (window as any).stayed), true, "following the link reloaded the page");
   await page.evaluate(() => {
     for (const remove of (window as any).removals) remove();
@@ -1250,9 +1271,9 @@ export const parts = async (): Promise<string> => {
     await page.waitForFunction((path) => (window as any).services.Router.location().pathname === path, new URL(navigate, url).pathname, { timeout: 5_000 });
     return page.evaluate(() => (window as any).reruns);
   };
-  assert.equal(await reruns("/broken/2?mock"), 3, "the route's own change did not rerun its reader");
-  assert.equal(await reruns("/nowhere?mock"), 4, "leaving the route did not rerun its reader");
-  assert.equal(await reruns("/elsewhere?mock"), 4, "an unrelated navigation reran a route's reader");
+  assert.equal(await reruns("/broken/2"), 3, "the route's own change did not rerun its reader");
+  assert.equal(await reruns("/nowhere"), 4, "leaving the route did not rerun its reader");
+  assert.equal(await reruns("/elsewhere"), 4, "an unrelated navigation reran a route's reader");
   await page.evaluate(() => {
     const check = window as any;
     check.disposeCount();
@@ -1298,30 +1319,30 @@ export const parts = async (): Promise<string> => {
     (await (window as any).lemma.service(Router)).navigate(After, { id: "1" });
   });
   await page.waitForSelector(".check-after");
-  assert.equal(await where(), "/after/1?mock=", "the router did not navigate after a page without a route");
+  assert.equal(await where(), "/after/1", "the router did not navigate after a page without a route");
   await page.evaluate(() => {
     (window as any).removeAfter();
     (window as any).removeMalformed();
   });
   errors.splice(0);
-
-  // An example's web half runs as a user's would, from the plugin directory: examples/todo adds a view of the thread
-  // and how its tool's calls show, and so does examples/glossary, which docs/building.md builds.
-  const todo = readFileSync(resolve(root, "../../examples/todo/web.js"), "utf8");
-  const glossary = readFileSync(resolve(root, "../../examples/glossary/glossary.web.js"), "utf8");
-  await page.goto(`${url}/threads/s1?mock`);
+  // \`?safe\` says how the page runs, not what it shows, so every navigation keeps it: a link names it, and following one
+  // keeps it.
+  await page.goto(`${url}/?safe`);
   await settled(page);
-  await page.waitForFunction(() => "lemmaMock" in window && "lemma" in window);
-  await page.evaluate(
-    ([todo, glossary]) => {
-      const url = (source: string) => URL.createObjectURL(new Blob([source], { type: "text/javascript" }));
-      (window as any).lemmaMock.setWebFiles([
-        { name: "todo/web.js", source: "user", kind: "script", path: "/plugins/todo/web.js", url: url(todo!) },
-        { name: "glossary/glossary.web.js", source: "user", kind: "script", path: "/plugins/glossary/glossary.web.js", url: url(glossary!) },
-      ]);
-    },
-    [todo, glossary],
-  );
+  const safeRow = page.locator(".thread-open").first();
+  await safeRow.waitFor({ timeout: 10_000 });
+  assert.match((await safeRow.getAttribute("href")) ?? "", /[?&]safe=/, "a link in a page run safe does not keep ?safe");
+  await safeRow.click();
+  await page
+    .waitForFunction(() => location.pathname.startsWith("/threads/") && new URLSearchParams(location.search).has("safe"), undefined, { timeout: 5_000 })
+    .catch(async () => assert.fail(`following a link in a page run safe went to ${await where()}`));
+  expectNoErrors("following a link in a page run safe");
+
+  // An example's plugin runs as a user's would, from the plugin directory, both halves: examples/todo adds a view of the
+  // thread and how its tool's calls show, and so does examples/glossary, which docs/building.md builds.
+  await page.goto(`${url}/`);
+  await page.click(".thread-open:has-text('Fix flaky session log test')");
+  await page.waitForSelector(".turn");
   await showView(page, "todo").catch(() => assert.fail("examples/todo added no Todos view"));
   await page.waitForSelector(".todo-view >> text=No todos in this thread.");
   assert.equal(
@@ -1334,29 +1355,6 @@ export const parts = async (): Promise<string> => {
   );
   await showView(page, "glossary").catch(() => assert.fail("examples/glossary added no Glossary view"));
   await page.waitForSelector(".glossary-view >> text=No terms in this thread yet.");
-  expectNoErrors("an example's web half");
-  return "a part replaced and restored; six extension slots render what a plugin adds; @ completes files, / a command and its arguments, $ the skills, and a plugin adds completions; addresses survive reloads, back, and their page's plugin going off; a trajectory record's pipeline says who shaped it; a plugin adds a page; an example's web half adds a view and its tool's";
+  expectNoErrors("an example's plugin");
+  return "a part replaced and restored; six extension slots render what a plugin adds; @ completes files, / a command and its arguments, $ the skills, and a plugin adds completions; addresses survive reloads, back, and their page's plugin going off, and keep ?safe; a trajectory record's pipeline says who shaped it; a plugin adds a page; an example's plugin adds a view and its tool's";
 };
-
-/** Shows a view of the open thread by its id in its pane, as its palette command does, once the thread has loaded. */
-async function showView(page: Page, id: string): Promise<void> {
-  // The pane is the open thread's, so a view is shown in it once the thread (a blank one too) has loaded.
-  await page.waitForFunction(
-    async () => {
-      const { Threads } = (await import("/src/ui/api.ts" as string)).api.contracts;
-      return (await (window as any).lemma.service(Threads)).active() !== undefined;
-    },
-    undefined,
-    { timeout: 10_000 },
-  );
-  await page.waitForFunction(
-    async (view) => {
-      const { Actions } = (await import("/src/ui/api.ts" as string)).api.contracts;
-      const action = (window as any).lemma.slots().get(Actions, `thread.view.${view}`);
-      action?.run();
-      return action !== undefined;
-    },
-    id,
-    { timeout: 10_000 },
-  );
-}

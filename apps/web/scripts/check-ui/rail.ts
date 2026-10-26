@@ -1,9 +1,10 @@
 import assert from "node:assert/strict";
-import { boot, drawn, settled, url } from "./shared.ts";
+import { startHost } from "./hosts.ts";
+import { boot, drawn } from "./shared.ts";
 
 // 10: the prompt rail.
 export const rail = async (): Promise<string> => {
-  const { page, expectNoErrors } = await boot();
+  const { page, expectNoErrors } = await boot(await startHost());
 
   // The api a web half receives: its contracts merge with no name exported by two of them (one would hide the other),
   // with no maker of slots and parts but the api's own, and with the thread routes.
@@ -26,13 +27,12 @@ export const rail = async (): Promise<string> => {
   assert.deepEqual(contracts.routes, ["ThreadRoute", "NewThreadRoute"], "api.contracts lacks the thread routes");
 
   // 10. The prompt rail: a tick per prompt; the card for the one pointed at is level with it, and a click goes there.
-  await page.goto(`${url}/?mock`);
-  await settled(page);
+  // Each answered at length, so the chat scrolls through them.
   await page.evaluate(async () => {
     const { Settings } = (await import("/src/ui/api.ts" as string)).api.contracts;
     (await (window as any).lemma.service(Settings)).open(undefined);
   });
-  for (const [index, prompt] of ["first prompt", "second prompt", "third prompt"].entries()) {
+  for (const [index, prompt] of ["first prompt at length", "second prompt at length", "third prompt at length"].entries()) {
     await page.fill("textarea", prompt);
     await page.keyboard.press("Enter");
     await page.waitForFunction((count) => document.querySelectorAll(".turn-footer").length === count, index + 1, { timeout: 20_000 });
@@ -160,7 +160,11 @@ export const rail = async (): Promise<string> => {
   await cardShows("third prompt", "the keys do not choose a prompt on the rail");
   // A key with a modifier is left to the app's shortcuts.
   await page.keyboard.press("Alt+ArrowUp");
-  assert.equal(await page.evaluate(() => document.activeElement?.getAttribute("aria-label")), "Prompt 3 of 3: third prompt", "the rail took a modified key");
+  assert.equal(
+    await page.evaluate(() => document.activeElement?.getAttribute("aria-label")),
+    "Prompt 3 of 3: third prompt at length",
+    "the rail took a modified key",
+  );
   await point(0);
   await cardShows("first prompt", "pointing at a tick while another is focused does not show it");
   await page.mouse.move(900, 450);

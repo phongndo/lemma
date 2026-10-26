@@ -1,19 +1,61 @@
 import assert from "node:assert/strict";
+import { settled as eventually } from "../../../../scripts/e2e.ts";
+import { scripted, startHost } from "./hosts.ts";
+import { git } from "./seed.ts";
 import { drawn, log, open, settled, url } from "./shared.ts";
 
+/** A plugin of the user's with a command that asks a form, as a plugin's settings are asked for. */
+const PULL_REQUEST = `import { Effect, Schema } from "effect";
+import { definePlugin } from "@lemma/core/plain";
+import { Interaction } from "@lemma/contracts";
+import { Commands } from "@lemma/commands";
+
+const Request = Schema.Struct({
+  title: Schema.String.annotate({ title: "Title" }),
+  base: Schema.Literals(["main", "develop"]).pipe(Schema.withDecodingDefaultType(Effect.sync(() => "main"))).annotate({ title: "Base" }),
+  draft: Schema.Boolean.pipe(Schema.withDecodingDefaultType(Effect.sync(() => false))).annotate({ title: "Draft" }),
+});
+
+export default definePlugin({
+  id: "pull-request",
+  uses: ["lemma/commands@1"],
+  requires: { interaction: Interaction },
+  setup: ({ interaction }, { add }) => {
+    add(Commands, {
+      id: "pull-request.open",
+      title: "Open pull request…",
+      category: "Git",
+      run: async () => {
+        const asked = await interaction.form("Open a pull request", Request, "From main");
+        return { message: \`Opened "\${asked.title}" into \${asked.base}\${asked.draft ? " as a draft" : ""}\` };
+      },
+    });
+  },
+});
+`;
+
 // 11 on: pages that start elsewhere: with no provider, connecting one, with a web half, from an older app, and profiles.
+// Pages share a host where what one leaves changes nothing the next checks: hosts are processes, and a machine has only
+// so many.
 export const separate = async (): Promise<string> => {
   const { errors, expectNoErrors } = log();
 
-  // 11. No provider set up: the chat, not settings, and its notice opens Providers, which returns to the chat once one connects.
-  const fresh = await open();
+  // 11. No provider set up: the chat, not settings, and its notice opens Providers, which returns to the chat once one
+  // connects. The scripted provider needs a key here, which no one has given it.
+  const bare = await startHost({
+    threads: false,
+    plugins: (provider) => ({ "llm.pi-ai": { config: { providers: [scripted(provider, { apiKey: { env: "SCRIPTED_API_KEY" } })] } } }),
+  });
+  const fresh = await open(bare);
   fresh.on("pageerror", (error) => errors.push(error.message));
-  await fresh.goto(`${url}/?mock`);
+  await fresh.goto(`${url}/`);
   await fresh.waitForSelector(".composer-callout, .settings");
   assert.equal(await fresh.locator(".settings").count(), 0, "with no provider set up, the app opened settings rather than the chat");
   await fresh.click(".composer-callout button >> text=Connect");
   await fresh.waitForSelector(".settings >> text=Connect a provider to start chatting");
-  await fresh.locator(".provider", { hasText: "OpenCode Zen" }).locator(".provider-connect").click();
+  // A provider the user added offers its key, its logo, and its removal.
+  await fresh.locator(".provider", { hasText: "Scripted" }).locator(".provider-connect").click();
+  await fresh.click(".menu-item >> text=Paste an API key");
   await fresh.fill(".connect input[type=password]", "sk-check");
   await fresh.press(".connect input[type=password]", "Enter");
   await fresh.waitForSelector(".settings", { state: "detached", timeout: 5_000 }).catch(() => assert.fail("connecting the first provider left settings open"));
@@ -66,11 +108,14 @@ export const separate = async (): Promise<string> => {
 
   // 12. Connecting a provider, each way, in one dialog: a sign-in page with its paste fallback, a device code, a question after a
   // documentation link, and a new custom provider whose key is answered for it; closing cancels, and leaves no link behind.
-  const connect = await open();
+  // Each a real sign-in, reaching nothing beyond this machine: OpenRouter's page (its answer comes back to a port of the
+  // host's own), Kimi Code's device code (asked of the scripted provider), Amazon Bedrock's questions, and custom
+  // providers on the scripted one.
+  const connect = await open(bare);
   connect.on("pageerror", (error) => errors.push(error.message));
-  await connect.goto(`${url}/settings/providers?mock=fresh`);
-  await connect.locator(".provider", { hasText: "OpenAI" }).first().locator(".provider-connect").click();
-  await connect.click(".menu-item >> text=Sign in with ChatGPT");
+  await connect.goto(`${url}/settings/providers`);
+  await connect.locator(".provider", { hasText: "OpenRouter" }).first().locator(".provider-connect").click();
+  await connect.click(".menu-item >> text=Sign in with OpenRouter");
   await connect.waitForSelector(".connect .connect-url");
   assert.equal(await connect.locator(".connect .connect-paste input").count(), 1, "the sign-in page's dialog has no paste-the-address fallback");
   assert.equal(await connect.locator(".toast").count(), 0, "the sign-in's link showed as a toast as well as in its dialog");
@@ -78,20 +123,23 @@ export const separate = async (): Promise<string> => {
   assert.equal(await connect.locator(".connect").count(), 1, "a click on the backdrop cancelled the login");
   await connect.click(".connect .dialog-foot >> text=Cancel");
   await connect.waitForSelector(".connect", { state: "detached" });
-  await connect.waitForSelector(".provider:has-text('OpenAI') >> text=Connect");
+  await connect.waitForSelector(".provider:has-text('OpenRouter') >> text=Connect");
   assert.equal(await connect.locator(".toast").count(), 0, "cancelling left a toast behind: its link, or a failure");
 
-  await connect.locator(".provider", { hasText: "GitHub Copilot" }).first().locator(".provider-connect").click();
-  await connect.click(".menu-item >> text=/GitHub Copilot/");
+  await connect.locator(".provider", { hasText: "Kimi For Coding" }).first().locator(".provider-connect").click();
+  await connect.click(".menu-item >> text=Sign in with Kimi Code");
   await connect.waitForSelector(".connect .connect-code >> text=WDJB-MJHT");
   await connect.keyboard.press("Escape");
   await connect.waitForSelector(".connect", { state: "detached" });
 
   await connect.fill("input[aria-label='Search providers']", "bedrock");
   await connect.locator(".provider", { hasText: "Amazon Bedrock" }).first().locator(".provider-connect").click();
+  // Its first question is a choice: the way in is an AWS profile, which it documents, then asks for.
+  await connect.click(".connect .connect-choice >> text=AWS profile");
   await connect.waitForSelector(".connect .connect-info >> text=AWS profiles");
   assert.equal(await connect.locator(".connect .connect-paste").count(), 0, "a documentation link made the question look like a sign-in page's fallback");
-  // A blank answer is one: the default profile.
+  // The profile named is the credential stored.
+  await connect.fill(".connect .connect-question input", "default");
   await connect.click(".connect .connect-question button[type=submit]");
   await connect.waitForSelector(".connect", { state: "detached" });
   await connect.waitForSelector(".provider:has-text('Amazon Bedrock') >> text=Manage");
@@ -107,17 +155,18 @@ export const separate = async (): Promise<string> => {
   });
   const fields = connect.locator(".custom-provider-form input");
   await fields.nth(0).fill("Gateway");
-  await fields.nth(1).fill("http://localhost:4000/v1");
+  await fields.nth(1).fill(bare.provider);
   await fields.nth(2).fill("m1");
   await fields.nth(3).fill("sk-gateway");
   await connect.click(".custom-provider >> text=Add provider");
   await connect.waitForSelector(".custom-provider", { state: "detached", timeout: 10_000 });
   assert.notEqual(await connect.evaluate(() => (window as any).sawConnect), true, "adding a custom provider with a key opened the connect dialog too");
-  // One whose key the host refuses (the mock refuses any with "wrong" in it): the connect dialog says why, and takes another.
+  // One whose key the provider refuses (the scripted one refuses any with "wrong" in it): the connect dialog says why, and
+  // takes another.
   await connect.locator(".provider", { hasText: "Custom provider" }).locator(".provider-connect").click();
   await connect.waitForSelector(".custom-provider-form");
   await fields.nth(0).fill("Proxy");
-  await fields.nth(1).fill("http://localhost:4001/v1");
+  await fields.nth(1).fill(bare.provider);
   await fields.nth(2).fill("m1");
   await fields.nth(3).fill("sk-wrong");
   await connect.click(".custom-provider >> text=Add provider");
@@ -133,13 +182,12 @@ export const separate = async (): Promise<string> => {
   // A web half's Tailwind classes work as the app's own: compiled in the page with them into one sheet, so a file's
   // `tw:px-4` beats the app's `tw:p-0.5` as one build would, drawn from the tokens, and gone with the file. The same
   // file is a theme pack: its theme, accent, and Appearance row are offered beside Lemma's own, and leave with it.
-  const styled = await open();
+  const styled = await open(bare);
   styled.on("pageerror", (error) => errors.push(error.message));
-  await styled.goto(`${url}/?mock`);
+  await styled.goto(`${url}/`);
   await settled(styled);
-  await styled.waitForFunction(() => "lemmaMock" in window && "lemma" in window);
-  await styled.evaluate(() => {
-    const source = `export default ({ defineWebPlugin, contracts: { Slots, SidebarFooter, Themes, Accents, SettingsGroups, SectionIds }, html }) =>
+  await bare.plugins({
+    "check-look.web.js": `export default ({ defineWebPlugin, contracts: { Slots, SidebarFooter, Themes, Accents, SettingsGroups, SectionIds }, html }) =>
       defineWebPlugin({ id: "check-look", requires: { slots: Slots }, setup: ({ slots }) => {
         window.lookSlots = slots;
         slots.add(SidebarFooter, { id: "check-utilities", order: 1, component: () => html\`<span class="check-utilities tw:p-0.5 tw:px-4 tw:bg-accent tw:rounded">styled</span>\` });
@@ -147,9 +195,7 @@ export const separate = async (): Promise<string> => {
         slots.add(Themes, { id: "check-day", title: "Check day", scheme: "light", colors: { bg: "rgb(250, 240, 220)" } });
         slots.add(Accents, { id: "check-teal", title: "Check teal", color: "rgb(0, 128, 128)" });
         slots.add(SettingsGroups, { id: "check-look", section: SectionIds.appearance, title: "Check", entries: () => [{ text: "check look", view: () => html\`<p class="check-look-row">a plugin's row</p>\` }] });
-      } });`;
-    const url = URL.createObjectURL(new Blob([source], { type: "text/javascript" }));
-    (window as any).lemmaMock.setWebFiles([{ name: "check-look.js", source: "user", kind: "script", path: "/check/check-look.js", url }]);
+      } });`,
   });
   await styled.waitForSelector(".check-utilities", { timeout: 10_000 }).catch(() => assert.fail("a web half's plugin did not draw"));
   const look = () =>
@@ -252,7 +298,7 @@ export const separate = async (): Promise<string> => {
     .catch(() => assert.fail("a linked stylesheet's loading is no look change"));
   await styled.evaluate(() => (window as any).stopLooks());
 
-  await styled.evaluate(() => (window as any).lemmaMock.setWebFiles([]));
+  await bare.plugins({ "check-look.web.js": null });
   await styled.waitForSelector(".check-utilities", { state: "detached", timeout: 10_000 });
   await styled
     .waitForFunction(() => document.querySelector("style[data-lemma-utilities]") === null, undefined, { timeout: 5_000 })
@@ -266,7 +312,9 @@ export const separate = async (): Promise<string> => {
   expectNoErrors("a web half's Tailwind classes and theme pack");
 
   // An older app kept the scheme and width in the browser: the first start carries them into config and forgets them.
-  const carried = await open();
+  // A host whose config has no look yet, which the form's page shares after.
+  const plain = await startHost({ threads: false, files: { "pull-request.js": PULL_REQUEST } });
+  const carried = await open(plain);
   carried.on("pageerror", (error) => errors.push(error.message));
   await carried.addInitScript(() => {
     if (sessionStorage.getItem("check-carried") !== null) return;
@@ -274,7 +322,7 @@ export const separate = async (): Promise<string> => {
     localStorage.setItem("lemma.theme", "dark");
     localStorage.setItem("lemma.contentWidth", "full");
   });
-  await carried.goto(`${url}/?mock`);
+  await carried.goto(`${url}/`);
   await settled(carried);
   await carried
     .waitForFunction(
@@ -291,15 +339,23 @@ export const separate = async (): Promise<string> => {
   expectNoErrors("carrying an older app's appearance into config");
 
   // A form question: drawn as a plugin's settings are, its Submit waiting on the field it needs, and what is set the answer.
-  const form = await open();
+  const form = await open(plain);
   form.on("pageerror", (error) => errors.push(error.message));
-  await form.goto(`${url}/?mock`);
+  await form.goto(`${url}/`);
   await settled(form);
-  await form.evaluate(async () => {
-    const { Commands } = (await import("/src/ui/api.ts" as string)).api.contracts;
-    const commands = await (window as any).lemma.service(Commands);
-    void commands.run(commands.list().find((command: { readonly id: string }) => command.id === "workspace.pull-request"));
-  });
+  await form
+    .waitForFunction(
+      async () => {
+        const { Commands } = (await import("/src/ui/api.ts" as string)).api.contracts;
+        const commands = await (window as any).lemma.service(Commands);
+        const command = commands.list().find((command: { readonly id: string }) => command.id === "pull-request.open");
+        if (command !== undefined) void commands.run(command);
+        return command !== undefined;
+      },
+      undefined,
+      { timeout: 10_000 },
+    )
+    .catch(() => assert.fail("a plugin's command is not listed"));
   const dialog = form.locator(".dialog", { hasText: "Open a pull request" });
   await dialog.waitFor({ timeout: 5_000 }).catch(() => assert.fail("a form question does not show"));
   const submit = dialog.getByRole("button", { name: "Submit" });
@@ -315,10 +371,12 @@ export const separate = async (): Promise<string> => {
   await form.close();
   expectNoErrors("answering a form");
   // A new thread in a git project can start in a new worktree, from the remote's version of its branch: the menu of where
-  // to work chooses the worktree, the branch menu's switch the remote, which the branch says, and the first prompt asks for it.
-  const fork = await open();
+  // to work chooses the worktree, the branch menu's switch the remote, which the branch says, and the first prompt makes
+  // it, from the remote's `main`, a commit behind the project's.
+  const forks = await startHost();
+  const fork = await open(forks);
   fork.on("pageerror", (error) => errors.push(error.message));
-  await fork.goto(`${url}/?mock`);
+  await fork.goto(`${url}/`);
   await fork.waitForSelector(".thread-chat.starting .thread-start [aria-label=Project]", { timeout: 10_000 });
   await fork.click(".thread-start [aria-label=Project]");
   await fork.click(".project-menu .menu-item >> text=lemma");
@@ -332,13 +390,18 @@ export const separate = async (): Promise<string> => {
   await fork.keyboard.press("Escape");
   await fork.fill("textarea", "work apart");
   await fork.keyboard.press("Enter");
-  await fork
-    .waitForFunction(() => (window as any).lemmaMock.worktreesAsked().length > 0, undefined, { timeout: 10_000 })
-    .catch(() => assert.fail("a new thread in a new worktree asked for none"));
+  // The worktree made for the branch `lemma/work-apart`, once git lists it.
+  const made = await eventually(async () =>
+    git(forks.projects.lemma, "worktree", "list", "--porcelain")
+      .split("\n\n")
+      .flatMap((entry) => (entry.includes("branch refs/heads/lemma/work-apart") ? [/^worktree (.+)$/m.exec(entry)![1]!] : []))
+      .at(0),
+  );
+  if (made === undefined) assert.fail("a new thread in a new worktree made none");
   assert.equal(
-    (await fork.evaluate(() => (window as any).lemmaMock.worktreesAsked().at(-1))).fromRemote,
-    true,
-    "a new worktree to start from the remote was asked for without it",
+    git(made, "rev-parse", "HEAD"),
+    git(forks.projects.lemma, "rev-parse", "origin/main"),
+    "a new worktree to start from the remote started from the project's own branch",
   );
   // The worktree is a place in its project, never a project: its thread is the project's, and a new thread started from
   // it starts in the project, which offers the worktree to go on in.
@@ -375,12 +438,12 @@ export const separate = async (): Promise<string> => {
   await fork.close();
   expectNoErrors("starting a new thread in a new worktree from the remote, and a new thread after it");
 
-  // 13. Settings › Profiles, on the mock host's profiles: the default alone, as Core, the current one; one made in the
+  // 13. Settings › Profiles, on the host's profiles: the default alone, as Core, the current one; one made in the
   // New profile dialog gets a row, renames in place, and goes only after its dialog asks; while there are two, the
   // settings button shows the profile this page is.
-  const profiles = await open();
+  const profiles = await open(forks);
   profiles.on("pageerror", (error) => errors.push(error.message));
-  await profiles.goto(`${url}/settings/profiles?mock`);
+  await profiles.goto(`${url}/settings/profiles`);
   const rows = profiles.locator(".settings .profiles-row");
   await rows
     .first()
@@ -410,7 +473,7 @@ export const separate = async (): Promise<string> => {
     /^Profile: Core · Settings/,
     "the settings button does not name the profile this page is",
   );
-  // Back in place: a reload would start the mock host afresh, without the profile.
+  // Back to Settings › Profiles.
   await profiles.evaluate(async () => {
     const { Settings } = (await import("/src/ui/api.ts" as string)).api.contracts;
     (await (window as any).lemma.service(Settings)).open("profiles");

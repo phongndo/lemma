@@ -1,11 +1,13 @@
 import assert from "node:assert/strict";
 import { domainPlugins } from "../../../../scripts/plugins.ts";
+import { startHost } from "./hosts.ts";
 import { boot, expose, settled, switchTo } from "./shared.ts";
 
 // 1–3: booting, the parts, and every plugin off and on.
 export const toggling = async (): Promise<string> => {
   // 1. The app boots without errors.
-  const { page, warnings, expectNoErrors } = await boot();
+  const host = await startHost();
+  const { page, warnings, expectNoErrors } = await boot(host);
 
   // 2. Every declared part has a provider.
   const unfilled: string[] = await page.evaluate(async () => {
@@ -34,7 +36,7 @@ export const toggling = async (): Promise<string> => {
       .sort(),
     "the bundled web halves are not those the domains' manifests list (src/bundled.ts, scripts/plugins.ts)",
   );
-  // The mock host's plugins are the host halves they list, as a real host bundles them.
+  // The host's plugins are the host halves they list: it bundles every one.
   const hostPlugins: string[] = await page.evaluate(async () => {
     const { HostPlugins } = (await import("/src/ui/api.ts" as string)).api.contracts;
     const host = await (window as any).lemma.service(HostPlugins);
@@ -47,7 +49,7 @@ export const toggling = async (): Promise<string> => {
       .filter(([, plugin]) => plugin.host !== undefined)
       .map(([id]) => id)
       .sort(),
-    "the mock host's plugins are not the host halves the domains' manifests list (src/mock.ts, scripts/plugins.ts)",
+    "the host's plugins are not the host halves the domains' manifests list (packages/host/src/bundled.ts, scripts/plugins.ts)",
   );
   const toggled: string[] = [];
   const locked: string[] = [];
@@ -66,6 +68,10 @@ export const toggling = async (): Promise<string> => {
       assert.equal(await stylesheets(), 0, `${id} left its stylesheet behind`);
     }
     await switchTo(page, id, true);
+    // A web half whose host half the host is starting again waits for it: back on is once it runs.
+    await page
+      .waitForFunction((id) => (window as any).lemma.plugins.list().find((plugin: any) => plugin.id === id)?.state === "active", id, { timeout: 10_000 })
+      .catch(() => assert.fail(`${id} did not come back on`));
     await settled(page);
     expectNoErrors(`turning ${id} back on`);
     assert.equal(await stylesheets(), styled, `${id} came back with ${await stylesheets()} stylesheets, not ${styled}`);
@@ -241,11 +247,9 @@ export const toggling = async (): Promise<string> => {
   expectNoErrors("turning every plugin off and on at once");
 
   // A web half providing part of the runtime is left out, saying so, and the app's own goes on: its toasts still show.
-  await page.evaluate(() => {
-    const source = `export default ({ defineWebPlugin, contracts: { Notify } }) =>
-      defineWebPlugin({ id: "my-notify", provides: { notify: Notify }, setup: () => ({ notify: {} }) });`;
-    const url = URL.createObjectURL(new Blob([source], { type: "text/javascript" }));
-    (window as any).lemmaMock.setWebFiles([{ name: "my-notify.js", source: "user", kind: "script", path: "/check/my-notify.js", url }]);
+  await host.plugins({
+    "my-notify.web.js": `export default ({ defineWebPlugin, contracts: { Notify } }) =>
+      defineWebPlugin({ id: "my-notify", provides: { notify: Notify }, setup: () => ({ notify: {} }) });`,
   });
   await page
     .waitForFunction(() => (window as any).lemma.plugins.list().some((plugin: any) => plugin.id === "my-notify" && plugin.problem !== undefined), undefined, {
@@ -263,22 +267,18 @@ export const toggling = async (): Promise<string> => {
   await page
     .waitForSelector(".toast >> text=still the app's own", { timeout: 5_000 })
     .catch(() => assert.fail("toasts stopped with a web half providing Notify"));
-  await page.evaluate(() => (window as any).lemmaMock.setWebFiles([]));
+  await host.plugins({ "my-notify.web.js": null });
   await page.waitForFunction(() => !(window as any).lemma.plugins.list().some((plugin: any) => plugin.id === "my-notify"));
   expectNoErrors("a web half providing part of the runtime");
 
   // A web half is the plugin its file is named for (the host knows its id by that): one defining another is not run.
-  await page.evaluate(() => {
-    const source = `export default ({ defineWebPlugin }) => defineWebPlugin({ id: "other", setup: () => {} });`;
-    const url = URL.createObjectURL(new Blob([source], { type: "text/javascript" }));
-    (window as any).lemmaMock.setWebFiles([{ name: "named.web.js", plugin: "named", source: "user", kind: "script", path: "/check/named.web.js", url }]);
-  });
+  await host.plugins({ "named.web.js": `export default ({ defineWebPlugin }) => defineWebPlugin({ id: "other", setup: () => {} });` });
   await page
     .waitForFunction(() => (window as any).lemma.plugins.problems().some((problem: string) => problem.includes('defines "other"')), undefined, {
       timeout: 10_000,
     })
     .catch(() => assert.fail("a web half defining a plugin other than its file's name was not refused"));
   assert(!(await page.evaluate(() => (window as any).lemma.plugins.list().some((plugin: any) => plugin.id === "other"))), "a misnamed web half ran");
-  await page.evaluate(() => (window as any).lemmaMock.setWebFiles([]));
+  await host.plugins({ "named.web.js": null });
   return `booted; every part provided; ${toggled.length - locked.length} plugins turned off and on, ${locked.length} locked ones kept on (${locked.join(", ")}); the Plugins page filters, saves settings, and keeps its switches without kit; the runtime answers with every plugin off, and a web half providing Notify is left out`;
 };
