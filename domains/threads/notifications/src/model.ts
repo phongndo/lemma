@@ -21,14 +21,17 @@ export interface Prefs {
   readonly corner: Corner;
 }
 
-/** Everything for what needs the person; a finished turn makes no sound. */
+/**
+ * Everything for what needs the person; a finished turn makes no sound. Notices stack at the top right, under the
+ * header and the toasts, clear of the composer and its send button.
+ */
 export const DEFAULT_PREFS: Prefs = {
   channels: {
     waiting: ["notice", "system", "badge", "sound"],
     failed: ["notice", "system", "badge", "sound"],
     done: ["notice", "system", "badge"],
   },
-  corner: "bottom-right",
+  corner: "top-right",
 };
 
 const isChannel = (value: unknown): value is Channel => typeof value === "string" && (CHANNELS as readonly string[]).includes(value);

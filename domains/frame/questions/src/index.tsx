@@ -107,12 +107,20 @@ function Select(props: { interactions: InteractionsService; request: Of<"select"
   );
 }
 
+/** Each field's default, which is what the asker gets for it unset: the form starts from them, so they show. */
+const defaults = (fields: Of<"form">["fields"]): Readonly<Record<string, unknown>> =>
+  Object.fromEntries(
+    fields.flatMap((field) => (field.default === undefined || field.secret === true || field.type === "other" ? [] : [[field.key, field.default]])),
+  );
+
 /**
- * Several values at once, drawn as a plugin's settings are (`ConfigForm`): each field kept here as it is set, and
- * sent together. A field the form needs and has no default for must be set first.
+ * Several values at once, drawn as a plugin's settings are (`ConfigForm`), but as a question's fields: under its title,
+ * without their config keys, each starting at its default. Each is kept here as it is set, and all are sent together. A
+ * field the form needs and has no default for must be set first.
  */
 function Form(props: { interactions: InteractionsService; request: Of<"form"> }) {
-  const [values, setValues] = createSignal<Readonly<Record<string, unknown>>>({});
+  const initial = defaults(props.request.fields);
+  const [values, setValues] = createSignal(initial);
   const missing = () => props.request.fields.filter((field) => !field.optional && values()[field.key] === undefined);
   const submit = () => props.interactions.answer(props.request.id, { type: "form", value: values() });
   return (
@@ -145,21 +153,24 @@ function Form(props: { interactions: InteractionsService; request: Of<"form"> })
       <Show when={props.request.detail}>
         <p class="dialog-detail">{props.request.detail}</p>
       </Show>
-      <ConfigForm
-        fields={props.request.fields}
-        config={{ values: values(), secretsSet: [] }}
-        // A field set to null is unset, back to its default.
-        onSave={async (changed) => {
-          setValues((all) => {
-            const next: Record<string, unknown> = { ...all };
-            for (const [key, value] of Object.entries(changed)) {
-              if (value === null) delete next[key];
-              else next[key] = value;
-            }
-            return next;
-          });
-        }}
-      />
+      <div class="question-form">
+        <ConfigForm
+          fields={props.request.fields}
+          config={{ values: values(), secretsSet: [] }}
+          // A field set to null is back to its default (unset when it has none).
+          onSave={async (changed) => {
+            setValues((all) => {
+              const next: Record<string, unknown> = { ...all };
+              for (const [key, value] of Object.entries(changed)) {
+                if (value !== null) next[key] = value;
+                else if (initial[key] !== undefined) next[key] = initial[key];
+                else delete next[key];
+              }
+              return next;
+            });
+          }}
+        />
+      </div>
     </Dialog>
   );
 }

@@ -1,3 +1,4 @@
+/* The stack is the anchor `--toasts` (`Layers`): what else stacks at the top right goes under it. */
 .toasts {
   position: fixed;
   top: 56px;
@@ -9,6 +10,12 @@
   width: 360px;
   max-width: calc(100vw - 32px);
   pointer-events: none;
+  anchor-name: --toasts;
+}
+
+/* Holding any, it keeps their gap below the last, for what stacks under it. */
+.toasts:has(> .toast) {
+  padding-bottom: 8px;
 }
 
 .toast {
@@ -58,9 +65,9 @@
 }
 
 .toast .icon-button {
-  width: 22px;
-  height: 22px;
-  margin: -2px 0;
+  width: 24px;
+  height: 24px;
+  margin: -3px 0;
 }
 
 .toast-links {

@@ -1,3 +1,47 @@
+.add-project-heading {
+  margin: 0;
+  padding: 10px 16px 0;
+  color: var(--text-3);
+  font-size: var(--font-size-sm);
+  font-weight: 500;
+}
+
+/* What its keys do, under the list, as the palette's foot says of its own. */
+.add-project-foot {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 14px;
+  padding: 8px 14px;
+  border-top: 1px solid var(--border);
+  color: var(--text-3);
+  font-size: var(--font-size-xs);
+}
+
+/* Key names as plain text, not in key caps. */
+.add-project-foot kbd {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--text-3);
+  font-family: var(--font-ui);
+  font-size: var(--font-size-sm);
+}
+
+.add-project-foot kbd + kbd {
+  margin-left: 4px;
+}
+
+.add-project-foot-end {
+  margin-left: auto;
+}
+
+@media (max-width: 820px) {
+  .add-project-foot {
+    display: none;
+  }
+}
+
 .palette-into {
   margin-left: auto;
   width: 26px;

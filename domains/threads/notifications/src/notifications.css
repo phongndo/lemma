@@ -5,13 +5,22 @@
   display: flex;
   flex-direction: column;
   gap: 8px;
-  width: 340px;
+  width: 360px;
   max-width: calc(100vw - 32px);
   pointer-events: none;
 }
 
 .thread-notices[data-corner^="top"] {
   top: 56px;
+}
+
+/*
+ * At the top right, under the toasts (the anchor `--toasts`, `Layers`), not over them; where there is none, at 56px. A
+ * long stack of toasts pushes them no lower than the middle of the window, so a notice waiting on an answer stays in
+ * sight, over the toasts' end if it must.
+ */
+.thread-notices[data-corner="top-right"] {
+  top: min(anchor(--toasts bottom, 56px), 50vh);
 }
 
 .thread-notices[data-corner^="bottom"] {
@@ -142,9 +151,16 @@
 
 .notify-grid-head {
   min-height: 32px;
-  color: var(--text-3);
+  color: var(--text-2);
   font-size: var(--font-size-sm);
   font-weight: 500;
+}
+
+/* The grid's heading, as the settings' group headings read; the channels' names over their columns stay labels. */
+.notify-grid-corner {
+  color: var(--text);
+  font-size: var(--font-size-base);
+  font-weight: 600;
 }
 
 .notify-grid-head > [role="columnheader"]:not(.notify-grid-corner) {

@@ -39,6 +39,7 @@ const withSlash = (path: string) => (path.endsWith("/") ? path : `${path}/`);
 function AddProjectDialog(props: { deps: Deps }) {
   // Unique per instance: the page could show two lists.
   const listId = `add-project-list-${createUniqueId()}`;
+  const headingId = `add-project-heading-${createUniqueId()}`;
   const { client, workspace, notify, dialogs } = props.deps;
   const [value, setValue] = createSignal("");
   const [listing, setListing] = createSignal<Listing>();
@@ -228,7 +229,10 @@ function AddProjectDialog(props: { deps: Deps }) {
           if (event.target === event.currentTarget) close();
         }}
       >
-        <div class="palette" role="dialog" aria-modal="true" aria-label="Add project" onKeyDown={onKeyDown} onKeyUp={hold.track} onFocusOut={hold.track}>
+        <div class="palette" role="dialog" aria-modal="true" aria-labelledby={headingId} onKeyDown={onKeyDown} onKeyUp={hold.track} onFocusOut={hold.track}>
+          <h2 id={headingId} class="add-project-heading">
+            Add project
+          </h2>
           <div class="palette-input">
             <FolderIcon />
             <input
@@ -332,6 +336,24 @@ function AddProjectDialog(props: { deps: Deps }) {
               <div class="palette-note">Showing the first {listing()?.entries.length}</div>
             </Show>
           </div>
+          <footer class="add-project-foot">
+            <span>
+              <kbd>↑</kbd>
+              <kbd>↓</kbd> move
+            </span>
+            <span>
+              <kbd>↵</kbd> {rows()[active()]?.kind === "create" ? "create" : "open"}
+            </span>
+            <span>
+              <kbd>⇥</kbd> go into
+            </span>
+            <span>
+              <kbd>⌫</kbd> up
+            </span>
+            <span class="add-project-foot-end">
+              <kbd>esc</kbd> close
+            </span>
+          </footer>
         </div>
       </div>
     </Portal>

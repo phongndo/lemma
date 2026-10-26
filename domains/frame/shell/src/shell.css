@@ -57,9 +57,18 @@
   transition: background-color 0.12s;
 }
 
+.sidebar-rail:focus-visible {
+  outline: none;
+}
+
 .sidebar-rail:hover::after,
 .resizing .sidebar-rail::after {
   background: var(--border-strong);
+}
+
+/* Focused from the keys, it shows a line in the focus ring's color, as the devtools' edge does. */
+.sidebar-rail:focus-visible::after {
+  background: var(--focus-ring);
 }
 
 .sidebar-collapsed .sidebar-slot,
@@ -101,11 +110,14 @@
     inset: 0 auto 0 0;
     z-index: var(--z-drawer);
     transform: translateX(-100%);
-    transition: transform 0.16s ease-out;
-    box-shadow: var(--shadow-lg);
+    transition:
+      transform 0.16s ease-out,
+      box-shadow 0.16s ease-out;
   }
+  /* Its shadow falls on the page only while it is open: closed, nothing of it shows at the window's edge. */
   .drawer-open .sidebar-slot {
     transform: none;
+    box-shadow: var(--shadow-lg);
   }
   .sidebar-collapsed .sidebar-slot {
     display: flex;

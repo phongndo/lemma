@@ -14,6 +14,12 @@ export class Dialogs extends Context.Service<Dialogs, DialogsService>()("lemma-w
 export interface LayoutService {
   /** There is a sidebar, and it is out of view: collapsed, or a closed drawer on a narrow screen. */
   readonly sidebarHidden: Accessor<boolean>;
+  /**
+   * Collapses or brings back the sidebar; on a narrow screen opens or closes it as a drawer, which takes focus while
+   * open and gives it back as it closes. A control that runs it is marked `data-sidebar-toggle` (a DOM convention):
+   * when toggling hides the control that had focus (the sidebar's own toggle as it collapses, a header's as the
+   * sidebar comes back), focus goes to the marked toggle in sight.
+   */
   readonly toggleSidebar: () => void;
   /** On a narrow screen the sidebar is a drawer; picking something in it closes it. */
   readonly closeDrawer: () => void;
@@ -23,7 +29,10 @@ export class Layout extends Context.Service<Layout, LayoutService>()("lemma-web/
 
 /**
  * Mounted over the whole app in order: the browser view's pages (0, each over its place in the pane), dialogs (the
- * bundled ones at orders 10 to 40), questions (50), toasts (100), tooltips (200). Each shows itself when it should.
+ * bundled ones at orders 10 to 40), questions (50), toasts (100), the threads' notices (110), tooltips (200). Each
+ * shows itself when it should. The toasts' stack, at the top right, is the CSS anchor `--toasts`: what else stacks
+ * there goes under it with `top: anchor(--toasts bottom, 56px)`, from an item after it (an anchor comes first in the
+ * page), as the notices do.
  */
 export const Layers = defineSlot<Region>("layers");
 

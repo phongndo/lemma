@@ -34,10 +34,13 @@ Requires `Threads`, `Slots`, `WebPlugins`, `Layout`, and `Workspace`.
   above those dragged into an order. A running thread does not move.
 - **Archived threads** are in a panel of their own at the sidebar's foot,
   folded away, their count on the fold. The panel is there with none archived
-  too, so archiving a thread leaves the fold as it was. Opened, it scrolls
-  apart from the list above, and its top edge resizes it: dragged, with ↑ and
-  ↓ while focused, or back to its first height with a double-click; the height
-  is kept, and the list above always keeps some room. Every archived thread is
+  too, so archiving a thread leaves the fold as it was. Opened, it is as tall
+  as its rows, up to a height its top edge sets: dragged, with ↑ and ↓ while
+  focused, or back to its first with a double-click; past it, its rows scroll
+  apart from the list above. A height past its rows, which would show nothing
+  more until more are archived, is not kept. The height is kept, and the list above always
+  keeps some room. With no thread above it (a first run), the list says so,
+  and which keys start one. Every archived thread is
   there, the latest archived first. The open thread shows even while the fold
   is closed.
 - **A card** is two lines of one height each, so nothing it shows, or the
@@ -49,7 +52,8 @@ Requires `Threads`, `Slots`, `WebPlugins`, `Layout`, and `Workspace`.
   (`Needs input`), `Working` and how long while a turn runs, `Failed` (or
   `Out of steps`) or `Done` once one ended unseen, else how long ago it was
   used. An archived thread is one slim line.
-- **Under the pointer** a card's state gives way to buttons to pin it (or
+- **Under the pointer**, or while the keyboard is in it (Tab goes on from its
+  link to them), a card's state gives way to buttons to pin it (or
   unpin it) and to archive it, and an archived row's age to Unarchive;
   `mod+alt+a` archives the thread shown, or unarchives it. Archiving the thread
   shown goes on to the next in the list. A running thread archives too: its turn goes on, and
@@ -68,7 +72,11 @@ Requires `Threads`, `Slots`, `WebPlugins`, `Layout`, and `Workspace`.
   Drafts and archived threads do not drag: one comes back with Unarchive.
 - **Details.** A moment's pointing at a card shows its title, project, branch,
   and state beside the sidebar; the next card pointed at shows its own at
-  once.
+  once. Only the pointer moving shows them, not a card moving under a still
+  pointer (a thread made or archived above it), and a key press puts them away.
+- **Focus stays in the list.** Archiving, deleting, or discarding the row that
+  has focus moves it to the next row (the one before, at the end; with none,
+  New thread); a row that moves (pinned) keeps it.
 - **Search** is the palette's, floating over the page: threads by title,
   project, and what was said in them.
 - **Keys.** `mod+1` … `mod+9` go to the thread at that place, pinned ones
@@ -84,7 +92,8 @@ Requires `Threads`, `Slots`, `WebPlugins`, `Layout`, and `Workspace`.
   on you or is `Done` or `Failed`, or an agent under one that waits on you
   (a finished agent's thread goes on with what it did). In a text field they
   stay its own (on macOS, selecting to a paragraph's end). A right-click opens
-  a thread's menu and a double-click renames it. Settings › Keyboard rebinds
+  a thread's menu and a double-click renames it: Enter or leaving the field
+  saves the title, Escape keeps it as it was. Settings › Keyboard rebinds
   them all.
 - **Kept in this browser** (`lemma.frame.sidebar.marks`): the pinned and
   active orders, and when threads were archived and unarchived, which order the

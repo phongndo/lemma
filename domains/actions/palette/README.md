@@ -36,6 +36,8 @@ of the threads, searched the same way.
   their own (Appearance's Theme…). Escape clears what was typed,
   then goes back to the list the page was opened from as it was left, what
   was typed and the row chosen; Backspace in an empty field goes back too.
+  The page an action's keys opened the palette at (Threads, on `mod+p`) is
+  where it starts: no back button, and Escape closes it, as its footer says.
 - **Searching elsewhere.** A source's `search` (the threads' asks the host
   what was said in them) is asked once two letters are typed and typing has
   paused 200 ms: `Searching messages…` shows meanwhile, then what it found
@@ -52,7 +54,7 @@ of the threads, searched the same way.
   running command waits on them. Esc dismisses a question (the host's cancels
   its command) and keeps the palette open; with no question it clears the
   query, then goes back from a page, then closes. Backspace in an empty field steps back from an item's
-  `input`.
+  `input`, unless the palette opened asking it, which Escape then closes.
 - **Keys** in the list are `listKey`'s (`@lemma/web/keys`), and PgUp and PgDn
   move by eight. Its own key, `mod+k`, closes it first: where the modifier is
   Ctrl, `listKey` would take Ctrl+K as up.

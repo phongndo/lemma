@@ -17,7 +17,7 @@ import { Workspace } from "@lemma/workspace/web";
 import { Slots, WebPlugins, defineWebPlugin, Each, usePlugin } from "@lemma/web";
 import type { Action } from "@lemma/actions";
 import type { SidebarRowProps, ThreadAttention, ThreadDraft, ThreadsService } from "@lemma/threads";
-import type { SlotsService } from "@lemma/web";
+import type { SlotsService, WebPluginContext } from "@lemma/web";
 import {
   AlertIcon,
   ArchiveIcon,
@@ -73,6 +73,8 @@ const CARD_CHAIN = 400;
 
 /** When a row's details last closed, so pointing at the next one shows its own at once. */
 let cardClosedAt = 0;
+/** Where the pointer last moved over a row: one moved under a still pointer (a thread made or archived above it) shows no details. */
+let pointerAt = { x: Number.NaN, y: Number.NaN };
 
 /**
  * Its state where the time goes, as T3 Code shows it, the most pressing first: what it waits on the person for, a
@@ -127,7 +129,7 @@ const stateWords = (props: SidebarRowProps, archived: boolean): string =>
 /** The room the buttons under the pointer take at a line's end (a card's second, a slim row's one), which it stops short of then. */
 const ARCHIVE_ROOM = 80;
 const UNARCHIVE_ROOM = 92;
-const PIN_ROOM = 24;
+const PIN_ROOM = 26;
 const DISCARD_ROOM = 76;
 
 /**
@@ -141,18 +143,29 @@ function ThreadRow(props: SidebarRowProps) {
   const [editing, setEditing] = createSignal(false);
   const [details, setDetails] = createSignal<DOMRect>();
   let row!: HTMLDivElement;
+  let link: HTMLAnchorElement | undefined;
   let openMenu: (() => void) | undefined;
   let waiting: (() => void) | undefined;
   const archived = () => props.session.archived === true;
   /** What its age counts from: its archiving once archived, else its last use. */
   const since = () => (archived() ? (props.archivedAt ?? props.session.updatedAt) : props.session.updatedAt);
+  /** Renaming ended from the keyboard: the field's going blurs it, which then neither saves nor saves again. */
+  let ended = false;
   const commit = (value: string) => {
     setEditing(false);
     if (value.trim() !== "" && value.trim() !== props.session.title) props.rename(value);
   };
-  const point = () => {
-    waiting?.();
-    const show = () => setDetails(row.getBoundingClientRect());
+  /** Renaming ended from the keyboard (Enter, Escape): focus goes back to the row, drawn again, not to the page. */
+  const backToRow = () => queueMicrotask(() => link?.focus({ preventScroll: true }));
+  /** The pointer moving over it, not a row moving under the pointer, shows its details after a moment. */
+  const point = (event: PointerEvent) => {
+    const moved = event.clientX !== pointerAt.x || event.clientY !== pointerAt.y;
+    pointerAt = { x: event.clientX, y: event.clientY };
+    if (!moved || event.pointerType === "touch" || details() !== undefined || waiting !== undefined) return;
+    const show = () => {
+      waiting = undefined;
+      setDetails(row.getBoundingClientRect());
+    };
     if (Date.now() - cardClosedAt < CARD_CHAIN) show();
     else waiting = plugin.after(CARD_DELAY, show);
   };
@@ -163,6 +176,10 @@ function ThreadRow(props: SidebarRowProps) {
     setDetails(undefined);
   };
   onCleanup(leave);
+  // Typing anywhere puts the details away (what is typed, `input`: the page's keys are the keymap's), as do keys in the row.
+  createEffect(() => {
+    if (details() !== undefined) onCleanup(plugin.listen(document, "input", leave, { capture: true }));
+  });
   const title = () => sessionTitle(props.session);
   const pinned = () => props.session.pinned === true && !archived();
   /** What the buttons under the pointer take: pinning or unpinning, then archiving or unarchiving. */
@@ -176,8 +193,9 @@ function ThreadRow(props: SidebarRowProps) {
           class="thread-row"
           classList={{ active: props.active, slim: archived(), running: props.running, unread: props.unread, drafted: props.drafted }}
           style={{ "--hover-room": `${room()}px` }}
-          onPointerEnter={point}
+          onPointerMove={point}
           onPointerLeave={leave}
+          onKeyDown={leave}
           onContextMenu={(event) => {
             leave();
             if (props.actions.length === 0) return;
@@ -186,6 +204,7 @@ function ThreadRow(props: SidebarRowProps) {
           }}
         >
           <a
+            ref={link}
             class="thread-open"
             href={props.href}
             draggable={false}
@@ -334,21 +353,30 @@ function ThreadRow(props: SidebarRowProps) {
         class="thread-rename"
         value={props.session.title ?? ""}
         aria-label="Thread title"
-        ref={(el) =>
+        ref={(el) => {
+          ended = false;
           queueMicrotask(() => {
             el.focus();
             el.select();
-          })
-        }
+          });
+        }}
         onKeyDown={(event) => {
-          if (event.key === "Enter") commit(event.currentTarget.value);
-          else if (event.key === "Escape") {
+          if (event.key === "Enter") {
+            ended = true;
+            commit(event.currentTarget.value);
+            backToRow();
+          } else if (event.key === "Escape") {
+            // Cancelled: the title stays as it was.
             event.preventDefault();
             event.stopPropagation();
+            ended = true;
             setEditing(false);
+            backToRow();
           }
         }}
-        onBlur={(event) => commit(event.currentTarget.value)}
+        onBlur={(event) => {
+          if (!ended) commit(event.currentTarget.value);
+        }}
       />
     </Show>
   );
@@ -599,6 +627,55 @@ function DraftRow(props: {
   );
 }
 
+/** The row focus goes to when `row` (a list item) goes with focus in it: the next in its list, else the one before. */
+const neighbourOf = (row: Element): HTMLElement | undefined => {
+  const links = [...(row.closest("ul")?.querySelectorAll<HTMLElement>("[data-session-row]") ?? [])].filter((link) => !row.contains(link));
+  return (
+    links.find((link) => (row.compareDocumentPosition(link) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0) ??
+    links.filter((link) => (row.compareDocumentPosition(link) & Node.DOCUMENT_POSITION_PRECEDING) !== 0).at(-1)
+  );
+};
+
+/** Nothing has focus: it rests on the page's body. */
+const onNothing = (element: Element | null): boolean => element === null || element instanceof HTMLBodyElement;
+
+/**
+ * Keeps focus in `list` as its rows change: a row that goes with focus in it (archived, deleted, discarded) hands it to
+ * its neighbour (`neighbourOf`), or, with none, the first row or `fallback` (the new-thread button); one moved (pinned)
+ * keeps it. Focus the person takes out of the list (another control, a press elsewhere) is left alone. Returns the
+ * list's `focusin` and `focusout` handlers.
+ */
+const keepFocus = (plugin: Pick<WebPluginContext<unknown>, "listen">, list: HTMLElement, fallback: () => HTMLElement | undefined) => {
+  let kept: { readonly focused: HTMLElement; readonly next: HTMLElement | undefined } | undefined;
+  const remember = () => {
+    const focused = document.activeElement;
+    const row = focused instanceof HTMLElement && list.contains(focused) ? focused.closest("li") : null;
+    if (focused instanceof HTMLElement && row !== null) kept = { focused, next: neighbourOf(row) };
+  };
+  const observer = new MutationObserver((records) => {
+    const was = kept;
+    if (was === undefined) return;
+    if (list.contains(document.activeElement)) return remember();
+    if (!onNothing(document.activeElement) || !records.some((record) => [...record.removedNodes].some((node) => node.contains(was.focused)))) return;
+    // After what the change does itself (a renamed row focusing its link again).
+    queueMicrotask(() => {
+      if (onNothing(document.activeElement))
+        [was.focused, was.next, list.querySelector<HTMLElement>("[data-session-row]") ?? undefined, fallback()]
+          .find((candidate) => candidate?.isConnected === true)
+          ?.focus();
+      remember();
+    });
+  });
+  observer.observe(list, { childList: true, subtree: true });
+  onCleanup(() => observer.disconnect());
+  /** Focus is going somewhere outside the list, a press or a control: the person's, not the list's to keep. */
+  const forget = (to: EventTarget | null) => {
+    if (to instanceof Node && !list.contains(to)) kept = undefined;
+  };
+  onCleanup(plugin.listen(document, "pointerdown", (event) => forget(event.target), { capture: true }));
+  return { focusIn: remember, focusOut: (event: FocusEvent) => forget(event.relatedTarget) };
+};
+
 /** Moves focus between rows with ↑ and ↓. */
 const rowKeys = (event: KeyboardEvent): void => {
   const step = event.key === "ArrowUp" ? -1 : event.key === "ArrowDown" ? 1 : 0;
@@ -722,21 +799,40 @@ function Sidebar(props: { deps: Deps; onPick: () => void }) {
   /** The items with the dragged thread among the archived (after their head, last): what dropping on the panel does. */
   const archivedWith = (id: string) => [...items().filter((item) => item !== id), id];
 
-  // The archived panel's height, as its top edge was dragged to, kept; within what leaves the list above room.
+  // The archived panel's height at most, as its top edge was dragged to, kept; within what leaves the list above room.
+  // Holding fewer rows, it is shorter.
   const [archivedHeight, setArchivedHeight] = createSignal(
     loadJson(ARCHIVED_HEIGHT_KEY, ARCHIVED_HEIGHT, (value): value is number => typeof value === "number"),
   );
   let area: HTMLDivElement | undefined;
-  const fitHeight = (height: number) => Math.round(Math.max(ARCHIVED_MIN, Math.min(height, (area?.clientHeight ?? 600) - LIST_MIN)));
-  const keepHeight = (height: number) => {
-    setArchivedHeight(fitHeight(height));
-    save(ARCHIVED_HEIGHT_KEY, JSON.stringify(archivedHeight()));
+  let archivedPanel: HTMLElement | undefined;
+  let archivedList: HTMLUListElement | undefined;
+  /** How tall the panel would be showing every row. */
+  const fullHeight = () =>
+    archivedPanel === undefined || archivedList === undefined
+      ? Number.POSITIVE_INFINITY
+      : archivedPanel.getBoundingClientRect().height - archivedList.clientHeight + archivedList.scrollHeight;
+  /**
+   * The height to keep for its edge at `height`: within what leaves the list above room, and short of every row's, where
+   * the panel shows them all already and so the height `kept` stays (raised to them at least). A height past them would
+   * show nothing now, then the panel jumping to it as more are archived.
+   */
+  const fitHeight = (height: number, kept: number) => {
+    const fitted = Math.round(Math.max(ARCHIVED_MIN, Math.min(height, (area?.clientHeight ?? 600) - LIST_MIN)));
+    return fitted < fullHeight() ? fitted : Math.max(kept, Math.round(fullHeight()));
   };
+  const keepHeight = (height: number) => {
+    setArchivedHeight(height);
+    save(ARCHIVED_HEIGHT_KEY, JSON.stringify(height));
+  };
+  /** How tall the panel shows: its rows', up to the height kept. A drag or a key's step goes from there. */
+  const shownHeight = () => archivedPanel?.getBoundingClientRect().height ?? archivedHeight();
   const resizeArchived = (event: PointerEvent) => {
     const startY = event.clientY;
-    const startHeight = fitHeight(archivedHeight());
+    const startHeight = shownHeight();
+    const kept = archivedHeight();
     dragEdge(event, {
-      move: (moved) => setArchivedHeight(fitHeight(startHeight - (moved.clientY - startY))),
+      move: (moved) => setArchivedHeight(fitHeight(startHeight - (moved.clientY - startY), kept)),
       end: () => keepHeight(archivedHeight()),
     });
   };
@@ -750,12 +846,15 @@ function Sidebar(props: { deps: Deps; onPick: () => void }) {
     const count = () => props.deps.lists().archived.length;
     return (
       <section
-        ref={zone.ref}
+        ref={(element) => {
+          zone.ref(element);
+          archivedPanel = element;
+        }}
         class="archived-panel"
         classList={{ open: archivedOpen(), target: toArchive() }}
         aria-label="Archived threads"
-        // As kept: the stylesheet caps it, so the list above keeps room in a shorter window.
-        style={archivedOpen() ? { height: `${Math.max(ARCHIVED_MIN, archivedHeight())}px` } : undefined}
+        // At most as kept, and short of the list above's room in a shorter window.
+        style={archivedOpen() ? { "max-height": `min(${Math.max(ARCHIVED_MIN, archivedHeight())}px, calc(100% - ${LIST_MIN}px))` } : undefined}
       >
         <Show when={archivedOpen()}>
           <div
@@ -771,7 +870,7 @@ function Sidebar(props: { deps: Deps; onPick: () => void }) {
               const step = event.key === "ArrowUp" ? ARCHIVED_STEP : event.key === "ArrowDown" ? -ARCHIVED_STEP : 0;
               if (step === 0) return;
               event.preventDefault();
-              keepHeight(archivedHeight() + step);
+              keepHeight(fitHeight(shownHeight() + step, archivedHeight()));
             }}
           />
         </Show>
@@ -786,7 +885,7 @@ function Sidebar(props: { deps: Deps; onPick: () => void }) {
         <Show when={archivedOpen() && count() === 0 && !heads()}>
           <p class="archived-panel-empty">No archived threads</p>
         </Show>
-        <ul class="thread-section archived-rows">
+        <ul class="thread-section archived-rows" ref={archivedList}>
           <For each={archivedRows().map((session) => session.id)}>
             {(id) => <Show when={sessionOf(id)}>{(session) => <li data-section="archived">{row(session)}</li>}</Show>}
           </For>
@@ -795,6 +894,8 @@ function Sidebar(props: { deps: Deps; onPick: () => void }) {
     );
   };
   const sessionOf = (id: string) => byId().get(id);
+  /** Nothing above the archived: no draft, pinned, or active thread (as on a first run). */
+  const empty = () => props.deps.drafts().length === 0 && props.deps.lists().pinned.length === 0 && props.deps.lists().active.length === 0;
   /** Each item's section, where it is now (`data-section` on its row). */
   const sectionsOf = createMemo(() => {
     const of = new Map<string, Section>();
@@ -806,12 +907,16 @@ function Sidebar(props: { deps: Deps; onPick: () => void }) {
     }
     return of;
   });
+  const plugin = usePlugin();
+  let nav: HTMLElement | undefined;
+  let focus: ReturnType<typeof keepFocus> | undefined;
   return (
-    <nav class="sidebar" aria-label="Threads">
+    <nav class="sidebar" aria-label="Threads" ref={nav}>
       <div class="sidebar-head">
         <button
           class="icon-button"
           aria-label="Toggle sidebar"
+          data-sidebar-toggle
           data-tip={withKeys("Toggle sidebar", keysOf("shell.toggle-sidebar"))}
           onClick={() => layout.toggleSidebar()}
         >
@@ -822,7 +927,17 @@ function Sidebar(props: { deps: Deps; onPick: () => void }) {
           <Each slot={SidebarActions} props={{ onPick: props.onPick }} />
         </div>
       </div>
-      <div class="thread-list" classList={{ dragging: drag() !== undefined }} onKeyDown={rowKeys} ref={area}>
+      <div
+        class="thread-list"
+        classList={{ dragging: drag() !== undefined }}
+        onKeyDown={rowKeys}
+        onFocusIn={() => focus?.focusIn()}
+        onFocusOut={(event) => focus?.focusOut(event)}
+        ref={(element) => {
+          area = element;
+          focus = keepFocus(plugin, element, () => nav?.querySelector<HTMLElement>("[data-new-thread]") ?? undefined);
+        }}
+      >
         <SortableThreads
           list={() => area}
           start={(id) => {
@@ -879,6 +994,18 @@ function Sidebar(props: { deps: Deps; onPick: () => void }) {
                 </For>
               </ul>
               <div class="drafts-rule" aria-hidden="true" />
+            </Show>
+            <Show when={empty()}>
+              <p class="thread-empty">
+                {props.deps.lists().archived.length > 0 ? "No active threads" : "No threads yet"}
+                <Show when={keysOf("thread.new-chat")}>
+                  {(keys) => (
+                    <span>
+                      <kbd>{formatKeys(keys())}</kbd> starts one
+                    </span>
+                  )}
+                </Show>
+              </p>
             </Show>
             <ul class="thread-section sorted">
               <For each={items().filter((id) => id !== Heads.archived)}>
@@ -1107,6 +1234,7 @@ export default defineWebPlugin({
         <button
           class="icon-button"
           aria-label="New thread"
+          data-new-thread
           data-tip={withKeys("New thread", keysOf("thread.new-chat"))}
           onClick={() => {
             newThread();

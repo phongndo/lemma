@@ -1,5 +1,6 @@
 import { describe, expect, test } from "vitest";
 import type { SessionInfo } from "@lemma/sessions";
+import { relativeTime } from "@lemma/web/format";
 import {
   Heads,
   afterArchiving,
@@ -38,6 +39,16 @@ describe("times", () => {
     expect(shortAge(now - 36 * 60_000, now)).toBe("36m");
     expect(shortAge(now - 3 * 3_600_000, now)).toBe("3h");
     expect(shortAge(now - 50 * 3_600_000, now)).toBe("2d");
+  });
+
+  test("ages round as the palette's do", () => {
+    const now = 1_000_000_000;
+    expect(shortAge(now - (3 * 60 + 40) * 60_000, now)).toBe("4h");
+    // The same age, wherever it shows: `relativeTime`'s words, shortly, for the ages it counts (it writes a date from a week).
+    for (let minutes = 0; minutes < 6 * 24 * 60; minutes += 7) {
+      const at = now - minutes * 60_000 - 29_000;
+      expect(shortAge(at, now)).toBe(relativeTime(at, now).replace("just now", "now").replace(" ago", ""));
+    }
   });
 
   test("a running turn's time", () => {

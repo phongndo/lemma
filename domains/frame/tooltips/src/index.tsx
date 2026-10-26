@@ -8,11 +8,16 @@ const DELAY = 450;
 /** Moving between controls within this window shows the next tooltip at once. */
 const WARM = 400;
 const MARGIN = 8;
+/** The keys that move focus themselves (Tab) or have a control move it (arrows in a list or a group), without a modifier but Shift. */
+const MOVES_FOCUS = new Set(["Tab", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "Home", "End", "PageUp", "PageDown"]);
+/** How soon after such a key the focus it moves comes. */
+const MOVED_WITHIN = 500;
 
 /**
  * One tooltip for the whole app, driven by `data-tip` attributes, so the
  * browser's native `title` bubbles never appear. Shown on hover after a delay
- * and on keyboard focus; hidden on press, scroll, or key input.
+ * and on focus the person moves with the keys (Tab, arrows), not focus the app
+ * moves (a drawer opening, a menu closing); hidden on press, scroll, or key input.
  */
 function TooltipLayer() {
   const [tip, setTip] = createSignal<{ text: string; x: number; y: number; below: boolean } | undefined>();
@@ -20,6 +25,8 @@ function TooltipLayer() {
   let timer: number | undefined;
   let target: HTMLElement | undefined;
   let hiddenAt = 0;
+  /** When a key that moves focus was last pressed; any other key or a press forgets it. */
+  let movedAt = Number.NEGATIVE_INFINITY;
 
   const hide = () => {
     window.clearTimeout(timer);
@@ -62,15 +69,24 @@ function TooltipLayer() {
   };
   const onFocus = (event: FocusEvent) => {
     const element = event.target as HTMLElement;
-    if (element.matches?.(":focus-visible") && element.dataset.tip !== undefined) schedule(element);
+    const byKeys = event.timeStamp - movedAt < MOVED_WITHIN;
+    if (byKeys && element.matches?.(":focus-visible") && element.dataset.tip !== undefined) schedule(element);
+  };
+  const onKey = (event: KeyboardEvent) => {
+    movedAt = MOVES_FOCUS.has(event.key) && !event.ctrlKey && !event.metaKey && !event.altKey ? event.timeStamp : Number.NEGATIVE_INFINITY;
+    hide();
+  };
+  const onPress = () => {
+    movedAt = Number.NEGATIVE_INFINITY;
+    hide();
   };
   const plugin = usePlugin();
   for (const remove of [
     plugin.listen(document, "pointerover", onOver),
     plugin.listen(document, "focusin", onFocus),
     plugin.listen(document, "focusout", hide),
-    plugin.listen(document, "pointerdown", hide, { capture: true }),
-    plugin.listen(document, "keydown", hide, { capture: true }),
+    plugin.listen(document, "pointerdown", onPress, { capture: true }),
+    plugin.listen(document, "keydown", onKey, { capture: true }),
     plugin.listen(window, "scroll", hide, { capture: true }),
     plugin.listen(window, "blur", hide),
   ]) {

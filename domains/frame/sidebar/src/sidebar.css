@@ -109,6 +109,8 @@
 .thread-row.active {
   background: var(--bg-active);
   color: var(--text);
+  /* Ringed as well as filled: the thread shown reads as chosen by more than a shade. */
+  box-shadow: inset 0 0 0 1px var(--border-strong);
 }
 
 .thread-open {
@@ -243,6 +245,13 @@
   color: var(--text-3);
 }
 
+/* On a fill (chosen, under the pointer, tinted as a draft) its muted words step up a shade, so they still read on it. */
+.thread-row:is(.active, :hover, .draft, .drafted) :is(.thread-meta, .thread-when:not(.thread-state)),
+.thread-row.active .thread-title.untitled,
+.thread-row.slim.active .thread-title {
+  color: var(--text-2);
+}
+
 .thread-branch {
   min-width: 0;
   overflow: hidden;
@@ -263,20 +272,23 @@
 /*
  * Under the pointer, the age or state gives way to the row's buttons, on the same line (a card's second, a slim row's
  * one): a pin (or unpin), then Archive (Unarchive once archived, Discard for a draft) in plain words; that line ends
- * before them (`--hover-room`, set on the row), and the title stays whole.
+ * before them (`--hover-room`, set on the row), and the title stays whole. Each is 24px tall, over the 20px line it
+ * takes, so the row keeps its height. Out of sight they are still there, so Tab goes on from the row's link to them.
  */
 .thread-hover {
   position: absolute;
-  bottom: 6px;
+  bottom: 4px;
   right: 8px;
-  display: none;
+  display: inline-flex;
   align-items: center;
   gap: 2px;
-  height: 20px;
+  height: 24px;
+  opacity: 0;
+  pointer-events: none;
 }
 
 .thread-row.slim .thread-hover {
-  bottom: 4px;
+  bottom: 2px;
 }
 
 .thread-hover-button {
@@ -284,13 +296,13 @@
   align-items: center;
   justify-content: center;
   gap: 4px;
-  min-width: 22px;
-  height: 20px;
-  padding: 0 2px;
+  min-width: 24px;
+  height: 24px;
+  padding: 0 4px;
   border: 0;
   border-radius: var(--radius-xs);
   background: transparent;
-  color: var(--text-3);
+  color: var(--text-2);
   font: inherit;
   font-size: var(--font-size-sm);
 }
@@ -304,19 +316,19 @@
   color: var(--text);
 }
 
-.thread-row:hover .thread-hover,
-.thread-row:focus-within .thread-hover:has(:focus-visible) {
-  display: inline-flex;
+/* Under the pointer, and while the keyboard is in the row. */
+.thread-row:is(:hover, :focus-within:has(:focus-visible)) .thread-hover {
+  opacity: 1;
+  pointer-events: auto;
 }
 
 /* Its pin gives way to the button that unpins it. */
-.thread-row:hover .thread-when,
-.thread-row:hover .thread-pin {
+.thread-row:is(:hover, :focus-within:has(:focus-visible)) :is(.thread-when, .thread-pin) {
   display: none;
 }
 
-.thread-row:hover .thread-meta,
-.thread-row.slim:hover .thread-line {
+.thread-row:is(:hover, :focus-within:has(:focus-visible)) .thread-meta,
+.thread-row.slim:is(:hover, :focus-within:has(:focus-visible)) .thread-line {
   padding-right: var(--hover-room, 0px);
 }
 
@@ -398,7 +410,9 @@
   height: 24px;
   padding: 0 10px;
   color: var(--text-3);
-  font-size: var(--font-size-sm);
+  font-size: var(--font-size-xs);
+  font-weight: 500;
+  letter-spacing: 0.01em;
 }
 
 .thread-head-label::after {
@@ -468,8 +482,8 @@
 }
 
 /*
- * The archived: a panel at the foot, its head the fold. Opened, it is as tall as its top edge was dragged to (kept), and
- * its rows scroll in it; a thread dragged over it lights it, as dropping it there archives it.
+ * The archived: a panel at the foot, its head the fold. Opened, it is as tall as its rows, up to where its top edge was
+ * dragged (kept), and they scroll in it past that; a thread dragged over it lights it, as dropping it there archives it.
  */
 .archived-panel {
   position: relative;
@@ -511,6 +525,17 @@
   overflow-y: auto;
 }
 
+/* With no thread above the archived, a quiet line says so, and one under it how to start one. */
+.thread-empty {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 0;
+  padding: 9px 10px;
+  color: var(--text-3);
+  font-size: var(--font-size-sm);
+}
+
 /* The open panel with none archived. */
 .archived-panel-empty {
   margin: 0;
@@ -549,7 +574,10 @@
   background: transparent;
   color: var(--text-3);
   font: inherit;
-  font-size: var(--font-size-sm);
+  /* A section's name, as the app's are (the sections' names while a thread is dragged, a menu's). */
+  font-size: var(--font-size-xs);
+  font-weight: 500;
+  letter-spacing: 0.01em;
 }
 
 .archived-head:hover {
@@ -582,7 +610,8 @@
 
 @media (hover: none) {
   .thread-row .thread-hover {
-    display: inline-flex;
+    opacity: 1;
+    pointer-events: auto;
   }
 }
 
@@ -590,7 +619,7 @@
 .thread-agents {
   display: flex;
   flex-direction: column;
-  margin: 0 0 2px 14px;
+  margin: 0 0 0 14px;
 }
 
 .thread-agents-toggle {
@@ -598,13 +627,14 @@
   align-items: center;
   gap: 4px;
   align-self: flex-start;
-  padding: 1px 6px;
+  min-height: 24px;
+  padding: 0 6px;
   border: 0;
   border-radius: var(--radius-sm);
   background: none;
   color: var(--text-3);
   font: inherit;
-  font-size: var(--font-size-xs);
+  font-size: var(--font-size-sm);
   cursor: pointer;
 }
 
@@ -653,7 +683,7 @@
   background: none;
   color: var(--text-2);
   font: inherit;
-  font-size: var(--font-size-sm);
+  font-size: var(--font-size-md);
   text-align: left;
   cursor: pointer;
 }
@@ -668,10 +698,11 @@
   color: var(--text);
 }
 
+/* A title too long fades out, as a thread's does. */
 .thread-agent-title {
   flex: 1;
   min-width: 0;
   overflow: hidden;
-  text-overflow: ellipsis;
+  mask-image: var(--fade-end);
   white-space: nowrap;
 }

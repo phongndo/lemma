@@ -43,12 +43,12 @@ function ConnectionNotice(props: { status: Accessor<ConnectionStatus>; now: Acce
   const unreachable = () => status().state === "connecting" && status().attempts >= 2;
   return (
     <Show when={status().state === "reconnecting" || unreachable()}>
-      <div class="callout callout-warn composer-callout" role={unreachable() ? "alert" : "status"}>
+      <div class="callout callout-warn composer-callout connection-notice" role={unreachable() ? "alert" : "status"}>
         <AlertIcon />
         <div class="callout-text">
           <span>{unreachable() ? "Can't reach the host." : "Connection to the host lost."}</span>
           <Show when={unreachable()}>
-            <span class="muted">
+            <span class="connection-notice-help">
               Is it running? Open the link it printed — the page needs its <code>?token=</code>.
             </span>
           </Show>
@@ -61,7 +61,10 @@ function ConnectionNotice(props: { status: Accessor<ConnectionStatus>; now: Acce
   );
 }
 
-/** How the connection to the host is doing: a dot in the thread's header, beside its menu (its label is the tooltip), and a notice above the composer while it is down. */
+/**
+ * How the connection to the host is doing: a dot in the thread's header, beside its menu (its label is the tooltip),
+ * while it is not connected (connected, only a screen reader hears it), and a notice above the composer while it is down.
+ */
 export default defineWebPlugin({
   id: "frame.connection",
   styles,
