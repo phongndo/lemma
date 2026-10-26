@@ -485,12 +485,10 @@ describe("createTrajectoryProjector", () => {
         expect(JSON.parse(JSON.stringify(inPlace(grown)))).toEqual(JSON.parse(JSON.stringify(whole)));
         const listed = records(now);
         expect(JSON.parse(JSON.stringify(listed))).toEqual(JSON.parse(JSON.stringify(ledger(whole))));
-        // A turn no event appended names is the same object, and so are its records (unless an event appended is one an
-        // edit before it named: the branch is folded afresh then, as reading it whole would apply the edit).
+        // A turn no event appended names is the same object, and so are its records.
         const appended = events.slice(shown?.end ?? 0, end);
         const named = new Set(appended.map((event) => (event.data as { readonly turnId?: string }).turnId));
-        const edited = new Set(prefix.flatMap((event) => (event.data.type === "context-edit" ? [event.data.target] : [])));
-        if (shown !== undefined && !appended.some((event) => edited.has(event.id)))
+        if (shown !== undefined)
           now.forEach((turn, at) => {
             const before = shown!.turns[at];
             if (before === undefined || named.has(turn.turnId)) return;

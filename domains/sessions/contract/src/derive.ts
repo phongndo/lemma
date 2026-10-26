@@ -41,8 +41,9 @@ export function modelView(branch: readonly SessionEvent[]): { readonly start: nu
 /**
  * The message an event puts in the model's view, before a compaction or an edit changes the view: a `message` event's
  * own; none for the rest. Every reader of what the model sees (the agent, compaction's estimates and cut, the
- * trajectory, the inspector) goes through this and `modelEntries`, so an event type added later is seen the same way
- * by all of them, and the switch below fails to compile until it is decided what the new type shows the model.
+ * trajectory, the inspector) goes through this and `modelEntries` (or `createMessageCount`, which counts what it
+ * derives), so an event type added later is seen the same way by all of them, and the switch below fails to compile
+ * until it is decided what the new type shows the model.
  */
 export function messageOf(event: SessionEvent): Message | undefined {
   const data = event.data;
@@ -250,6 +251,75 @@ function afterResults(entries: ModelEntry[]): ModelEntry[] {
  */
 export function deriveMessages(branch: readonly SessionEvent[], options: ViewOptions = {}): Message[] {
   return modelEntries(branch, options).map((entry) => entry.message);
+}
+
+/**
+ * How many messages `deriveMessages` derives for a branch as it is read an event at a time, at the cost of the events
+ * read rather than of the branch: how the trajectory counts the history each request carried. `note` each event in
+ * order; `count` is the length of `deriveMessages(events noted, options)`.
+ */
+export interface MessageCount {
+  /** Notes `branch[position]`, every event before it noted already. */
+  readonly note: (branch: readonly SessionEvent[], position: number) => void;
+  readonly count: (options?: ViewOptions) => number;
+}
+
+/** A `MessageCount` with nothing noted. */
+export function createMessageCount(): MessageCount {
+  let branch: readonly SessionEvent[] = [];
+  const positions = new Map<string, number>();
+  // How many messages, and how many of them prompt updates, come before each position.
+  const messagesBefore = [0];
+  const updatesBefore = [0];
+  // Where each tool call's results are, and the edits naming each event, in order.
+  const results = new Map<string, number[]>();
+  const edits = new Map<string, { readonly at: number; readonly edit: ContextEdit }[]>();
+  // As `modelView` and `restartedAt` find them: where the view starts, whether a summary opens it, the latest restart.
+  let start = 0;
+  let summary = false;
+  let restarted = -1;
+  const note = (events: readonly SessionEvent[], position: number): void => {
+    branch = events;
+    const event = events[position]!;
+    const data = event.data;
+    const message = messageOf(event);
+    positions.set(event.id, position);
+    messagesBefore.push(messagesBefore.at(-1)! + (message === undefined ? 0 : 1));
+    updatesBefore.push(updatesBefore.at(-1)! + (data.type === "prompt-update" ? 1 : 0));
+    if (message?.role === "toolResult") results.set(message.toolCallId, [...(results.get(message.toolCallId) ?? []), position]);
+    if (data.type === "compaction") {
+      const kept = positions.get(data.firstKeptId);
+      start = kept === undefined || kept >= position ? position + 1 : kept;
+      summary = true;
+    } else if (data.type === "request" && data.restart !== undefined) restarted = position;
+    else if (data.type === "context-edit") edits.set(data.target, [...(edits.get(data.target) ?? []), { at: position, edit: data }]);
+  };
+  const count = (options: ViewOptions = {}): number => {
+    const end = messagesBefore.length - 1;
+    const declared = options.restart === true ? end : restarted >= start ? restarted : -1;
+    let count = (summary ? 1 : 0) + messagesBefore[end]! - messagesBefore[start]!;
+    // The prompt updates a restart said again are not sent.
+    if (declared >= start) count -= updatesBefore[Math.min(declared + 1, end)]! - updatesBefore[start]!;
+    // What the edits in the view leave out (`edited`): each event omitted, and the results of each response omitted.
+    const omittedCalls = new Set<string>();
+    for (const [target, made] of edits) {
+      const at = positions.get(target);
+      if (at === undefined || at < start) continue;
+      const event = branch[at]!;
+      const message = messageOf(event);
+      if (message === undefined || (event.data.type === "prompt-update" && at <= declared)) continue;
+      const edit = latestApplying(
+        made.flatMap((entry) => (entry.at >= start ? [entry.edit] : [])),
+        message,
+      );
+      if (edit?.op !== "omit") continue;
+      count--;
+      if (message.role === "assistant") for (const block of message.content) if (block.type === "toolCall") omittedCalls.add(block.id);
+    }
+    for (const id of omittedCalls) for (const at of results.get(id) ?? []) if (at >= start) count--;
+    return count;
+  };
+  return { note, count };
 }
 
 /** The model's history before a request, and from where its thinking was made under the request's prefix. */
