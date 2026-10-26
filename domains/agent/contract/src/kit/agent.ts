@@ -30,7 +30,8 @@ import { makeInputDecisions } from "./input.ts";
 import { admission, makeQueues, REVISIONS_PER_INSTANCE, WITHDRAWN_KEPT } from "./queue.ts";
 import type { Item, QueuedTurn, SessionState, Suspended } from "./queue.ts";
 import { baseSection, environmentSection } from "./prompt.ts";
-import { failedAs, runTurn } from "./turn.ts";
+import { failedAs } from "./errors.ts";
+import { runTurn } from "./turn.ts";
 import type { Ended, KeptBranch, Placed, TurnOutcome, TurnResume } from "./turn.ts";
 
 /** The agent's settings: its row's `config`, for `agent.loop` and any loop built on the kit. */

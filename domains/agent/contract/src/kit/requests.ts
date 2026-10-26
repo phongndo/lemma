@@ -1,7 +1,7 @@
 import { Effect } from "effect";
 import type { Context } from "effect";
 import type { SessionEvent, Sessions } from "@lemma/sessions";
-import { failedAs } from "./turn.ts";
+import { failedAs } from "./errors.ts";
 
 /**
  * Each session's request ids that are in its log, with the turn that placed

@@ -18,7 +18,7 @@ import type { EventData, SessionEvent } from "@lemma/sessions";
 import type { Tool } from "@lemma/tools";
 import sessions, { makeSessionsPlugin } from "@lemma/sessions-files";
 import { readJournals } from "../../contract/src/kit/state.ts";
-import { BRANCHED_CALL, unansweredCalls } from "../../contract/src/kit/turn.ts";
+import { BRANCHED_CALL, unansweredCalls } from "../../contract/src/kit/turn/log.ts";
 import { call, failWith, gated, hang, log, newSession, ofType, reply, runAgent, tempDir, text, types, useTools, waitFor } from "./fakes.ts";
 import type { AgentSetup } from "./fakes.ts";
 
