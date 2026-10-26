@@ -108,7 +108,7 @@
     "@tailwindcss/oxide": "4.3.3",
     "@tailwindcss/vite": "4.3.3",
     "@types/node": "24.19.2",
-    "tsrs": "0.18.0-ts7.1.0-dev.20260929",
+    "tsrs": "0.20.0-ts7.1.0-beta",
     "vite": "8.3.4",
     "vite-plugin-solid": "2.11.14",
     "vitest": "5.0.5"

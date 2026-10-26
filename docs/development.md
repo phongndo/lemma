@@ -10,8 +10,8 @@ publish a `source` condition for files they do not ship.
 The type checker is [tsrs](https://github.com/oxc-project/tsrs), a Rust port of
 TypeScript 7's compiler: each package's `check` is `tsrs --noEmit`, and the
 core's and router's builds are `tsrs -p`. It reports what TypeScript does, a few
-times faster and in under half the memory. It follows a TypeScript nightly,
-which its version names, so a message can differ slightly from a released
+times faster and in under half the memory. It follows a TypeScript prerelease,
+which its version names, so a message can differ slightly from a stable
 `tsc`'s. The packed-package check (`pnpm package:check`) still type-checks a
 consumer with TypeScript itself, as the packages' users do. Its Linux binary
 links against glibc: on NixOS it runs through `programs.nix-ld`.

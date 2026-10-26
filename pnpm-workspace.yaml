@@ -14,6 +14,14 @@ allowBuilds:
 minimumReleaseAgeExclude:
   - "@earendil-works/pi-ai@1.4.0"
   - "@earendil-works/pi-telemetry@1.4.0"
+  - "@tsrs/darwin-arm64@0.20.0-ts7.1.0-beta"
+  - "@tsrs/darwin-x64@0.20.0-ts7.1.0-beta"
+  - "@tsrs/linux-arm64-gnu@0.20.0-ts7.1.0-beta"
+  - "@tsrs/linux-arm64-musl@0.20.0-ts7.1.0-beta"
+  - "@tsrs/linux-x64-gnu@0.20.0-ts7.1.0-beta"
+  - "@tsrs/linux-x64-musl@0.20.0-ts7.1.0-beta"
+  - "@tsrs/win32-x64@0.20.0-ts7.1.0-beta"
+  - tsrs@0.20.0-ts7.1.0-beta
 patchedDependencies:
   "@earendil-works/pi-ai@1.4.0": patches/@earendil-works__pi-ai@1.4.0.patch
   "@electron/osx-sign@1.3.3": patches/@electron__osx-sign@1.3.3.patch
