@@ -93,11 +93,29 @@ import { toggling } from "./check-ui/toggling.ts";
 
 /*
  * A share takes about a minute and a half in CI, and a lane run again up to as long more. A step that never returns
- * (Playwright waits on some calls for ever) fails the check at the deadline, naming the lanes still running and leaving
- * their traces, rather than holding the job until its timeout cancels it with nothing to show.
+ * (Playwright waits on some calls for ever: Chromium can leave a key unanswered whose frame goes as it lands) fails its
+ * try once the try has run for TRY_MINUTES, so the lane runs again on pages of its own, closing the hung try's; a hung
+ * try and a retry still end before the deadline. One still running at the deadline fails the check, naming the lanes
+ * still running and leaving their traces, rather than holding the job until its timeout cancels it with nothing to show.
  */
+const TRY_MINUTES = 2.5;
 const DEADLINE_MINUTES = 6;
 let deadline: NodeJS.Timeout | undefined;
+
+/** `run`, or a failure once it has run for TRY_MINUTES. */
+const inTime = async <A>(name: string, run: Promise<A>): Promise<A> => {
+  let overdue: NodeJS.Timeout | undefined;
+  try {
+    return await Promise.race([
+      run,
+      new Promise<never>((_, reject) => {
+        overdue = setTimeout(() => reject(new Error(`UI check: ${name} still running after ${TRY_MINUTES} minutes`)), TRY_MINUTES * 60_000);
+      }),
+    ]);
+  } finally {
+    clearTimeout(overdue);
+  }
+};
 
 /** The lanes that passed only on a retry, for the job's summary. */
 const flakes: Flake[] = [];
@@ -109,7 +127,7 @@ const attempt = async (lane: () => Promise<string>): Promise<string> => {
   let done: string;
   for (; ; tries++) {
     try {
-      done = await inLane(lane.name, lane);
+      done = await inTime(lane.name, inLane(lane.name, lane));
       break;
     } catch (error) {
       if (tries > retries) throw error;
