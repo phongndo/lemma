@@ -8,8 +8,6 @@ import { Llm } from "@lemma/llm";
 import { Sessions } from "@lemma/sessions";
 import { ToolRunner } from "@lemma/tools";
 
-export { MAX_QUEUED, WITHDRAWN_KEPT } from "@lemma/agent/kit";
-
 export interface AgentPluginOptions {
   /** Where its journal and live files are: the real file system by default; a simulation passes a simulated disk. */
   readonly fs?: FileSystem;

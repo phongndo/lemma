@@ -157,8 +157,6 @@ const placedOf = ({ requestId, content, credit, source, display }: QueuedPrompt)
   ...(display === undefined ? {} : { display }),
 });
 
-export { MAX_QUEUED, WITHDRAWN_KEPT } from "./queue.ts";
-
 export interface AgentOptions {
   /** Where its journal and live files are: the real file system by default; a simulation passes a simulated disk. */
   readonly fs?: FileSystem;

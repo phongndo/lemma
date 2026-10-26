@@ -16,9 +16,8 @@ suspends running turns and resumes them.
 
 It is the agent kit's (`@lemma/agent/kit`) `makeAgent`: what follows is the
 kit's behavior, which a loop built on it shares. A loop of another kind shapes
-its turns with the agent's hooks (`AgentContinueHook` decides whether a turn
-takes another step), or builds on the kit's parts: `runTurn`, `planResume`, the
-journal, the queue's rules, and the live view.
+its turns with the agent's hooks: `AgentRequestHook` for what each request
+holds, and `AgentContinueHook` for whether a turn takes another step.
 
 ```ts
 Effect.gen(function* () {
