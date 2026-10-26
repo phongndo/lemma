@@ -1,4 +1,4 @@
-import { readFile, realpath } from "node:fs/promises";
+import { readFile, realpath, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { Schema } from "effect";
@@ -292,9 +292,13 @@ async function updateServers(path: string, change: (servers: Record<string, unkn
   const servers = isObject(json["mcpServers"]) ? { ...json["mcpServers"] } : {};
   change(servers);
   json = { ...json, mcpServers: servers };
+  // As an editor leaves it: the mode the file has (0644 for a new one), and a folder it makes as mkdir makes one.
+  const mode = await stat(target).then(
+    (info) => info.mode & 0o777,
+    () => 0o644,
+  );
   try {
-    // As an editor leaves it: the file 0644, and a folder it makes as mkdir makes one (its mode under the umask).
-    await writeFileAtomic(target, `${JSON.stringify(json, null, 2)}\n`, { mode: 0o644, dirMode: 0o777 });
+    await writeFileAtomic(target, `${JSON.stringify(json, null, 2)}\n`, { mode, dirMode: 0o777 });
   } catch (cause) {
     const code = (cause as NodeJS.ErrnoException).code;
     if (target !== path && (code === "EROFS" || code === "EACCES" || code === "EPERM"))

@@ -104,6 +104,18 @@ describe("writing a change", () => {
     expect((await readServersFile(path)).entries.get("a")).toEqual({ config: { command: "x", toolExposure: { t: "hidden" } } });
   });
 
+  it("keeps the file's mode, and writes a new file 0644", async () => {
+    const folder = await mkdtemp(join(tmpdir(), "lemma-mcp-config-"));
+    const kept = join(folder, "kept.json");
+    await writeFile(kept, "{}");
+    await chmod(kept, 0o600);
+    await writeChange(kept, "a", { enabled: false });
+    expect((await lstat(kept)).mode & 0o777).toBe(0o600);
+    const made = join(folder, "made.json");
+    await writeChange(made, "a", { enabled: false });
+    expect((await lstat(made)).mode & 0o777).toBe(0o644);
+  });
+
   it("writes what differs from a plugin's server, which has the plugin's values without it", async () => {
     const path = join(await mkdtemp(join(tmpdir(), "lemma-mcp-config-")), "mcp.json");
     const base = { url: "https://docs/mcp", enabled: false, exposure: "direct" as const };
