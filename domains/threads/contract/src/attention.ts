@@ -51,12 +51,6 @@ export const attentionOf = (facts: AttentionFacts, now: number): ThreadAttention
   return { state: "failed", label: end.reason === "max-steps" ? "Out of steps" : "Failed", since: end.at };
 };
 
-/** It needs the person: it waits on them, or a turn's end is there to see. Not a thread at work, which needs nobody yet. */
-export const needsYou = (attention: ThreadAttention | undefined): boolean => attention !== undefined && attention.state !== "working";
-
-/** How pressing each state is, the most first: for sorting what needs the person. */
-export const ATTENTION_RANK: Readonly<Record<AttentionState, number>> = { waiting: 0, failed: 1, done: 2, working: 3 };
-
 /** A stored end as far as it reads (`localStorage` holds what an older version, or another tab, wrote). */
 export const isUnseenEnd = (value: unknown): value is UnseenEnd =>
   typeof value === "object" &&

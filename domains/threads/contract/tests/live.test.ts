@@ -3,10 +3,8 @@ import {
   OUTPUT_TAIL_CHARS,
   appendOutput,
   applyDelta,
-  beginJoin,
   createFinished,
   draftEntries,
-  dropOutput,
   emptyLive,
   endTurn,
   joinLive,
@@ -14,7 +12,6 @@ import {
   noteLogged,
   parseDraftArgs,
   seedLive,
-  settleStep,
   reconcileLive,
 } from "../src/live.ts";
 import type { Finished, LiveState } from "../src/live.ts";
@@ -58,16 +55,11 @@ describe("live drafts", () => {
     expect(s.drafts[0]).toMatchObject({ finished: true, error: "boom" });
   });
 
-  it("drops a settled step and ignores its late deltas", () => {
+  it("drops a step the log holds and ignores its late deltas", () => {
     let s = feed([{ type: "text-delta", index: 0, delta: "x" }]);
-    s = settleStep(s, "s1");
+    s = reconcileLive(s, over(branch({ type: "message", message: assistant([]), turnId: "t1", stepId: "s1" })));
     expect(s.drafts).toEqual([]);
     s = feed([{ type: "text-delta", index: 0, delta: "late" }], s);
-    expect(s.drafts).toEqual([]);
-  });
-
-  it("settling before any delta prevents a stale draft", () => {
-    const s = feed([{ type: "text-delta", index: 0, delta: "x" }], settleStep(emptyLive, "s1"));
     expect(s.drafts).toEqual([]);
   });
 
@@ -104,6 +96,17 @@ describe("draftEntries", () => {
 describe("reconcileLive", () => {
   it("settles what an event at a time would, for any log and state", () => {
     // The fold it replaced, an event at a time (settling each step made a set per step: quadratic in a long log).
+    const settleStep = (state: LiveState, stepId: string): LiveState => {
+      if (state.settled.has(stepId) && !state.drafts.some((draft) => draft.stepId === stepId)) return state;
+      return { ...state, drafts: state.drafts.filter((draft) => draft.stepId !== stepId), settled: new Set([...state.settled, stepId]) };
+    };
+    const dropOutput = (state: LiveState, toolCallId: string): LiveState => {
+      const output = new Map(state.output);
+      output.delete(toolCallId);
+      const printed = new Map(state.printed);
+      printed.delete(toolCallId);
+      return { ...state, output, printed };
+    };
     const stepwise = (state: LiveState, events: readonly SessionEvent[]): LiveState => {
       if (state.drafts.length === 0 && state.output.size === 0 && state.printed.size === 0) return state;
       let next = state;
@@ -191,7 +194,6 @@ describe("reconcileLive", () => {
     let s = appendOutput(appendOutput(emptyLive, "c1", "a\n"), "c1", "b\n");
     expect(s.output.get("c1")).toBe("a\nb\n");
     expect(appendOutput(s, "c1", "x".repeat(OUTPUT_TAIL_CHARS)).output.get("c1")).toHaveLength(OUTPUT_TAIL_CHARS);
-    expect(dropOutput(s, "c1").output.has("c1")).toBe(false);
     expect(reconcileLive(s, over(branch(toolResult("c1", "a\nb")))).output.has("c1")).toBe(false);
     s = appendOutput(s, "c2", "y");
     expect(endTurn(s, "t1").output.size).toBe(0);
@@ -241,29 +243,6 @@ describe("reconcileLive", () => {
       queueRevision: 0,
     });
     expect(s.drafts[0]!.blocks[0]).toEqual({ kind: "tool", id: "c1", name: "bash", args: "" });
-  });
-
-  it("replays what arrived while the view was on its way over the view, so a newer delta never stands in for its prefix", () => {
-    // Joining at seq 100: delta 101 comes first, then the view through 100.
-    let s = beginJoin(emptyLive);
-    s = applyDelta(s, "t1", "s1", { type: "text-delta", index: 1, delta: "w101 " }, 101);
-    s = appendOutput(s, "c1", "line 2\n", 7);
-    expect(s.drafts).toEqual([]);
-    const view = {
-      turnId: "t1",
-      draft: { stepId: "s1", seq: 100, blocks: [{ index: 1, block: { type: "text" as const, text: "w1 … w100 " } }] },
-      output: [{ toolCallId: "c1", output: "line 1\n", length: 7 }],
-      queue: [],
-      queueRevision: 0,
-    };
-    const joined = joinLive(s, view, createFinished());
-    expect(joined.joining).toBeUndefined();
-    // Seeded at their stream index: the gap at 0 stays a gap.
-    expect(joined.drafts[0]!.blocks[0]).toBeUndefined();
-    expect(joined.drafts[0]!.blocks[1]).toEqual({ kind: "text", text: "w1 … w100 w101 " });
-    expect(joined.output.get("c1")).toBe("line 1\nline 2\n");
-    // Without a view, what was held is applied as it came.
-    expect(joinLive(s, undefined, createFinished()).drafts[0]!.blocks[1]).toEqual({ kind: "text", text: "w101 " });
   });
 
   it("does not bring back a draft or output from a view older than the log that arrived first", () => {
