@@ -1,0 +1,22 @@
+{
+  "name": "@lemma/example-team",
+  "version": "0.1.0",
+  "private": true,
+  "description": "What a team shares, as one plugin: its model gateway as a provider, and its MCP server",
+  "type": "module",
+  "scripts": {
+    "check": "tsrs --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@lemma/core": "workspace:*",
+    "@lemma/llm": "workspace:*",
+    "@lemma/mcp": "workspace:*",
+    "effect": "4.0.5"
+  },
+  "devDependencies": {
+    "@types/node": "24.19.2",
+    "tsrs": "0.20.0-ts7.1.0-beta",
+    "vitest": "5.0.5"
+  }
+}
