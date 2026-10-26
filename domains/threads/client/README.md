@@ -45,13 +45,15 @@ restarts host plugins mid-turn. Requires the runtime's `Client`, `Notify`,
   page in its pane), it is deleted, as a tab closed is. While something is
   kept for it, it is marked `kept` on the host, so the host's sweep of empty
   sessions (one a closed tab left) passes it over.
-- **Drafts.** `drafts` holds each thread's unsent prompt as the composer
-  writes it (`setDraft`). Lists hear at once when a thread gains or loses
-  one, and its text a moment after the last change. Its text is kept in the
-  browser (`lemma.threads.client.drafts`), written a moment after the last
-  change and as the page goes, merged with what other tabs wrote, whose own
-  changes arrive as they save them; it comes back after a reload, and its
-  images last while the page does. A deleted thread's goes with it.
+- **Drafts.** `drafts` is the one place unsent prompts are kept: each
+  thread's, and the new-thread page's (`""`), as the composer writes them
+  (`setDraft`). `draft` reads one as it is now. Lists hear at once when a
+  thread gains or loses one, and of its other changes a moment after the last.
+  Its text is kept in the browser (`lemma.threads.client.drafts`), written a
+  moment after the last change and as the page goes, merged with what other
+  tabs wrote, whose own changes arrive as they save them; it comes back after
+  a reload. Its images, a retry's request id, and the new-thread page's draft
+  last while the page does. A deleted thread's goes with it.
 - **Sending in the background.** `send` with `background` creates a thread
   (in `cwd`, else the shown thread's directory) and sends to it without going
   there. Refused, the answer shows where the prompt was written (the

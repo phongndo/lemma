@@ -1,9 +1,19 @@
 import { describe, expect, test } from "vitest";
-import { SharedDrafts, dropRetry, keepDraft, lostOnReload, returned, unsent } from "../src/drafts.ts";
-import type { Draft, Drafts, Prompt } from "../src/drafts.ts";
+import { draftsOf, dropRetry, keepDraft, lostOnReload, returned, unsent } from "../src/drafts.ts";
+import type { Draft, Drafts } from "../src/drafts.ts";
 
 const image = { type: "image", data: "aGk=", mimeType: "image/png" } as const;
 const other = { type: "image", data: "eW8=", mimeType: "image/png" } as const;
+
+/** Drafts kept in a map, as `Threads` keeps them: one with nothing written is none. */
+const kept = (entries: readonly (readonly [string, Draft])[] = []) => {
+  const map = new Map(entries);
+  const drafts: Drafts = {
+    get: (key) => map.get(key),
+    set: (key, draft) => void (draft === undefined || !unsent(draft) ? map.delete(key) : map.set(key, draft)),
+  };
+  return { map, drafts };
+};
 
 describe("unsent", () => {
   test("is text other than whitespace, or an image", () => {
@@ -15,7 +25,7 @@ describe("unsent", () => {
 
 describe("keepDraft", () => {
   test("keeps what the composer holds with the retry id the thread's draft had", () => {
-    const drafts: Drafts = new Map([["t", { text: "old", images: [], requestId: "r1" }]]);
+    const { drafts } = kept([["t", { text: "old", images: [], requestId: "r1" }]]);
     keepDraft(drafts, "t", { text: "old", images: [image] }, false);
     expect(drafts.get("t")).toEqual({ text: "old", images: [image], requestId: "r1" });
     keepDraft(drafts, "u", { text: "new", images: [] }, false);
@@ -23,19 +33,19 @@ describe("keepDraft", () => {
   });
 
   test("a sent prompt brought back is no draft: it drops the thread's", () => {
-    const drafts: Drafts = new Map([["t", { text: "mine", images: [] }]]);
+    const { map, drafts } = kept([["t", { text: "mine", images: [] }]]);
     keepDraft(drafts, "t", { text: "sent before", images: [] }, true);
-    expect(drafts.has("t")).toBe(false);
+    expect(map.has("t")).toBe(false);
   });
 });
 
 describe("dropRetry", () => {
   test("an edit makes the draft a new prompt: its request id goes, its content stays", () => {
-    const drafts: Drafts = new Map([["t", { text: "a", images: [image], requestId: "r1" }]]);
+    const { map, drafts } = kept([["t", { text: "a", images: [image], requestId: "r1" }]]);
     dropRetry(drafts, "t");
     expect(drafts.get("t")).toEqual({ text: "a", images: [image] });
     dropRetry(drafts, "none");
-    expect(drafts.has("none")).toBe(false);
+    expect(map.has("none")).toBe(false);
   });
 });
 
@@ -57,19 +67,20 @@ describe("returned", () => {
   });
 });
 
-describe("SharedDrafts", () => {
-  test("starts from what was kept, and passes on each thread's change but not the one written with no thread shown", () => {
-    const told: [string, Prompt | undefined][] = [];
-    const drafts = new SharedDrafts([["t", { text: "kept", images: [] }]], (key, prompt) => told.push([key, prompt]));
+describe("draftsOf", () => {
+  test("reads a thread's draft as Threads has it now, and writes it through, none dropping it", () => {
+    const written: [string, Draft | undefined][] = [];
+    const drafts = draftsOf({
+      draft: (key) => (key === "t" ? { text: "kept", images: [] } : undefined),
+      setDraft: (key, draft) => void written.push([key, draft]),
+    });
     expect(drafts.get("t")).toEqual({ text: "kept", images: [] });
-    expect(told).toEqual([]);
+    expect(drafts.get("u")).toBeUndefined();
     keepDraft(drafts, "t", { text: "kept more", images: [image] }, false);
-    drafts.set("", { text: "nowhere yet", images: [] });
-    drafts.delete("t");
-    drafts.delete("");
-    expect(told).toEqual([
+    drafts.set("", undefined);
+    expect(written).toEqual([
       ["t", { text: "kept more", images: [image] }],
-      ["t", undefined],
+      ["", undefined],
     ]);
   });
 });

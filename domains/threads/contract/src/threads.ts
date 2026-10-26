@@ -52,12 +52,16 @@ export interface ThreadsService {
    */
   readonly pendingCwd: Accessor<string | undefined>;
   /**
-   * The prompts written in threads and not yet sent, by thread id: what the composer holds for each (it writes them,
-   * `setDraft`), so a list can show a new thread left mid-prompt as a draft. Their text is kept in this browser, and
-   * comes back after a reload, and another tab's arrive as it saves them; their images last while the page does. A
-   * thread's goes with it when it is deleted.
+   * The prompts written in threads and not yet sent, by thread id, and `""`'s, the new-thread page's with no thread
+   * shown: what the composer holds for each, which it writes (`setDraft`) and reads back (`draft`), so a list can show a
+   * new thread left mid-prompt as a draft. A list hears at once of a draft gained or lost, and of its changes a moment
+   * after the last. Their text is kept in this browser, and comes back after a reload, and another tab's arrive as it
+   * saves them; their images, a retry's request id, and `""`'s last while the page does. A thread's goes with it when it
+   * is deleted.
    */
   readonly drafts: Accessor<ReadonlyMap<string, ThreadDraft>>;
+  /** A thread's draft as it is now (`""` for the new-thread page's): `drafts` tells of a change a moment after it. */
+  readonly draft: (sessionId: string) => ThreadDraft | undefined;
   /** Keeps a thread's unsent prompt (`drafts`); one with no text and no images, or none, drops it. */
   readonly setDraft: (sessionId: string, draft: ThreadDraft | undefined) => void;
   /**
@@ -135,6 +139,8 @@ export class Threads extends Context.Service<Threads, ThreadsService>()("lemma-w
 export interface ThreadDraft {
   readonly text: string;
   readonly images: readonly ImageContent[];
+  /** Kept from a send that did not get through, so sending it again unchanged cannot place it twice; an edit drops it. */
+  readonly requestId?: string;
 }
 
 /** Holds something to send: text other than whitespace, or an image. What counts as a draft (`Threads.drafts`). */

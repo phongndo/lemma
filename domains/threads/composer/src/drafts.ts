@@ -1,47 +1,23 @@
-import type { ImageContent } from "@lemma/llm";
 import { written } from "@lemma/threads";
+import type { ThreadDraft, ThreadsService } from "@lemma/threads";
 
-/** A prompt being written. */
-export interface Draft {
-  readonly text: string;
-  readonly images: readonly ImageContent[];
-  /** Kept from a send that did not get through, so sending it again unchanged cannot place it twice; an edit drops it. */
-  readonly requestId?: string;
-}
+/** A prompt being written: a thread's draft (`Threads.drafts`), with the request id of a send that did not get through. */
+export type Draft = ThreadDraft;
 
 /** What the composer holds: a prompt's text and images, with no request id. */
 export type Prompt = Pick<Draft, "text" | "images">;
 
 /**
- * Unsent prompts by thread id (`""` for a new thread): they survive switching threads and the composer leaving the
- * page, as it does while settings show.
+ * Unsent prompts by thread id (`""` for a new thread), as `Threads` keeps them: they survive switching threads, the
+ * composer leaving the page (as it does while settings show), and, their text, a reload. Setting none drops one.
  */
-export type Drafts = Map<string, Draft>;
-
-/**
- * The composer's drafts, each thread's passed on as it changes (`publish`: `Threads.setDraft`, which keeps them across
- * reloads and lets the sidebar show them), seeded from what was `kept`. `""`, written with no thread shown, stays here.
- */
-export class SharedDrafts extends Map<string, Draft> {
-  private readonly publish: (key: string, prompt: Prompt | undefined) => void;
-
-  constructor(kept: Iterable<readonly [string, Prompt]>, publish: (key: string, prompt: Prompt | undefined) => void) {
-    super();
-    this.publish = publish;
-    for (const [key, prompt] of kept) super.set(key, { text: prompt.text, images: prompt.images });
-  }
-
-  override set(key: string, draft: Draft): this {
-    super.set(key, draft);
-    if (key !== "") this.publish(key, { text: draft.text, images: draft.images });
-    return this;
-  }
-
-  override delete(key: string): boolean {
-    if (key !== "") this.publish(key, undefined);
-    return super.delete(key);
-  }
+export interface Drafts {
+  readonly get: (key: string) => Draft | undefined;
+  readonly set: (key: string, draft: Draft | undefined) => void;
 }
+
+/** The drafts `Threads` keeps, read as they are now (`draft`) and written through (`setDraft`). */
+export const draftsOf = (threads: Pick<ThreadsService, "draft" | "setDraft">): Drafts => ({ get: threads.draft, set: threads.setDraft });
 
 /** What a reload would lose: images (only the text is kept), a send that did not get through, or a prompt written with no thread shown. */
 export const lostOnReload = (key: string, draft: Draft): boolean => unsent(draft) && (draft.images.length > 0 || draft.requestId !== undefined || key === "");
@@ -55,7 +31,7 @@ export const unsent = (prompt: Prompt): boolean => written(prompt);
  * the thread's.
  */
 export const keepDraft = (drafts: Drafts, key: string, prompt: Prompt, recalled: boolean): void => {
-  if (recalled) return void drafts.delete(key);
+  if (recalled) return drafts.set(key, undefined);
   const requestId = drafts.get(key)?.requestId;
   drafts.set(key, { text: prompt.text, images: prompt.images, ...(requestId === undefined ? {} : { requestId }) });
 };

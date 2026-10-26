@@ -49,6 +49,8 @@ const PRELOAD_MS = 15_000;
 const MADE_KEY = "lemma.threads.client.made";
 /** The unsent prompts' text, by thread (`Threads.drafts`). */
 const DRAFTS_KEY = "lemma.threads.client.drafts";
+/** The new-thread page's draft, with no thread shown: kept while the page lasts, not stored. */
+const NEW_THREAD = "";
 /** How long after a draft's last change it is written to storage (ms). */
 const SAVE_MS = 400;
 const isTexts = recordOf((text): text is string => typeof text === "string");
@@ -106,8 +108,8 @@ export default defineWebPlugin({
     const [answered, setAnswered] = createSignal<PromptAnswer>();
     const [pendingCwd, setPendingCwd] = createSignal<string>();
     /**
-     * The unsent prompts (`Threads.drafts`): their text kept in this browser, their images while the page lasts. `held`
-     * is the truth, at once; the signal is told at once when a thread gains or loses one, and a moment after the last
+     * The unsent prompts (`Threads.drafts`): their text kept in this browser, their images and retry ids, and the
+     * new-thread page's, while the page lasts. `held` is the truth, at once (`Threads.draft`); the signal is told at once when a thread gains or loses one, and a moment after the last
      * change otherwise, so typing does not redraw every list that reads it at each key.
      */
     const held = new Map<string, ThreadDraft>(Object.entries(loadJson(DRAFTS_KEY, {}, isTexts)).map(([id, text]) => [id, { text, images: [] }] as const));
@@ -141,11 +143,12 @@ export default defineWebPlugin({
     const setDraft = (sessionId: string, draft: ThreadDraft | undefined) => {
       const was = held.get(sessionId);
       const now = written(draft) ? draft : undefined;
-      if (now === undefined ? was === undefined : was?.text === now.text && was.images === now.images) return;
+      if (now === undefined ? was === undefined : was?.text === now.text && was.images === now.images && was.requestId === now.requestId) return;
       if (now === undefined) held.delete(sessionId);
-      else held.set(sessionId, { text: now.text, images: now.images });
+      else held.set(sessionId, { text: now.text, images: now.images, ...(now.requestId === undefined ? {} : { requestId: now.requestId }) });
       if ((was === undefined) !== (now === undefined)) tell();
       else telling ??= plugin.after(SAVE_MS, tell);
+      if (sessionId === NEW_THREAD) return;
       unsaved.set(sessionId, now !== undefined && now.text.trim() !== "" ? now.text : undefined);
       saving ??= plugin.after(SAVE_MS, saveDrafts);
     };
@@ -160,7 +163,7 @@ export default defineWebPlugin({
         changed = true;
       }
       for (const [id, draft] of held) {
-        if (unsaved.has(id) || id in stored || draft.images.length > 0) continue;
+        if (id === NEW_THREAD || unsaved.has(id) || id in stored || draft.images.length > 0) continue;
         held.delete(id);
         changed = true;
       }
@@ -733,7 +736,7 @@ export default defineWebPlugin({
       if (!loaded()) return;
       const known = new Set(list().map((session) => session.id));
       // Deleting while iterating a Map is safe: the iteration goes on past each deleted key.
-      for (const id of held.keys()) if (!known.has(id)) setDraft(id, undefined);
+      for (const id of held.keys()) if (id !== NEW_THREAD && !known.has(id)) setDraft(id, undefined);
     });
     /** Something is kept for a thread: a draft, or what a plugin holds for it (`ThreadHolds`: a page in its pane). */
     const keeps = (sessionId: string) => drafts().has(sessionId) || slots.list(ThreadHolds).some((hold) => hold.holds(sessionId));
@@ -944,6 +947,7 @@ export default defineWebPlugin({
         blank,
         pendingCwd,
         drafts,
+        draft: (sessionId: string) => held.get(sessionId),
         setDraft,
         select,
         href,

@@ -1,6 +1,6 @@
 import { describe, expect, test } from "vitest";
 import type { PromptContent } from "@lemma/agent";
-import { keepDraft } from "../src/drafts.ts";
+import { keepDraft, unsent } from "../src/drafts.ts";
 import type { Draft, Drafts, Prompt } from "../src/drafts.ts";
 import { createSender, promptContent } from "../src/sender.ts";
 import type { Outgoing, WhenBusy } from "../src/sender.ts";
@@ -23,7 +23,12 @@ interface Placed {
  */
 const harness = (key = "t1") => {
   const state = { key, composer: { text: "", images: [] } as Prompt, sending: false, connected: true, ids: 0, settled: 0 };
-  const drafts: Drafts = new Map();
+  // As `Threads` keeps them: one with nothing written is none.
+  const kept = new Map<string, Draft>();
+  const drafts: Drafts = {
+    get: (key) => kept.get(key),
+    set: (key, draft) => void (draft === undefined || !unsent(draft) ? kept.delete(key) : kept.set(key, draft)),
+  };
   const outgoing = new Set<Draft>();
   const placed: Placed[] = [];
   const reported: unknown[] = [];
@@ -77,7 +82,7 @@ describe("createSender", () => {
     ]);
     expect(h.state.composer).toEqual({ text: "", images: [] });
     expect(h.state.sending).toBe(true);
-    expect(h.drafts.get("t1")).toEqual({ text: "", images: [] });
+    expect(h.drafts.get("t1")).toBeUndefined();
     expect([...h.outgoing]).toEqual([h.placed[0]!.prompt]);
     h.type("next one");
     h.placed[0]!.answer(true);
@@ -156,7 +161,7 @@ describe("createSender", () => {
     h.placed[0]!.answer(false);
     await sending;
     expect(h.drafts.get("created")).toEqual({ text: "start", images: [], requestId: "r1" });
-    expect(h.drafts.get("")).toEqual({ text: "", images: [] });
+    expect(h.drafts.get("")).toBeUndefined();
     expect(h.state.composer.text).toBe("start");
   });
 
