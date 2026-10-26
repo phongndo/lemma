@@ -7,7 +7,8 @@
   letter-spacing: 0.01em;
 }
 
-.palette-input-text input {
+/* Its field takes words, not paths: in the interface's font. */
+.palette-text .palette-input input {
   font-family: var(--font-ui);
 }
 
@@ -28,16 +29,6 @@
 .palette-icon-room {
   flex: none;
   width: 16px;
-}
-
-/* Under a question it did not claim (a form's dialog): out of sight, its field still there for focus to come back to. */
-.palette-backdrop.behind {
-  background: transparent;
-  pointer-events: none;
-}
-
-.palette-backdrop.behind .palette {
-  opacity: 0;
 }
 
 .palette-hint {
@@ -72,13 +63,6 @@
   place-items: center;
   width: 20px;
   color: var(--text-2);
-}
-
-/* A line in the list that is no item: a search still on its way, or why it failed. */
-.palette-note {
-  padding: 8px 12px;
-  color: var(--text-3);
-  font-size: var(--font-size-sm);
 }
 
 /* On a page, its back button takes the prompt's place, its edge where the prompt's icon sits. */

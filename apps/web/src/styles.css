@@ -802,6 +802,16 @@
     background: var(--backdrop-strong);
   }
 
+  /* Under something it did not claim (a form's dialog): out of sight, its field still there for focus to come back to. */
+  .palette-backdrop.behind {
+    background: transparent;
+    pointer-events: none;
+  }
+
+  .palette-backdrop.behind .palette {
+    opacity: 0;
+  }
+
   .palette {
     width: 600px;
     max-width: 100%;
@@ -887,6 +897,13 @@
 
   .palette-section:first-child {
     padding-top: 4px;
+  }
+
+  /* A line in the list that is no item: a search still on its way, why it failed, what was left out. */
+  .palette-note {
+    padding: 8px 12px;
+    color: var(--text-3);
+    font-size: var(--font-size-sm);
   }
 
   .palette-row mark {

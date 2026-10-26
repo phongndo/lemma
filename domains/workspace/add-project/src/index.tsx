@@ -1,8 +1,5 @@
-import { For, Show, createMemo, createSignal, createUniqueId, onCleanup, onMount } from "solid-js";
+import { Show, createMemo, createSignal, createUniqueId, onCleanup, onMount } from "solid-js";
 import { WorkspaceChannels } from "@lemma/workspace";
-import { Portal } from "solid-js/web";
-import { listKey, quickKey } from "@lemma/web/keys";
-import { createQuickHold } from "@lemma/web/quick-pick";
 import { tildePath } from "@lemma/web/format";
 import { Actions } from "@lemma/actions";
 import { Dialogs, Layers } from "@lemma/frame";
@@ -11,7 +8,8 @@ import { Workspace, WorkspaceActionIds } from "@lemma/workspace/web";
 import type { DialogsService } from "@lemma/frame";
 import type { ClientService, NotifyService } from "@lemma/web";
 import type { WorkspaceService } from "@lemma/workspace/web";
-import { ChevronIcon, FolderIcon, FolderPlusIcon, GitBranchIcon, Spinner } from "@lemma/look";
+import { ChevronIcon, FolderIcon, FolderPlusIcon, GitBranchIcon, SearchList, Spinner } from "@lemma/look";
+import type { SearchListRow } from "@lemma/look";
 import { above, listRows } from "./rows.ts";
 import type { Listing, Row } from "./rows.ts";
 import styles from "./add-project.css?inline";
@@ -28,7 +26,7 @@ interface Deps {
 const withSlash = (path: string) => (path.endsWith("/") ? path : `${path}/`);
 
 /**
- * Pick a folder on the host by typing its path. Matching folders list as you
+ * Pick a folder on the host by typing its path, in a search list (`SearchList`). Matching folders list as you
  * type (letters in order match). As in every search list, ↑ and ↓ move, and
  * Enter, a click, or mod+1 … mod+9 picks a row: a folder opens, a name that
  * matches nothing is created. Tab, → at the end, or a row's chevron goes into
@@ -38,7 +36,6 @@ const withSlash = (path: string) => (path.endsWith("/") ? path : `${path}/`);
  */
 function AddProjectDialog(props: { deps: Deps }) {
   // Unique per instance: the page could show two lists.
-  const listId = `add-project-list-${createUniqueId()}`;
   const headingId = `add-project-heading-${createUniqueId()}`;
   const { client, workspace, notify, dialogs } = props.deps;
   const [value, setValue] = createSignal("");
@@ -48,7 +45,7 @@ function AddProjectDialog(props: { deps: Deps }) {
   const [busy, setBusy] = createSignal(false);
   const [home, setHome] = createSignal<string>();
   let input!: HTMLInputElement;
-  let list!: HTMLDivElement;
+  let list: HTMLElement | undefined;
   let request = 0;
   let debounce: number | undefined;
   /** The path last asked for, and the one the folders shown answer (listed, or failed to be). */
@@ -58,7 +55,6 @@ function AddProjectDialog(props: { deps: Deps }) {
   let waiting: (() => void) | undefined;
   /** A row was moved to (↑/↓, the pointer) since the path last changed: the folders arriving leave it chosen. */
   let chosen = false;
-  const previous = document.activeElement as HTMLElement | null;
 
   const rows = createMemo(() => listRows(value(), listing(), home()));
 
@@ -75,8 +71,8 @@ function AddProjectDialog(props: { deps: Deps }) {
       const index = rows().findIndex((row) => row.kind === "entry" && row.entry.name === select);
       if (index !== -1 || !chosen) setActive(Math.max(index, 0));
       else setActive((at) => Math.min(at, rows().length - 1));
-      list.scrollTop = 0;
-      if (index > 0) list.querySelector(`[data-index="${index}"]`)?.scrollIntoView({ block: "nearest" });
+      if (list !== undefined) list.scrollTop = 0;
+      if (index > 0) list?.querySelector(`[data-index="${index}"]`)?.scrollIntoView({ block: "nearest" });
     } catch {
       if (id === request) setListing(undefined);
     } finally {
@@ -147,12 +143,9 @@ function AddProjectDialog(props: { deps: Deps }) {
         return;
     }
   };
-  const move = (delta: number) => {
-    const count = rows().length;
-    if (count === 0) return;
+  const moveTo = (index: number) => {
     chosen = true;
-    setActive((index) => (index + delta + count) % count);
-    list.querySelector(`[data-index="${active()}"]`)?.scrollIntoView({ block: "nearest" });
+    setActive(index);
   };
 
   /** Runs a key that picks on the rows of what is typed: now, or once its folders arrive, asked for at once. */
@@ -166,37 +159,17 @@ function AddProjectDialog(props: { deps: Deps }) {
   };
 
   const caretAtEnd = () => input.selectionStart === value().length && input.selectionEnd === value().length;
-  const hold = createQuickHold();
+  /** Its own keys, before the list's: into the folder highlighted, and up. */
   const onKeyDown = (event: KeyboardEvent) => {
-    hold.track(event);
-    const list = event.isComposing ? undefined : listKey(event);
-    if (event.key === "Escape") {
-      event.preventDefault();
-      event.stopPropagation();
-      close();
-    } else if (list !== undefined) {
-      event.preventDefault();
-      if (!("pick" in list)) move(list.move);
-      else
-        settled(() => {
-          const row = rows()[list.pick];
-          if (row !== undefined) pick(row);
-        });
-    } else if ((event.key === "Tab" && !event.shiftKey) || (event.key === "ArrowRight" && caretAtEnd())) {
+    if ((event.key === "Tab" && !event.shiftKey) || (event.key === "ArrowRight" && caretAtEnd())) {
       event.preventDefault();
       settled(() => {
         const row = rows()[active()];
         if (row?.kind === "entry") go(row.entry.path);
       });
-    } else if (event.key === "Tab") {
-      // Shift+Tab too: focus stays in the dialog.
-      event.preventDefault();
     } else if (event.key === "Backspace" && value().endsWith("/") && caretAtEnd() && value().length > 1) {
       event.preventDefault();
       up();
-    } else if (event.key === "Enter" && !event.isComposing) {
-      event.preventDefault();
-      settled(() => pick(rows()[active()]));
     }
   };
 
@@ -218,145 +191,132 @@ function AddProjectDialog(props: { deps: Deps }) {
     // Closed, nothing waiting may open a project.
     waiting = undefined;
     request++;
-    previous?.focus?.();
   });
 
-  return (
-    <Portal>
-      <div
-        class="backdrop palette-backdrop"
-        onMouseDown={(event) => {
-          if (event.target === event.currentTarget) close();
-        }}
-      >
-        <div class="palette" role="dialog" aria-modal="true" aria-labelledby={headingId} onKeyDown={onKeyDown} onKeyUp={hold.track} onFocusOut={hold.track}>
-          <h2 id={headingId} class="add-project-heading">
-            Add project
-          </h2>
-          <div class="palette-input">
+  const content = (row: Row) => {
+    switch (row.kind) {
+      case "here":
+        return (
+          <>
             <FolderIcon />
-            <input
-              ref={input}
-              value={value()}
-              placeholder="Type a folder path on the host"
-              aria-label="Folder path"
-              role="combobox"
-              aria-expanded="true"
-              aria-controls={listId}
-              aria-activedescendant={rows().length > 0 ? `${listId}-${active()}` : undefined}
-              autocomplete="off"
-              autocapitalize="off"
-              spellcheck={false}
-              onInput={(event) => update(event.currentTarget.value)}
-            />
-            <Show when={loading() || busy()}>
-              <Spinner />
+            <span class="palette-name">
+              Open <span class="palette-mono">{tildePath(row.path, home()).replace(/(.)\/+$/, "$1")}</span>
+            </span>
+          </>
+        );
+      case "up":
+        return (
+          <>
+            <FolderIcon />
+            <span class="palette-name palette-mono">
+              <span aria-hidden="true">..</span>
+              <span class="tw:sr-only">Up to {tildePath(row.path, home())}</span>
+            </span>
+          </>
+        );
+      case "create":
+        return (
+          <>
+            <FolderPlusIcon />
+            <span class="palette-name">
+              Create folder <span class="palette-mono">{tildePath(row.path, home())}</span>
+            </span>
+          </>
+        );
+      case "entry":
+        return (
+          <>
+            <Show when={row.entry.git} fallback={<FolderIcon />}>
+              <GitBranchIcon />
             </Show>
-          </div>
-          <div class="palette-list" id={listId} role="listbox" ref={list}>
-            <For each={rows()}>
-              {(row, index) => (
-                <div
-                  id={`${listId}-${index()}`}
-                  class="palette-row"
-                  classList={{ create: row.kind === "create" }}
-                  role="option"
-                  data-index={index()}
-                  data-active={String(index() === active())}
-                  data-quick-key={hold.held() ? quickKey(index()) : undefined}
-                  aria-selected={index() === active()}
-                  onPointerMove={() => setActive(index())}
-                  // The path keeps focus, so the keys still reach the list.
-                  onMouseDown={(event) => event.preventDefault()}
-                  onClick={() => pick(row)}
-                >
-                  {(() => {
-                    switch (row.kind) {
-                      case "here":
-                        return (
-                          <>
-                            <FolderIcon />
-                            <span class="palette-name">
-                              Open <span class="palette-mono">{tildePath(row.path, home()).replace(/(.)\/+$/, "$1")}</span>
-                            </span>
-                          </>
-                        );
-                      case "up":
-                        return (
-                          <>
-                            <FolderIcon />
-                            <span class="palette-name palette-mono">
-                              <span aria-hidden="true">..</span>
-                              <span class="tw:sr-only">Up to {tildePath(row.path, home())}</span>
-                            </span>
-                          </>
-                        );
-                      case "create":
-                        return (
-                          <>
-                            <FolderPlusIcon />
-                            <span class="palette-name">
-                              Create folder <span class="palette-mono">{tildePath(row.path, home())}</span>
-                            </span>
-                          </>
-                        );
-                      case "entry":
-                        return (
-                          <>
-                            <Show when={row.entry.git} fallback={<FolderIcon />}>
-                              <GitBranchIcon />
-                            </Show>
-                            <span class="palette-name">
-                              <Highlighted text={row.entry.name} matches={row.entry.matches} />
-                            </span>
-                            <button
-                              type="button"
-                              class="icon-button palette-into"
-                              aria-label={`Show folders in ${row.entry.name}`}
-                              data-tip="Show folders inside"
-                              tabindex="-1"
-                              onClick={(event) => {
-                                event.stopPropagation();
-                                go(row.entry.path);
-                              }}
-                            >
-                              <ChevronIcon />
-                            </button>
-                          </>
-                        );
-                    }
-                  })()}
-                </div>
-              )}
-            </For>
-            <Show when={!loading() && listing() === undefined && value() !== ""}>
-              <div class="palette-empty">No folder here. Check the path.</div>
-            </Show>
-            <Show when={listing()?.truncated}>
-              <div class="palette-note">Showing the first {listing()?.entries.length}</div>
-            </Show>
-          </div>
-          <footer class="palette-foot">
-            <span>
-              <kbd>↑</kbd>
-              <kbd>↓</kbd> move
+            <span class="palette-name">
+              <Highlighted text={row.entry.name} matches={row.entry.matches} />
             </span>
-            <span>
-              <kbd>↵</kbd> {rows()[active()]?.kind === "create" ? "create" : "open"}
-            </span>
-            <span>
-              <kbd>⇥</kbd> go into
-            </span>
-            <span>
-              <kbd>⌫</kbd> up
-            </span>
-            <span class="palette-foot-end">
-              <kbd>esc</kbd> close
-            </span>
-          </footer>
-        </div>
-      </div>
-    </Portal>
+            <button
+              type="button"
+              class="icon-button palette-into"
+              aria-label={`Show folders in ${row.entry.name}`}
+              data-tip="Show folders inside"
+              tabindex="-1"
+              onClick={(event) => {
+                event.stopPropagation();
+                go(row.entry.path);
+              }}
+            >
+              <ChevronIcon />
+            </button>
+          </>
+        );
+    }
+  };
+  const listed = createMemo((): SearchListRow[] => [
+    ...rows().map((row, index): SearchListRow => ({
+      type: "option",
+      index,
+      content: () => content(row),
+      ...(row.kind === "create" ? { class: "create" } : {}),
+    })),
+    ...(listing()?.truncated === true ? [{ type: "note" as const, label: `Showing the first ${listing()!.entries.length}` }] : []),
+  ]);
+
+  return (
+    <SearchList
+      labelledBy={headingId}
+      heading={
+        <h2 id={headingId} class="add-project-heading">
+          Add project
+        </h2>
+      }
+      lead={<FolderIcon />}
+      trail={
+        <Show when={loading() || busy()}>
+          <Spinner />
+        </Show>
+      }
+      value={value()}
+      onInput={(next) => update(next)}
+      fieldLabel="Folder path"
+      placeholder="Type a folder path on the host"
+      field={(element) => (input = element)}
+      rows={listed()}
+      empty={!loading() && listing() === undefined && value() !== "" ? "No folder here. Check the path." : undefined}
+      list={(element) => (list = element)}
+      active={active()}
+      onActive={moveTo}
+      onPick={(index, quick) => {
+        // A quick key waits for the folders of what is typed; a click is on a row shown.
+        if (!quick) pick(rows()[index]);
+        else
+          settled(() => {
+            const row = rows()[index];
+            if (row !== undefined) pick(row);
+          });
+      }}
+      onSubmit={() => settled(() => pick(rows()[active()]))}
+      onEscape={close}
+      onClose={close}
+      onKeyDown={onKeyDown}
+      footer={
+        <>
+          <span>
+            <kbd>↑</kbd>
+            <kbd>↓</kbd> move
+          </span>
+          <span>
+            <kbd>↵</kbd> {rows()[active()]?.kind === "create" ? "create" : "open"}
+          </span>
+          <span>
+            <kbd>⇥</kbd> go into
+          </span>
+          <span>
+            <kbd>⌫</kbd> up
+          </span>
+          <span class="palette-foot-end">
+            <kbd>esc</kbd> close
+          </span>
+        </>
+      }
+    />
   );
 }
 
