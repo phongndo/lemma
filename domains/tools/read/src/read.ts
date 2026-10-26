@@ -30,7 +30,7 @@ export interface ReadDetails {
 /** The lines a page holds when the call names no `limit`. */
 const PAGE_LINES = 2000;
 /** Past this much of a file, reading stops at the page's end rather than count the rest of its lines. */
-const COUNT_BYTES = Number.POSITIVE_INFINITY;
+const COUNT_BYTES = 64 * 1024 * 1024;
 
 async function readHead(file: string, length: number): Promise<Uint8Array> {
   const handle = await open(file, "r");

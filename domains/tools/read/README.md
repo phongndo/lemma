@@ -24,13 +24,14 @@ call will touch).
   since running them twice could do harm (pi's tools repeat none).
 - **A page at a time.** pi reads the whole file into one string to cut a
   page from it; this reads it a megabyte at a time and keeps only the page,
-  paging exactly as splitting the whole would. Every line is still counted
-  (the `of N` note), so the whole file is read, but memory stays at the page:
-  on a 40MB, million-line file the first page took 27ms and 18MB of memory
-  instead of 181ms and 381MB (2026-10-21), and a file past V8's string limit
-  (about 512MB) reads instead of failing. A line is what `wc -l` counts, plus
-  a last one without a newline. `details.truncation` holds the counts of a
-  page cut to the budget, not a second copy of the text.
+  paging exactly as splitting the whole would: on a 40MB, million-line file
+  the first page took 27ms and 18MB of memory instead of 181ms and 381MB
+  (2026-10-21), and a file past V8's string limit (about 512MB) reads instead
+  of failing. In a file up to 64MiB it reads on past the page to count every
+  line (the `of N` note); in a larger one it stops at the page's end, and the
+  note gives the file's size instead. A line is what `wc -l` counts, plus a
+  last one without a newline. `details.truncation` holds the counts of a page
+  cut to the budget, not a second copy of the text.
 - **No image resizing** (pi resizes with a native dependency). The size cap keeps
   an oversized image from entering the history, where it would fail every later
   request.
