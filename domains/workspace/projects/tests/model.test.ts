@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { SessionInfo } from "@lemma/sessions";
 import type { Place } from "@lemma/workspace";
-import { initialOf, projectStats, threadCount, worktreeRows } from "../src/model.ts";
+import { initialOf, projectStats, worktreeRows } from "../src/model.ts";
 
 const session = (id: string, cwd: string, updatedAt: number, archived?: boolean, lastSeq = 1): SessionInfo => ({
   id,
@@ -80,12 +80,5 @@ describe("initialOf", () => {
 
   it("is # for a name with none", () => {
     expect(initialOf("---")).toBe("#");
-  });
-});
-
-describe("threadCount", () => {
-  it("says thread for one", () => {
-    expect(threadCount(1)).toBe("1 thread");
-    expect(threadCount(2)).toBe("2 threads");
   });
 });

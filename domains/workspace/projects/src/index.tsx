@@ -9,13 +9,13 @@ import { Actions } from "@lemma/actions";
 import { ActionMenu, Dialogs, Layers } from "@lemma/frame";
 import { Settings, SettingsGroups, SettingsSections } from "@lemma/settings";
 import type { SettingsEntry } from "@lemma/settings";
-import { Threads } from "@lemma/threads";
+import { Threads, threadCount } from "@lemma/threads";
 import { Client, Slots, defineWebPlugin, usePlugin } from "@lemma/web";
 import type { SlotsService, ClientService } from "@lemma/web";
 import type { ThreadsService } from "@lemma/threads";
 import type { WorkspaceService } from "@lemma/workspace/web";
 import { CopyButton, Dialog, FolderIcon, FolderPlusIcon, GearIcon, MoreIcon, PenSquareIcon, Popover, Segmented, SettingRow, TrashIcon } from "@lemma/look";
-import { initialOf, projectStats, threadCount, threadsIn, worktreeRows } from "./model.ts";
+import { initialOf, projectStats, threadsIn, worktreeRows } from "./model.ts";
 import type { ProjectStats, WorktreeRow } from "./model.ts";
 import styles from "./projects-page.css?inline";
 
