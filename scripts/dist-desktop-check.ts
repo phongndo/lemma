@@ -111,9 +111,11 @@ try {
   assert.ok(!existsSync(join(trial.lemmaHome, "desktop.json")), "a quit app no longer says it runs");
 
   // A host the app's `lemma` starts itself, as the cask's does in a terminal: on the app's Electron run as Node.js, in
-  // the foreground and again in the background (`lemma restart`). Not the AppImage's, whose files went with it.
+  // the foreground and again in the background (`lemma restart`). Not the AppImage's, whose files went with it. From a
+  // shell whose NODE_OPTIONS Electron would refuse, as one set for an old webpack has, which its agent's shells keep.
   const own = existsSync(lemma);
   if (own) {
+    trial.env.NODE_OPTIONS = "--openssl-legacy-provider";
     trial.launch(lemma, ["serve", "--no-open"]);
     await settled(() => trial.command(lemma, ["status"]), undefined, 60_000);
     host = (JSON.parse(await trial.command(lemma, ["restart", "--json"])) as { pid: number }).pid;

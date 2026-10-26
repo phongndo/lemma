@@ -52,13 +52,20 @@ const linuxExecutable = "lemma-desktop";
 
 /**
  * The release's `runtime/bin/node` in the app: the app's Electron (`executable`, from that directory), run as Node.js.
- * Electron is told so by ELECTRON_RUN_AS_NODE, which the `lemma` command takes out of its environment once it has
- * started (apps/cli/bin/lemma.js), so that nothing it starts, a shell or an Electron app of its own, inherits it.
+ * Electron is told so by ELECTRON_RUN_AS_NODE, and starts without the shell's NODE_OPTIONS, some of which it refuses
+ * where Node.js takes them (OpenSSL's, as `--openssl-legacy-provider`), which wait in LEMMA_NODE_OPTIONS. Once started,
+ * the `lemma` command takes the one out of its environment and puts the other back (apps/cli/bin/lemma.js), so what it
+ * starts, a shell or an Electron app of its own, has the environment the shell gave.
  */
 const electronAsNode = (executable: string): string => `#!/bin/sh
 # The desktop app's Node.js (scripts/dist-desktop.ts): its own Electron, run as Node.js.
 ELECTRON_RUN_AS_NODE=1
 export ELECTRON_RUN_AS_NODE
+if [ "\${NODE_OPTIONS+set}" = set ]; then
+  LEMMA_NODE_OPTIONS=$NODE_OPTIONS
+  export LEMMA_NODE_OPTIONS
+  unset NODE_OPTIONS
+fi
 exec "$(dirname -- "$0")/${executable}" "$@"
 `;
 
