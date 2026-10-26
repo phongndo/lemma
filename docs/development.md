@@ -274,7 +274,7 @@ notarizes an app it signed when those `APPLE_API_*` variables are set.
 Signing walks the app for the files to sign. electron-builder 26 signs with
 `@electron/osx-sign` 1.3.3, whose walk follows links: through pnpm's in the
 archive it reaches the same packages again by every path to them, millions of
-paths for the archive's 22,000 files, and runs out of memory. A patch
+paths for the archive's 15,000 files, and runs out of memory. A patch
 (`patches/@electron__osx-sign@1.3.3.patch`) has it look at a link rather than
 through it, as osx-sign 2 does
 ([osx-sign#372](https://github.com/electron/osx-sign/pull/372)); it goes when
