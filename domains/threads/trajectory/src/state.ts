@@ -3,6 +3,7 @@ import { recordFailed, recordStatus } from "@lemma/sessions";
 import type { AssistantRecord, LedgerRecord, LedgerSort } from "@lemma/sessions";
 import { wheeled } from "./scale.ts";
 import { copyText } from "@lemma/web/clipboard";
+import { createStickToBottom } from "@lemma/web/scroll";
 import type { ThreadsService } from "@lemma/threads";
 import type { NotifyService, SlotsService } from "@lemma/web";
 
@@ -19,8 +20,8 @@ export type SortKey = LedgerSort;
 
 /** The view's state (selection, filters, zoom) and what its pieces share, one per tab it shows in. */
 export function createView(deps: TrajectoryDeps) {
-  /** Elements the pieces set and read: the filter field, the table's scroller, and where it last was (a scroll above it is the reader's, which stops following). */
-  const refs: { filterInput?: HTMLInputElement | undefined; scroller?: HTMLDivElement | undefined; lastTop: number } = { lastTop: 0 };
+  /** Elements the pieces set and read: the filter field, and the table's scroller. */
+  const refs: { filterInput?: HTMLInputElement | undefined; scroller?: HTMLDivElement | undefined } = {};
   /** The table's rows by record id, for bringing one into view from the overview. */
   const rowElements = new Map<string, HTMLTableRowElement>();
 
@@ -38,18 +39,9 @@ export function createView(deps: TrajectoryDeps) {
   const [zoom, setZoom] = createSignal({ start: 0, end: 1 });
   const [menu, setMenu] = createSignal<{ x: number; y: number; record: LedgerRecord }>();
   /** Whether the table keeps its newest row in view as rows arrive, as a log does; scrolling up stops it. */
-  const [stuck, setStuck] = createSignal(true);
-
+  const stick = createStickToBottom(() => refs.scroller);
   /** Brings the newest row into view and keeps it there. */
-  const follow = () => {
-    setStuck(true);
-    queueMicrotask(() => {
-      if (refs.scroller === undefined) return;
-      refs.scroller.scrollTo({ top: refs.scroller.scrollHeight });
-      // Its own move, recorded now: one scroll event may cover it and the reader's scroll up after it.
-      refs.lastTop = refs.scroller.scrollTop;
-    });
-  };
+  const follow = () => stick.follow();
 
   const select = (next: Selection | undefined, initialTab?: string) => {
     setSelection(next);
@@ -109,8 +101,8 @@ export function createView(deps: TrajectoryDeps) {
     setZoom,
     menu,
     setMenu,
-    stuck,
-    setStuck,
+    stuck: stick.stuck,
+    stick,
     follow,
     select,
     firstLine,

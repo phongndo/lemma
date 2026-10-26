@@ -24,7 +24,8 @@ Conversation (`SettingsGroups`). Requires `Threads` and the runtime's `Client`, 
 ## Behavior
 
 - **Following the output.** The view keeps to the newest output while the
-  reader is at the bottom, and stops once they scroll up. Its scroll position
+  reader is at the bottom (within a line of it), and stops once they scroll up
+  (`createStickToBottom` in `@lemma/web/scroll`). Its scroll position
   is kept with each history entry, so back and forward return to it.
 - **Find.** `thread.find` (mod+F, in `Actions`) opens a bar over the chat
   that highlights where its text occurs, ignoring case, and goes from one to
