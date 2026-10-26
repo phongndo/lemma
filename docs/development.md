@@ -44,8 +44,7 @@ tests' shards are split by how long each file took (`scripts/test-shards.ts`,
 from `scripts/test-durations.json`), so they end
 together; when they drift apart, `nix develop -c pnpm test:durations` measures
 again. The `passed` job succeeds only when every
-other job does, so it is the one check a branch rule needs to require. Each commit on main also uploads its
-bundle size and benchmark numbers (`metrics-<sha>`). Daily it reruns
+other job does, so it is the one check a branch rule needs to require. Daily it reruns
 every job on main, unchanged, so a flake shows.
 
 A red run means a change broke something, not that a runner was slow. CI
@@ -68,9 +67,8 @@ fails, or hangs past its timeout, opens an issue labelled `soak`, or comments on
 its open one, with the command that replays it and the end of its output, and
 the run passes. It fails only when it cannot file what it found.
 
-`.github/workflows/bench.yml` compares the core's and the harness's benchmarks with a base
-revision (by hand, or on a pull request labelled `performance`); locally,
-`node scripts/bench-compare.ts` (see [the core's README](../packages/core/README.md#develop)).
+`node scripts/bench-compare.ts` compares the core's benchmarks, and with `--harness` the harness's, with a base
+revision (see [the core's README](../packages/core/README.md#develop)).
 `pnpm harness:bench` measures what the harness does per step, in simulated
 time, as a session grows ([`@lemma/sim`](../packages/sim/README.md#the-harness-benchmark)):
 its counts are the same on every machine, and hard budgets.
