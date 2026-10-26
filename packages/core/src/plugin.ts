@@ -1,8 +1,7 @@
 import { Cause, Context, Effect, Layer, Result, Schema as EffectSchema } from "effect";
-import type { Duration, Schedule, Schema, Scope } from "effect";
+import type { Duration, Schema, Scope } from "effect";
 import { toConfigSchema } from "./config.ts";
 import type { ConfigInput, ConfigOf } from "./config.ts";
-import type { PluginFault } from "./errors.ts";
 import type { Events } from "./events.ts";
 import { PluginContext } from "./hooks.ts";
 import type { Hooks } from "./hooks.ts";
@@ -38,8 +37,6 @@ export interface Plugin<Provides extends readonly Capability[] = readonly Capabi
   readonly requires: readonly Capability[];
   /** Owns something that cannot exist twice (a port, a lock). Reload stops it before starting its replacement. */
   readonly exclusive: boolean;
-  /** Retry activation after a runtime failure. Absent: stay failed until restarted explicitly. */
-  readonly restart?: Schedule.Schedule<unknown, PluginFault>;
   readonly deadlines?: Deadlines;
   /** Erased only for storage in a heterogeneous composition. Receives decoded config. */
   readonly layer: (config: unknown) => Layer.Layer<never, unknown, unknown>;
@@ -92,7 +89,6 @@ export interface PluginManifest extends ContractVersions {
   readonly id: string;
   readonly version?: string;
   readonly exclusive?: boolean;
-  readonly restart?: Schedule.Schedule<unknown, PluginFault>;
   readonly deadlines?: Deadlines;
 }
 
@@ -197,7 +193,6 @@ export function definePlugin(
     provides: Object.freeze([...provides]),
     requires: Object.freeze([...requires]),
     exclusive: definition.exclusive ?? false,
-    ...(definition.restart === undefined ? {} : { restart: definition.restart }),
     ...(definition.deadlines === undefined ? {} : { deadlines: definition.deadlines }),
     layer: (Layer.isLayer(layer) ? () => layer : layer) as Plugin["layer"],
   });

@@ -1,5 +1,4 @@
-import { Cause, Context, Data, Deferred, Duration, Effect, Exit, Fiber, Layer, Option, Result, Schedule, Scope, Semaphore, Tracer } from "effect";
-import type { Pull } from "effect";
+import { Cause, Context, Data, Deferred, Duration, Effect, Exit, Fiber, Layer, Option, Result, Scope, Semaphore, Tracer } from "effect";
 import type { ApplicationServices, Core, CoreOptions, CoreSnapshot, PluginSnapshot, PluginState } from "../core.ts";
 import { CapabilityMismatch, CompositionError, CoreClosed, DeadlineExceeded, Diagnostic, PluginFault, ReloadError, ShutdownTimeout } from "../errors.ts";
 import { Events } from "../events.ts";
@@ -127,7 +126,7 @@ function assemble<E>(
     const application = yield* Scope.make();
     const provided = options.provide === undefined ? Context.empty() : yield* restore(provision(options.provide, builtins, application));
     const base = Context.merge(builtins, provided);
-    /** Owns lifecycle fibers: apply bodies, restart loops, background watchers. */
+    /** Owns lifecycle fibers: apply bodies and background watchers. */
     const supervisor = yield* Scope.make();
     /** Owns core.run fibers. */
     const work = yield* Scope.make();
@@ -415,40 +414,9 @@ function assemble<E>(
             }
             yield* dispose(instance, Exit.fail(fault), "failed");
             instance.state = "failed";
-            if (instance.plugin.restart) yield* Effect.forkIn(Effect.interruptible(restartLoop(instance, instance.plugin.restart, fault)), supervisor);
           }),
         ),
       );
-
-    /**
-     * One schedule driver per plugin id, kept across failures: a plugin that keeps
-     * failing exhausts its schedule instead of restarting forever. An explicit
-     * restart resets it.
-     */
-    const drivers = new Map<string, (input: PluginFault) => Pull.Pull<unknown, never, unknown>>();
-    const restartLoop = (failed: Instance, schedule: Schedule.Schedule<unknown, PluginFault>, fault: PluginFault): Effect.Effect<void> =>
-      Effect.gen(function* () {
-        const id = failed.id;
-        const driver = drivers.get(id) ?? (yield* Schedule.toStepWithSleep(schedule));
-        drivers.set(id, driver);
-        let last = fault;
-        while (true) {
-          // The step fails (with `Done`) once the schedule is exhausted.
-          const step = yield* Effect.result(driver(last));
-          if (Result.isFailure(step)) return;
-          const result = yield* Effect.result(
-            applyLocked(
-              currentMembers(),
-              new Set([id]),
-              { required: new Set([id]) },
-              undefined,
-              () => instances.get(id) === failed && failed.state === "failed" && drivers.get(id) === driver,
-            ),
-          );
-          if (Result.isSuccess(result)) return;
-          last = instances.get(id)?.fault ?? last;
-        }
-      });
 
     const currentMembers = (): Member[] =>
       order.map((id) => {
@@ -467,13 +435,11 @@ function assemble<E>(
       force: ReadonlySet<string>,
       partial?: PartialStart,
       operation?: { committed: boolean },
-      stillNeeded?: () => boolean,
     ): Effect.Effect<ReloadReport, ApplyError> =>
       lock.withPermits(1)(
         Effect.uninterruptibleMask((restore) =>
           Effect.gen(function* () {
             if (state !== "active") return yield* closedPlan();
-            if (stillNeeded && !stillNeeded()) return { started: [], restarted: [], failed: [], stopped: [], unchanged: order, interrupted: 0, faults: [] };
             const planned = planChange(members, { instances, order }, force, providedKeys);
             if (Result.isFailure(planned)) return yield* new PlanError({ errors: planned.failure });
             const { ordered, configs, providers: nextProviders, raw, changed, stops } = planned.success;
@@ -722,7 +688,6 @@ function assemble<E>(
           }
           if (instance.state === "active" && !options?.force)
             return Effect.succeed({ started: [], stopped: [], restarted: [], unchanged: [...instances.keys()], failed: [], interrupted: 0, faults: [] });
-          drivers.delete(id);
           return supervised((operation) => applyLocked(currentMembers(), new Set([id]), { required: new Set([id]) }, operation)).pipe(
             Effect.mapError(toReloadError),
           );
