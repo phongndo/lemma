@@ -464,6 +464,8 @@ export function createInspector(deps: {
     const [extent, setExtent] = createSignal<{ readonly now: number; readonly most: number }>();
     const measure = () => setExtent({ now: Math.round(aside.getBoundingClientRect().width), most: Math.round(props.most()) });
     const edgeKeys = (event: KeyboardEvent) => {
+      // With a modifier, an arrow is someone else's (a word, back): only a plain one moves the edge.
+      if (event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
       if (event.key === "Enter") props.reset();
       else if (event.key === "ArrowLeft" || event.key === "ArrowRight")
         props.resizeTo(aside.getBoundingClientRect().width + (event.key === "ArrowLeft" ? EDGE_STEP : -EDGE_STEP));

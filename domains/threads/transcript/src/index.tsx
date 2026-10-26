@@ -172,8 +172,10 @@ function Thinking(props: { chat: Chat; id: string; text: string; redacted?: bool
  */
 function ThinkingView(props: ChatThinkingProps) {
   const open = () => props.open;
-  const headline = createMemo(() => thoughtHeadline(props.text, props.live === true));
-  const titled = createMemo(() => thoughtTitles(props.text).length > 0);
+  // Its titles, read once per update of a thought being written: the headline and whether it has any both come from them.
+  const titles = createMemo(() => thoughtTitles(props.text));
+  const headline = createMemo(() => thoughtHeadline(props.text, props.live === true, titles()));
+  const titled = () => titles().length > 0;
   const empty = () => props.text.trim() === "";
   const fallback = () => (props.redacted ? "Reasoning hidden" : props.live ? "Thinking" : "Thought");
   const label = () => (open() && !empty() && !titled() ? fallback() : headline() || fallback());

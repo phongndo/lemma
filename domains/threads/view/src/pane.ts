@@ -139,6 +139,8 @@ export const LEAST = { pane: 280, chat: 360 } as const;
  */
 export const shareOf = (width: number, total: number, least: { readonly pane: number; readonly chat: number } = LEAST): number | undefined => {
   if (total <= 0) return undefined;
-  const most = Math.max(least.pane, total - least.chat);
-  return Math.round((Math.max(least.pane, Math.min(most, width)) / total) * 1000) / 1000;
+  return Math.round((Math.max(least.pane, Math.min(mostOf(total, least), width)) / total) * 1000) / 1000;
 };
+
+/** The widest the pane can be on a page `total` px wide: what leaves the chat its least, and never under its own. */
+export const mostOf = (total: number, least: { readonly pane: number; readonly chat: number } = LEAST): number => Math.max(least.pane, total - least.chat);

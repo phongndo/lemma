@@ -62,8 +62,7 @@ export const plainText = (line: string): string =>
  * being written, the latest), else its first line (its latest while live), as
  * plain text.
  */
-export const thoughtHeadline = (text: string, live = false): string => {
-  const titles = thoughtTitles(text);
+export const thoughtHeadline = (text: string, live = false, titles: readonly string[] = thoughtTitles(text)): string => {
   if (titles.length > 0) return (live ? titles.at(-1) : titles[0])!;
   const lines = text.split("\n").filter((candidate) => candidate.trim() !== "");
   const line = live ? lines.at(-1) : lines[0];

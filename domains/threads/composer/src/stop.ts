@@ -1,8 +1,13 @@
+import { formatKeys } from "@lemma/web/keys";
+
 /** Which Escape in the prompt stops a running turn: a second within `STOP_WINDOW_MS` of the first, or any. */
 export type StopWith = "escape-twice" | "escape";
 
 /** How long a first Escape waits for the second that stops the turn (`"escape-twice"`). */
 export const STOP_WINDOW_MS = 1000;
+
+/** The keys that stop a turn, as shown (`Esc Esc`, `Esc`): in the setting's choice and the stop button's tooltip alike. */
+export const stopKeys = (stop: StopWith): string => (stop === "escape-twice" ? `${formatKeys("escape")} ${formatKeys("escape")}` : formatKeys("escape"));
 
 export interface StopKeyHost {
   readonly mode: () => StopWith;

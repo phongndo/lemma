@@ -405,12 +405,12 @@
   color: var(--accent-text);
 }
 
-/* The header's buttons: one quiet row, evenly spaced, coloured only by state; a fill shows only under the pointer. */
 /* Where the sidebar's head has it, so it stays put as the sidebar closes: that head's inset, not the header's. */
 .thread-chat > .main-head:has(> .sidebar-toggle:first-child) {
   padding-left: max(8px, var(--titlebar-inset, 0px));
 }
 
+/* The header's buttons: one quiet row, evenly spaced, coloured only by state; a fill shows only under the pointer. */
 .main-head .icon-button {
   display: grid;
   place-items: center;
@@ -461,8 +461,15 @@
   }
 }
 
-/* Too narrow for both: the thread's title, without its project, which the sidebar and the thread card still name. */
-@media (max-width: 520px) {
+/*
+ * Too narrow for both, as the chat's column is in a phone's window or beside a wide pane: the thread's title, without
+ * its project, which the sidebar and the thread card still name.
+ */
+.thread-chat > .main-head {
+  container: thread-head / inline-size;
+}
+
+@container thread-head (max-width: 520px) {
   .main-project,
   .main-sep {
     display: none;

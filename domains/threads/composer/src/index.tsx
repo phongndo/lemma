@@ -46,7 +46,7 @@ import type { SentPrompt } from "./history.ts";
 import { leftOutWarnings, readImage, sortFiles, unreadWarning } from "./images.ts";
 import { createSender } from "./sender.ts";
 import type { WhenBusy as SendWhenBusy } from "./sender.ts";
-import { createStopKey } from "./stop.ts";
+import { createStopKey, stopKeys } from "./stop.ts";
 import { holds, noChoices, release as releasing, take as taking } from "./takeover.ts";
 import styles from "./composer.css?inline";
 
@@ -313,7 +313,7 @@ function Composer(props: { deps: Deps }) {
     if (taken() === undefined) return (await runCommand()) ? undefined : sender.send(busyMode(), true);
   };
   /** The stop button's tip, with the key that stops a turn from the box (the "Stop a turn" setting). */
-  const stopTip = () => `Stop · ${props.deps.config.stop === "escape-twice" ? `${formatKeys("escape")} ${formatKeys("escape")}` : formatKeys("escape")}`;
+  const stopTip = () => `Stop · ${stopKeys(props.deps.config.stop)}`;
   /** What runs the prompt elsewhere: mod with Enter, or with Shift too while mod+Enter sends. */
   const elsewhereKeys = () => (props.deps.config.send === "mod+enter" ? "mod+shift+enter" : "mod+enter");
   /**
@@ -420,6 +420,8 @@ function Composer(props: { deps: Deps }) {
     if (suggestion.submit === true && how === "pick") void submit();
   };
   const addFiles = async (files: Iterable<File>) => {
+    // Where focus was as the files came: they go with what is written next, unless the person has gone elsewhere since.
+    const from = document.activeElement;
     const sorted = sortFiles([...files]);
     for (const message of leftOutWarnings(sorted)) notify.toast({ level: "warning", message });
     const accepted = sorted.accepted;
@@ -432,8 +434,8 @@ function Composer(props: { deps: Deps }) {
     if (attached.length === 0) return;
     edited();
     setImages((current) => [...current, ...attached]);
-    // Picked, pasted, or dropped, they go with what is written next.
-    input.focus();
+    const now = document.activeElement;
+    if (taken() === undefined && input.isConnected && (now === from || now === null || now instanceof HTMLBodyElement)) input.focus();
   };
 
   // ⌘ is the completions' while they show, which ⌘1 … ⌘9 pick from.
@@ -900,8 +902,8 @@ function StopSetting(props: { stop: Stop; onChange: (stop: Stop) => void }) {
         label="Stop a turn with"
         value={props.stop}
         options={[
-          { value: "escape-twice", label: `${formatKeys("escape")} ${formatKeys("escape")}` },
-          { value: "escape", label: formatKeys("escape") },
+          { value: "escape-twice", label: stopKeys("escape-twice") },
+          { value: "escape", label: stopKeys("escape") },
         ]}
         onChange={props.onChange}
       />

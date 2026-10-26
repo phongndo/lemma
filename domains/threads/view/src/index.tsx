@@ -31,7 +31,7 @@ import { ArchiveIcon, CONFIRM_DELETE, CopyIcon, LogIcon, PenSquareIcon, PencilIc
 import { copyAndTell } from "@lemma/web/clipboard";
 import { CostRow } from "./card.tsx";
 import { createInspector } from "./inspector.tsx";
-import { LEAST, shareOf } from "./pane.ts";
+import { mostOf, shareOf } from "./pane.ts";
 import styles from "./thread-view.css?inline";
 
 /** The inspection pane's share of the page, once its edge is dragged; before, its width is its stylesheet's. */
@@ -448,7 +448,7 @@ export default defineWebPlugin({
         widen(width);
         save(SHARE_KEY, share()?.toString());
       };
-      const most = () => Math.max(LEAST.pane, page.getBoundingClientRect().width - LEAST.chat);
+      const most = () => mostOf(page.getBoundingClientRect().width);
       /** A new thread, nothing sent yet: its prompt in the middle of the page, over what it starts with (`ThreadStart`). */
       const starting = () => threads.blank() && unknown() === undefined && main()?.composer === true;
       return (

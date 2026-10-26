@@ -28,6 +28,10 @@ export function Images(props: { content: readonly (TextContent | ImageContent)[]
 /** Lines of a tool's output shown before "more lines". */
 const OUTPUT_LINES = 14;
 
+/**
+ * A call's output. `error` marks a failed call's (`.output.error`): a hook for a theme to style, as the default leaves
+ * the output its colors and marks the failure on the body's edge (`.tool-error`).
+ */
 function Output(props: { text: string; error?: boolean }) {
   const [all, setAll] = createSignal(false);
   const cut = createMemo(() => truncateLines(props.text.replace(/\n+$/, ""), OUTPUT_LINES));

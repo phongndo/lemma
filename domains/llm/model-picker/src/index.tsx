@@ -1,4 +1,4 @@
-import { For, Show, createMemo, createSignal, onCleanup } from "solid-js";
+import { For, Show, createEffect, createMemo, createSignal, onCleanup } from "solid-js";
 import type { Accessor, Setter } from "solid-js";
 import { usesPlan } from "@lemma/llm";
 import type { ModelInfo, ModelRef, ThinkingLevel } from "@lemma/llm";
@@ -173,6 +173,10 @@ function ModelPicker(props: {
   const providers = createMemo(() => [...new Set(props.models.models().map((model) => model.provider))]);
   /** The rail, while it has something to choose between: providers, or favorites besides all. */
   const railShown = () => providers().length > 1 || favoriteModels().length > 0;
+  // The last favorite unstarred (its star, or the favorite keys) takes the favorites with it: the list goes on to all.
+  createEffect(() => {
+    if (rail() === "favorites" && favoriteModels().length === 0) setRail("all");
+  });
   /** The list mixes providers' models: each row shows its provider's logo, as one model may come from several. */
   const mixed = () => providers().length > 1 && (query().trim() !== "" || rail() === "all" || rail() === "favorites");
   const shown = createMemo((): readonly ModelInfo[] => {
