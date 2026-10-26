@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { Build, Channel } from "@lemma/release";
@@ -14,6 +14,13 @@ import type { Install } from "./installers.ts";
  */
 
 const lemmaRoot = resolve(fileURLToPath(new URL("../../..", import.meta.url)));
+
+/**
+ * The Node.js that runs this `lemma` again (a host in the background, a service, `lemma plugins check`'s host): a
+ * release's own, as its `bin/lemma` runs it, which in the desktop app is the app's Electron run as Node.js
+ * (scripts/dist-desktop.ts), where `process.execPath` is the app itself; a checkout's, the one running it.
+ */
+export const nodeCommand = existsSync(join(lemmaRoot, "runtime", "bin", "node")) ? join(lemmaRoot, "runtime", "bin", "node") : process.execPath;
 
 const readJson = (path: string): Record<string, unknown> | undefined => {
   try {

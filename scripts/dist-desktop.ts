@@ -1,7 +1,7 @@
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
-import { copyFile, mkdir, mkdtemp, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { chmod, copyFile, mkdir, mkdtemp, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -19,7 +19,9 @@ import type { Target } from "./dist-config.ts";
  *   lemma-desktop-v<version>-linux-<arch>.deb        Debian and Ubuntu, installed with apt
  *
  * each with its `.sha256`. In the app, the archive is `lemma/` among Electron's resources (`process.resourcesPath`), and
- * the app's own code is a module that loads the desktop app's main process from it (apps/desktop/src/main.ts).
+ * the app's own code is a module that loads the desktop app's main process from it (apps/desktop/src/main.ts). The
+ * archive's Node.js is left out: its `runtime/bin/node` runs the app's Electron as Node.js (`electronAsNode`), which
+ * the app's host runs on already, so the `lemma` the app carries (the cask's, the agent's) runs on it too.
  *
  *   pnpm dist:desktop                                         this machine's, from dist/'s archive at the checkout's version
  *   pnpm dist:desktop dist/lemma-v0.2.7-linux-arm64.tar.gz    each archive named, as the nightly workflow builds them
@@ -45,6 +47,28 @@ const electronVersion = (JSON.parse(await readFile(join(root, "apps/desktop/pack
 /** The formats each platform's app comes in: macOS's disk image, and Linux's AppImage and Debian package. */
 const formats = { darwin: ["dmg"], linux: ["AppImage", "deb"] } as const;
 
+/** The app's executable on Linux, beside its `resources`. Not `lemma`: the Debian package links it into /usr/bin, where that is the command's name. */
+const linuxExecutable = "lemma-desktop";
+
+/**
+ * The release's `runtime/bin/node` in the app: the app's Electron (`executable`, from that directory), run as Node.js.
+ * Electron is told so by ELECTRON_RUN_AS_NODE, and starts without the shell's NODE_OPTIONS, some of which it refuses
+ * where Node.js takes them (OpenSSL's, as `--openssl-legacy-provider`), which wait in LEMMA_NODE_OPTIONS. Once started,
+ * the `lemma` command takes the one out of its environment and puts the other back (apps/cli/bin/lemma.js), so what it
+ * starts, a shell or an Electron app of its own, has the environment the shell gave.
+ */
+const electronAsNode = (executable: string): string => `#!/bin/sh
+# The desktop app's Node.js (scripts/dist-desktop.ts): its own Electron, run as Node.js.
+ELECTRON_RUN_AS_NODE=1
+export ELECTRON_RUN_AS_NODE
+if [ "\${NODE_OPTIONS+set}" = set ]; then
+  LEMMA_NODE_OPTIONS=$NODE_OPTIONS
+  export LEMMA_NODE_OPTIONS
+  unset NODE_OPTIONS
+fi
+exec "$(dirname -- "$0")/${executable}" "$@"
+`;
+
 const configuration = (release: string, target: Target, app: string, out: string, archive: string, icons: string): Configuration => ({
   appId: "com.phongndo.lemma",
   productName: "Lemma",
@@ -62,13 +86,16 @@ const configuration = (release: string, target: Target, app: string, out: string
   protocols: [{ name: "Lemma", schemes: ["lemma"] }],
   // Before the app is signed, so its signature covers the archive's files too.
   afterPack: async (context: AfterPackContext) => {
-    const resources =
-      context.electronPlatformName === "darwin"
-        ? join(context.appOutDir, `${context.packager.appInfo.productFilename}.app`, "Contents", "Resources")
-        : join(context.appOutDir, "resources");
+    const darwin = context.electronPlatformName === "darwin";
+    const { productFilename } = context.packager.appInfo;
+    const resources = darwin ? join(context.appOutDir, `${productFilename}.app`, "Contents", "Resources") : join(context.appOutDir, "resources");
     // tar keeps the archive's links as they are: pnpm's, relative, within it.
     execFileSync("tar", ["-xzf", archive, "-C", resources], { stdio: "inherit" });
     await rename(join(resources, packageName(release, target)), join(resources, "lemma"));
+    // From `lemma/runtime/bin` up to `Contents` on macOS and to the app's directory on Linux.
+    const node = join(resources, "lemma", "runtime", "bin", "node");
+    await writeFile(node, electronAsNode(darwin ? `../../../../MacOS/${productFilename}` : `../../../../${linuxExecutable}`));
+    await chmod(node, 0o755);
   },
   mac: {
     target: [...formats.darwin],
@@ -81,8 +108,7 @@ const configuration = (release: string, target: Target, app: string, out: string
   dmg: { title: `Lemma ${release}` },
   linux: {
     target: [...formats.linux],
-    // Not `lemma`: the Debian package links its executable into /usr/bin, where that is the command's name.
-    executableName: "lemma-desktop",
+    executableName: linuxExecutable,
     syncDesktopName: true,
     category: "Development",
     synopsis: "An agent harness in which every part is a plugin",

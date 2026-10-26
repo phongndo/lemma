@@ -20,7 +20,8 @@ import type { Target } from "./dist-config.ts";
  *   apps/, packages/, …    the workspace, laid out as in the checkout: the `lemma` command's packages and the desktop
  *                          app's (scripts/dist-desktop.ts makes the app from the archive), what they read beside their
  *                          sources (a profile's files, the app icon), the web app's build, and the docs and examples
- *   node_modules/          their production dependencies, installed from the lockfile for the target
+ *   node_modules/          their production dependencies, installed from the lockfile for the target, without their
+ *                          source maps and TypeScript sources (`prune`)
  *
  * The workspace keeps its layout because Lemma runs its TypeScript sources, which Node strips of their types only
  * outside `node_modules`, and because the host finds the web app and each bundled plugin by its path in it.
@@ -94,6 +95,21 @@ const checkLinks = async (stage: string, dir: string, inside: string): Promise<v
   }
 };
 
+/**
+ * Removes what the dependencies publish for their own debugging, which nothing in a release reads: source maps, and
+ * TypeScript sources (`.ts`, not `.d.ts`), which Node does not strip of their types inside `node_modules` and a package
+ * names only under conditions Lemma's runtime never resolves (`source`, `types`). A third of the archive's files.
+ * Declarations stay, as an editor's types for a plugin file (docs/plugins.md). Links are not followed: pnpm's lead to
+ * packages in the same directory, which the walk reaches anyway.
+ */
+const prune = async (dir: string): Promise<void> => {
+  for (const entry of await readdir(dir, { withFileTypes: true })) {
+    const path = join(dir, entry.name);
+    if (entry.isDirectory()) await prune(path);
+    else if (entry.isFile() && /\.map$|(?<!\.d)\.[mc]?ts$/.test(entry.name)) await rm(path);
+  }
+};
+
 /** The platform pnpm installs a target's optional packages for: their `os`, `cpu`, and on Linux `libc` (glibc). */
 const platformFlags = (target: Target): string[] => {
   const [os, cpu] = target.split("-") as [string, string];
@@ -142,6 +158,7 @@ try {
     const stage = join(temporary, name);
     await cp(workspace, stage, { recursive: true });
     run("pnpm", [...closures, "install", "--prod", "--frozen-lockfile", "--ignore-scripts", ...platformFlags(target)], stage);
+    await prune(join(stage, "node_modules/.pnpm"));
 
     const nodeName = `node-v${nodeVersion}-${target}`;
     const response = await fetch(`https://nodejs.org/dist/v${nodeVersion}/${nodeName}.tar.gz`);

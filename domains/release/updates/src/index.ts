@@ -1,7 +1,7 @@
 import { join } from "node:path";
 import { Effect, Exit, Ref, Schedule, Schema } from "effect";
 import { CliChecks } from "@lemma/cli";
-import { Channels, Notice, Paths, serveChannel, shellWord } from "@lemma/contracts";
+import { Channels, HostControl, Notice, Paths, serveChannel, shellWord } from "@lemma/contracts";
 import { definePlugin, Events } from "@lemma/core";
 import { Build, compareVersions, INSTALLER_TITLES, RELEASE_CONTRACT, ReleaseChannels, ReleaseError, UPDATABLE } from "@lemma/release";
 import type { ReleaseStatus } from "@lemma/release";
@@ -47,8 +47,8 @@ export default definePlugin({
   version: "0.1.0",
   implements: [RELEASE_CONTRACT],
   config: Config,
-  requires: { paths: Paths },
-  setup: function* ({ paths }, plugin) {
+  requires: { paths: Paths, host: HostControl },
+  setup: function* ({ paths, host }, plugin) {
     const { cli, check: checks } = plugin.config;
     if (cli === undefined)
       return yield* new ReleaseError({ reason: "Failed", message: "release.updates needs cli, how to run the lemma command; the host sets it" });
@@ -131,7 +131,8 @@ export default definePlugin({
           // What this host runs already. One installed already but not running (a terminal's `lemma update`) restarts all the same.
           if (answer.version === about.version) return { version: answer.version, updated: false, restarting: false };
           // The desktop app Homebrew's cask replaced, this host running in it: the app runs the new release once reopened.
-          if (answer.reopen === true && process.versions.electron !== undefined)
+          // Not one its `lemma` started in a terminal, which runs on the app's Electron too, and restarts as any other.
+          if (answer.reopen === true && host.process.startedBy === "desktop")
             return { version: answer.version, updated: answer.updated, restarting: false, reopen: true };
           const restarting = answer.command ?? about.link ?? join(about.root, "bin", "lemma");
           restartError = undefined;

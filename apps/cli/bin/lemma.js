@@ -58,5 +58,16 @@ if (serve) {
   if (!process.argv.includes("--detach") && !process.argv.includes("-d")) relaunchWithHostFlags();
   useEffectBundle();
 }
+// The desktop app's `lemma` runs on its Electron, told to run as Node.js, and without the shell's NODE_OPTIONS, which
+// wait in LEMMA_NODE_OPTIONS (scripts/dist-desktop.ts), as starting again above does too. What this starts, a shell or
+// an Electron app the agent opens, has the shell's environment back: what runs this lemma again runs the release's
+// `runtime/bin/node` (`nodeCommand`), which sets them so again.
+if (process.versions.electron !== undefined) {
+  delete process.env.ELECTRON_RUN_AS_NODE;
+  if (process.env.LEMMA_NODE_OPTIONS !== undefined) {
+    process.env.NODE_OPTIONS = process.env.LEMMA_NODE_OPTIONS;
+    delete process.env.LEMMA_NODE_OPTIONS;
+  }
+}
 // It runs from the sources, whose modules it shares: from the bundle it would load a second copy of them.
 await import(!serve && fresh() ? new URL("../dist/lemma.mjs", import.meta.url).href : "../src/main.ts");

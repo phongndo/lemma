@@ -28,11 +28,13 @@ export function missingHostFlags(given = [...process.execArgv, ...(process.env.N
 /**
  * Starts this process again, as it was started, with the host's flags it was started without. It stays the same
  * process (`execve`): its id, output, environment, and what started it, which sees no difference. Not where it
- * cannot: on Windows, in Electron, or when a parent talks to it over IPC (`node --watch`).
+ * cannot: on Windows, in Electron's own processes (the desktop app's host, whose flags it passes itself), or when a
+ * parent talks to it over IPC (`node --watch`). Electron run as Node.js (the desktop app's `lemma`) starts again so.
  */
 export function relaunchWithHostFlags() {
   const missing = missingHostFlags();
-  if (missing.length === 0 || typeof process.execve !== "function" || process.versions.electron !== undefined || process.channel !== undefined) return;
+  const electron = process.versions.electron !== undefined && process.env.ELECTRON_RUN_AS_NODE === undefined;
+  if (missing.length === 0 || typeof process.execve !== "function" || electron || process.channel !== undefined) return;
   process.execve(process.execPath, [process.execPath, ...missing, ...process.execArgv, ...process.argv.slice(1)], process.env);
 }
 

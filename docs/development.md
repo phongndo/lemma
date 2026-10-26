@@ -253,8 +253,9 @@ app from its archive in `dist/` (`scripts/dist-desktop.ts` says what it holds):
 a disk image on macOS, and an AppImage and a Debian package on Linux, which
 builds either architecture's. `nix develop .#desktop -c pnpm dist:desktop:check`
 opens one as a user would, outside the checkout, and runs it: its window, the
-host it starts on Electron, what that host does as the archive's does, and
-quitting (`scripts/dist-desktop-check.ts`; on Linux in a virtual display,
+host it starts on Electron, what that host does as the archive's does,
+quitting, and then a host the app's own `lemma` starts, on its Electron run as
+Node.js (`scripts/dist-desktop-check.ts`; on Linux in a virtual display,
 `xvfb-run -a` before `pnpm`). With `--installed`, it opens the Debian package
 apt installed. The `desktop` shell brings what Linux needs for both: nixpkgs'
 fpm for the Debian package, and on NixOS the libraries Electron loads through
@@ -274,12 +275,13 @@ notarizes an app it signed when those `APPLE_API_*` variables are set.
 Signing walks the app for the files to sign. electron-builder 26 signs with
 `@electron/osx-sign` 1.3.3, whose walk follows links: through pnpm's in the
 archive it reaches the same packages again by every path to them, millions of
-paths for the archive's 22,000 files, and runs out of memory. A patch
+paths for the archive's 15,000 files, and runs out of memory. A patch
 (`patches/@electron__osx-sign@1.3.3.patch`) has it look at a link rather than
 through it, as osx-sign 2 does
 ([osx-sign#372](https://github.com/electron/osx-sign/pull/372)); it goes when
 electron-builder signs with osx-sign 2. Only the Nightly workflow builds the
-macOS app.
+macOS app: to try a change to it before merging, run Nightly on the branch
+without publishing (below).
 
 Every build is a release, and stable is the one marked latest:
 
@@ -294,7 +296,12 @@ Every build is a release, and stable is the one marked latest:
   and publishes them as a GitHub prerelease with its installer and Homebrew's
   formula and cask (`lemma.rb`, `lemma-cask.rb`, from `scripts/homebrew.ts`),
   its notes listing the pull requests since the release before. Nightlies a
-  month old that were not promoted are deleted, with their tags.
+  month old that were not promoted are deleted, with their tags. By hand with
+  `publish` off, it builds and checks the commit it runs on instead, and
+  publishes nothing: `gh workflow run nightly.yml --ref <branch> -f
+  publish=false` tries a branch's release files on every platform, the macOS
+  app and Homebrew's cask included, and keeps them as the run's artifacts for a
+  week (`gh run download <run-id> --name lemma-desktop-darwin-arm64`).
 - **Promote** (`.github/workflows/promote.yml`), by hand, makes a nightly (the
   newest, or the version you give) the stable release: it marks it latest and
   not a prerelease, and rewrites its notes to cover everything since the last
