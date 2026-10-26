@@ -1,6 +1,9 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import jpeg from "jpeg-js";
+import { PNG } from "pngjs";
+import { MAX_IMAGE_BYTES } from "@lemma/llm";
 import { readTool } from "../src/index.ts";
 import type { ReadDetails } from "../src/index.ts";
 import { readLines } from "../src/lines.ts";
@@ -119,6 +122,31 @@ describe("read", () => {
     expect(textOf(await call(readTool, { path: "blob.bin" }, context(dir)))).toMatch(/^blob\.bin is a binary file /);
     expect(sniffBinary(Buffer.from("plain text, ünïcödé, emoji 😀, tabs\tand\r\nlines\n\x1b[31mcolor\x1b[0m"))).toBeUndefined();
     expect(sniffBinary(Buffer.from([0x61, 0x00, 0x62]))).toBe("a binary file");
+  });
+
+  it("scales a PNG or JPEG too large to attach down to one that fits, as a JPEG", async () => {
+    // Noise, which compresses as little as an image can.
+    const width = 2400;
+    const height = 1600;
+    const png = new PNG({ width, height });
+    for (let i = 0; i < png.data.length; i++) png.data[i] = i % 4 === 3 ? 255 : Math.floor(Math.random() * 256);
+    const bytes = PNG.sync.write(png);
+    expect(bytes.length).toBeGreaterThan(MAX_IMAGE_BYTES);
+    await put("noise.png", bytes);
+    const result = await call(readTool, { path: "noise.png" }, context(dir));
+    const [note, image] = result.content;
+    expect(note).toMatchObject({
+      type: "text",
+      text: expect.stringMatching(/over the 3\.8MB limit for attachments: attached scaled from 2400x1600 to 2000x1333, as a [\d.]+MB JPEG\.$/),
+    });
+    expect(image).toMatchObject({ type: "image", mimeType: "image/jpeg" });
+    const data = Buffer.from((image as { data: string }).data, "base64");
+    expect(data.length).toBeLessThanOrEqual(MAX_IMAGE_BYTES);
+    expect(jpeg.decode(data, { useTArray: true })).toMatchObject({ width: 2000, height: 1333 });
+
+    // A GIF it cannot decode is described instead.
+    await put("huge.gif", Buffer.concat([Buffer.from("GIF89a"), Buffer.alloc(MAX_IMAGE_BYTES)]));
+    expect(textOf(await call(readTool, { path: "huge.gif" }, context(dir)))).toMatch(/over the 3\.8MB limit for attachments; it was not attached\.$/);
   });
 
   it("returns images by content, not extension, and reports missing files and directories", async () => {

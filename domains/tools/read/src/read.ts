@@ -5,6 +5,7 @@ import { MAX_IMAGE_BYTES } from "@lemma/llm";
 import { ImageBlock, ToolResult } from "@lemma/tools";
 import type { Tool } from "@lemma/tools";
 import { fsMessage, resolveReadPath, sniffImage, throwIfAborted } from "@lemma/tools/files";
+import { fitImage } from "./image.ts";
 import { readLines } from "./lines.ts";
 import type { LineWindow } from "./lines.ts";
 import { formatSize, keepHead, outputBudget } from "@lemma/tools";
@@ -98,19 +99,34 @@ export const readTool: Tool<ReadInput> = {
     const mimeType = sniffImage(head);
     if (mimeType !== undefined) {
       const { size } = await stat(absolute);
+      let bytes: Buffer = await readFile(absolute);
+      let note = `Read image file [${mimeType}]`;
+      let attached: string = mimeType;
       if (size > MAX_IMAGE_BYTES) {
-        const note = `Read image file [${mimeType}]\nImage is ${formatSize(size)}, over the ${formatSize(MAX_IMAGE_BYTES)} limit for attachments; it was not attached.`;
-        return new ToolResult({ content: [{ type: "text", text: note }], details: { path: absolute } satisfies ReadDetails, structured: note });
+        // Made to fit, in pure JavaScript on the host's thread: a PNG or JPEG only.
+        let fitted: ReturnType<typeof fitImage>;
+        try {
+          fitted = fitImage(bytes, mimeType, MAX_IMAGE_BYTES);
+        } catch {
+          fitted = undefined;
+        }
+        const over = `Image is ${formatSize(size)}, over the ${formatSize(MAX_IMAGE_BYTES)} limit for attachments`;
+        if (fitted === undefined) {
+          const text = `${note}\n${over}; it was not attached.`;
+          return new ToolResult({ content: [{ type: "text", text }], details: { path: absolute } satisfies ReadDetails, structured: text });
+        }
+        note = `${note}\n${over}: attached scaled from ${fitted.from} to ${fitted.width}x${fitted.height}, as a ${formatSize(fitted.data.length)} JPEG.`;
+        bytes = fitted.data;
+        attached = fitted.mimeType;
       }
-      const data = (await readFile(absolute)).toString("base64");
-      const note = `Read image file [${mimeType}]`;
+      const data = bytes.toString("base64");
       return new ToolResult({
         content: [
           { type: "text", text: note },
-          { type: "image", data, mimeType },
+          { type: "image", data, mimeType: attached },
         ],
         details: { path: absolute } satisfies ReadDetails,
-        structured: { type: "image", data, mimeType, note } satisfies ReadOutput,
+        structured: { type: "image", data, mimeType: attached, note } satisfies ReadOutput,
       });
     }
     const binary = sniffBinary(head);
