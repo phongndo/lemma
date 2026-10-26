@@ -138,7 +138,7 @@
     color-scheme: light;
   }
 
-  /* The scheme is resolved in JS (lib/paint.ts), so an explicit choice overrides the system. */
+  /* The scheme is resolved in JS (`@lemma/web/paint`), so an explicit choice overrides the system. */
   [data-theme="dark"] {
     --bg: #0b0b0b;
     --text: #ececec;
@@ -774,7 +774,7 @@
     min-width: 0;
   }
 
-  /* A search list's quick pick: while ⌘ (Ctrl off macOS) is held, its first nine items show the key that picks them (`lib/keys.ts` `quickKey`). */
+  /* A search list's quick pick: while ⌘ (Ctrl off macOS) is held, its first nine items show the key that picks them (`quickKey` in `@lemma/web/keys`). */
   [data-quick-key]::after {
     content: attr(data-quick-key);
     flex: none;

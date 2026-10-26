@@ -11,7 +11,7 @@ import type { Region, Slot, SlotItem, SlotsService } from "./slots.ts";
  * (`Slots.fail`), which leaves the slot's views, so a region shows its next
  * item, a part its default, and a list closes up, while the rest of the page
  * keeps drawing and updating. Plugins draw slot items through these, never
- * with a bare `Dynamic`; `ui/parts.tsx` re-exports them beside the parts.
+ * with a bare `Dynamic`.
  */
 
 /** The page's slots, for whatever draws below: the boot provides them to the whole page. */

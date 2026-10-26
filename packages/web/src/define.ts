@@ -12,15 +12,15 @@ import type { SlotsService } from "./slots.ts";
 /** Named capabilities (a plugin's `requires` or `provides`), and the services behind them: the kernel's. */
 export type { Capabilities, Services };
 
+/** What of the promise-based handle a web plugin's context is (its `config` typed apart): one list, for the type and the value. */
+const CONTEXT_KEYS = ["id", "signal", "onCleanup", "background", "task", "after", "every", "listen", "action", "fault", "run", "trace"] as const;
+
 /**
  * What a web plugin's `setup` receives besides its services: the same handle a host plugin written with promises has
  * (`@lemma/core/plain`), but for what only the host has (hooks, events, registries). Everything it starts through
  * it is the plugin's: it ends when the plugin stops, and what fails in it is the plugin's fault, named for it.
  * Components drawn for the plugin's slot items reach it with `usePlugin`.
  */
-/** What of the promise-based handle a web plugin's context is (its `config` typed apart): one list, for the type and the value. */
-const CONTEXT_KEYS = ["id", "signal", "onCleanup", "background", "task", "after", "every", "listen", "action", "fault", "run", "trace"] as const;
-
 export interface WebPluginContext<Config> extends Pick<PlainSetup<Config>, (typeof CONTEXT_KEYS)[number]> {
   /** Decoded from the plugin's `config` Schema; its row in config.jsonc's `plugins` sets it. */
   readonly config: Config;

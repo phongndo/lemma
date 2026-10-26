@@ -10,7 +10,7 @@ const isColor = (value: string) => CSS.supports("color", value);
  * The look: its config (its row's `config`) chooses a scheme, a theme for each
  * scheme, an accent, fonts, and the conversation width, among what the
  * `Themes`, `Accents`, and `Fonts` slots offer, and it paints that look on the
- * page (`lib/paint.ts`), which the next load shows before plugins start. It
+ * page (`@lemma/web/paint`), which the next load shows before plugins start. It
  * adds Lemma's own choices to those slots as any plugin adds its, so a theme a
  * plugin adds is chosen the same way and stops showing when that plugin does.
  * It draws nothing: `appearance-page` edits its config, as anything may.

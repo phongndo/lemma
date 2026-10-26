@@ -1,7 +1,7 @@
 /**
  * Which icon a file gets: its type, by its whole name first (`package.json`,
  * `Dockerfile`), then by its extensions from the longest (`d.ts`, then `ts`).
- * The tables are Pierre's (`@pierre/trees`, Apache-2.0; see `lib/file-glyphs.ts`),
+ * The tables are Pierre's (`@pierre/trees`, Apache-2.0; see `file-glyphs.ts`),
  * with T3 Code's additions and lemma's own (Nix, TOML, pnpm, Cargo, Go modules).
  * Pure: the `file-icons` plugin draws what this picks.
  */

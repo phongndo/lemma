@@ -8,12 +8,13 @@ import { ConfigFormFallback, IconFallback, PopoverFallback, SearchFieldFallback,
  * is a region slot (see `definePart`): wherever a plugin uses one, the first
  * item renders, and a default is added in the phase `default`, so any plugin, a
  * user's web half too, replaces a part everywhere by adding an item of its own.
- * The `kit` plugin supplies the shared parts; a view supplies its own.
- * Plugins draw these through `ui/parts.tsx`, never by importing a component.
- * The parts the always-on plugins draw (`shell`, `pages`, `settings`, and
- * `plugins-page`) declare a plain fallback (`ui/fallbacks.tsx`), which renders
- * while nothing provides them, so with `kit` off the Plugins page still
- * searches, switches plugins, and edits their settings.
+ * `look.kit` supplies the shared parts; a view supplies its own.
+ * Plugins draw these through their views below (`partView`), never by
+ * importing a component. The parts the always-on plugins draw (`frame.shell`,
+ * `frame.pages`, `settings.page`, and `settings.plugins`) declare a plain
+ * fallback (`fallbacks.tsx`), which renders while nothing provides them, so
+ * with `look.kit` off the Plugins page still searches, switches plugins, and
+ * edits their settings.
  */
 
 export interface MarkdownProps {
