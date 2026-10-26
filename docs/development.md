@@ -187,12 +187,6 @@ not replayed, so a failing run is not reproduced bit for bit, as the
 simulator's is. `--seconds` (`LEMMA_TORTURE_SECONDS`, default 30) sets how
 long the workload runs.
 
-Whether the agent solves tasks is measured on benchmarks instead:
-[`evals/harbor`](../evals/harbor/README.md) runs Lemma on Harbor's datasets
-(Terminal-Bench, SWE-bench) and summarizes pass rate, cost, cache hit rate, and
-steps, to compare two revisions. It needs Docker, uv, and a provider's key, so
-neither `pnpm check` nor CI runs it.
-
 A failing simulation seed, fault-point test, or torture run saves its evidence
 before its temporary files go: the seed and the command that replays it, what
 the run did last, and the disk or home it left, never credentials. It goes

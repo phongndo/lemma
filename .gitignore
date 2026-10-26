@@ -3,11 +3,6 @@ node_modules/
 dist/
 *.tgz
 
-# Python (evals/harbor), and Harbor's job directories
-.venv/
-__pycache__/
-/jobs/
-
 # Nix
 /result
 /result-*
