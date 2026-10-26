@@ -130,7 +130,8 @@ export const devtools = async (): Promise<string> => {
   await page.waitForSelector("[aria-label='Registry details'] .dt-details-title >> text=SettingsSections from @lemma/settings");
   // Inspectors: what host plugins let you look into, as tables.
   await page.click("[aria-label='Devtools panels'] [role=tab] >> text=Inspectors");
-  await page.click("[aria-label=Inspectors] tr:has-text('Tools')");
+  // Its title: the row's other cell links to the plugin, and where the row's middle falls depends on what else is listed.
+  await page.click("[aria-label=Inspectors] tr:has-text('Tools') td:first-child");
   await page.waitForSelector("[aria-label='Inspector snapshot'] td:text-is('bash')");
   // Trace: the page's spans as traces, each opening to its waterfall; a filter narrows them; each plugin's time; and
   // the composition's changes, the host's from its start.
