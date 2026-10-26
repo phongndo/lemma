@@ -1,3 +1,4 @@
+import { Schema } from "effect";
 import * as solid from "solid-js";
 import html from "solid-js/html";
 import * as store from "solid-js/store";
@@ -11,7 +12,7 @@ import { defineRoute, isRoute } from "@lemma/router";
 import * as defaults from "@lemma/look-kit/defaults";
 import { copyText } from "@lemma/web/clipboard";
 import { currentTheme, currentToken, onLookChange, onThemeChange, paint, tokenColor, unpaint } from "@lemma/web/paint";
-import { defineSlot, defineWebPlugin, definePart, extendWebPlugin, WebSchema, usePlugin } from "@lemma/web";
+import { defineSlot, defineWebPlugin, definePart, extendWebPlugin, usePlugin } from "@lemma/web";
 import type { Part } from "@lemma/web";
 import { bundled } from "../bundled.ts";
 import { contracts } from "./contracts.ts";
@@ -89,8 +90,8 @@ export const api = {
     SearchField: defaults.SearchField,
   },
   copyText,
-  /** Enough of Effect Schema to declare a config and a route's params and search (see `WebSchema`). */
-  Schema: WebSchema,
+  /** Effect's Schema, as it is: to declare a config and a route's params and search. */
+  Schema,
 };
 
 /** What a web half's default export receives (not `WebApi`, the version key a plugin requires). */
