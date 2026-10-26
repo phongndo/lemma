@@ -30,8 +30,8 @@ import { makeInputDecisions } from "./input.ts";
 import { admission, makeQueues, REVISIONS_PER_INSTANCE, WITHDRAWN_KEPT } from "./queue.ts";
 import type { Item, QueuedTurn, SessionState, Suspended } from "./queue.ts";
 import { baseSection, environmentSection } from "./prompt.ts";
-import { failedAs, runTurn, toolLoop } from "./turn.ts";
-import type { Ended, KeptBranch, Placed, TurnOutcome, TurnPolicy, TurnResume } from "./turn.ts";
+import { failedAs, runTurn } from "./turn.ts";
+import type { Ended, KeptBranch, Placed, TurnOutcome, TurnResume } from "./turn.ts";
 
 /** The agent's settings: its row's `config`, for `agent.loop` and any loop built on the kit. */
 export const AgentConfig = Schema.Struct({
@@ -166,8 +166,6 @@ export interface AgentOptions {
   readonly ids?: IdSource;
   /** The platform the environment section names: this process's (`linux (x64)`) by default. */
   readonly platform?: string;
-  /** Whether a turn takes another step after each, before `AgentContinueHook`: `toolLoop` by default. */
-  readonly policy?: TurnPolicy;
 }
 
 /** What the agent is given: the services it requires. */
@@ -184,7 +182,7 @@ export interface AgentDeps {
  * The agent, as `agent.loop` runs it: the turn loop, its queue and journal, resuming after a restart, its live view,
  * and its channels, inspector, and in-progress report, registered through `owner` (the plugin running it, whose
  * config is `AgentConfig`). Returns the `Agent` service the plugin provides. A loop of another kind builds on the same
- * durability by giving another `policy`, or on the pieces this kit exports.
+ * durability, and shapes its turns with the agent's hooks (`AgentRequestHook`, `AgentContinueHook`).
  */
 export const makeAgent = (deps: AgentDeps, owner: PluginSetup<AgentConfig>, options: AgentOptions = {}) =>
   Effect.gen(function* () {
@@ -272,7 +270,6 @@ export const makeAgent = (deps: AgentDeps, owner: PluginSetup<AgentConfig>, opti
       maxRetryDelay: config.maxRetryDelay * 1000,
       parallelTools: config.parallelTools,
       keepCancelled: config.keepCancelled,
-      policy: options.policy ?? toolLoop,
     };
 
     // Turns belong to the plugin, not the caller: they outlive an interrupted `prompt`. They run in their own scope,

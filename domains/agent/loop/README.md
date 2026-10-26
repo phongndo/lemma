@@ -14,11 +14,11 @@ Settings › General › Agent, read from and written to its host half's row thr
 `HostPlugins`, as the Plugins page would; a change restarts the loop, which
 suspends running turns and resumes them.
 
-It is the agent kit's (`@lemma/agent/kit`) `makeAgent` with the kit's own
-policy, `toolLoop`: what follows is the kit's behavior, which a loop built on
-it shares. A loop of another kind gives `makeAgent` its own `TurnPolicy`
-(whether a turn takes another step), or builds on the kit's parts: `runTurn`,
-`planResume`, the journal, the queue's rules, and the live view.
+It is the agent kit's (`@lemma/agent/kit`) `makeAgent`: what follows is the
+kit's behavior, which a loop built on it shares. A loop of another kind shapes
+its turns with the agent's hooks (`AgentContinueHook` decides whether a turn
+takes another step), or builds on the kit's parts: `runTurn`, `planResume`, the
+journal, the queue's rules, and the live view.
 
 ```ts
 Effect.gen(function* () {

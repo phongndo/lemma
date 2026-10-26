@@ -2,7 +2,7 @@ import { Effect } from "effect";
 import { definePlugin } from "@lemma/core";
 import { HostControl, Paths } from "@lemma/contracts";
 import { Agent, AgentRequestHook } from "@lemma/agent";
-import { AgentConfig, makeAgent, toolLoop } from "@lemma/agent/kit";
+import { AgentConfig, makeAgent } from "@lemma/agent/kit";
 import type { AgentOptions } from "@lemma/agent/kit";
 import { Llm } from "@lemma/llm";
 import { deriveMessages, Sessions } from "@lemma/sessions";
@@ -49,7 +49,7 @@ export const handoff = (branch: readonly SessionEvent[], turnId: string): { read
 };
 
 /** The plugin on what `options` gives it (a simulation passes its disk and ids), else this process's. */
-export const makeFreshLoop = (options: Omit<AgentOptions, "policy"> = {}) =>
+export const makeFreshLoop = (options: AgentOptions = {}) =>
   definePlugin({
     id: "fresh-loop",
     version: "0.1.0",
@@ -76,7 +76,7 @@ export const makeFreshLoop = (options: Omit<AgentOptions, "policy"> = {}) =>
           }),
         { phase: "fit", order: -20 },
       );
-      return { agent: yield* makeAgent(deps, owner, { ...options, policy: toolLoop }) };
+      return { agent: yield* makeAgent(deps, owner, options) };
     },
   });
 

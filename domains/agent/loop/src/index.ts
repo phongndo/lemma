@@ -20,8 +20,8 @@ export interface AgentPluginOptions {
 }
 
 /**
- * The agent: the kit's (`@lemma/agent/kit`) with its own policy, `toolLoop`, as a plugin providing `Agent`, on what
- * `options` gives it and on this process and its file system for what they leave out.
+ * The agent: the kit's (`@lemma/agent/kit`), as a plugin providing `Agent`, on what `options` gives it and on this
+ * process and its file system for what they leave out.
  */
 export const makeAgentPlugin = (options: AgentPluginOptions = {}) =>
   definePlugin({

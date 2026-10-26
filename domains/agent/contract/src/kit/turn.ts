@@ -61,32 +61,18 @@ interface TurnServices {
 }
 
 /**
- * Whether a turn takes another step after one, before `AgentContinueHook`'s handlers have their say: the loop's shape.
- * `decide` sees the step as the hook's terminal does, and says why, which the step's `step-end` logs.
+ * `AgentContinueHook`'s terminal, the agent's own decision: another step while the model asked for tools, or tools
+ * answered it (results it has not read yet keep it going, whatever the provider called its stop); else it stops. It
+ * says why, which the step's `step-end` logs.
  */
-export interface TurnPolicy {
-  readonly decide: (outcome: { readonly message: AssistantMessage; readonly results: readonly ToolResultMessage[] }) => {
-    readonly result: "continue" | "stop";
-    readonly why: string;
-  };
-}
-
-/**
- * The agent's own: another step while the model asked for tools, or tools answered it (results it has not read
- * yet keep it going, whatever the provider called its stop); else it stops.
- */
-export const toolLoop: TurnPolicy = {
-  decide: (outcome) =>
-    outcome.message.stopReason === "toolUse"
-      ? { result: "continue", why: "the model asked for tools" }
-      : outcome.results.length > 0
-        ? { result: "continue", why: "tool results to read" }
-        : { result: "stop", why: `the model stopped (${outcome.message.stopReason})` },
-};
+const toolLoop = (outcome: StepOutcome): { readonly result: "continue" | "stop"; readonly why: string } =>
+  outcome.message.stopReason === "toolUse"
+    ? { result: "continue", why: "the model asked for tools" }
+    : outcome.results.length > 0
+      ? { result: "continue", why: "tool results to read" }
+      : { result: "stop", why: `the model stopped (${outcome.message.stopReason})` };
 
 interface TurnSettings extends RetrySettings {
-  /** The loop's shape: whether a turn takes another step (`toolLoop` for the agent's own). */
-  readonly policy: TurnPolicy;
   readonly maxSteps: number;
   /** A reply the user stopped is logged as a `message` of what it had written, which the model then sees (`stopped`). */
   readonly keepCancelled: boolean;
@@ -944,15 +930,16 @@ export function runTurn(services: TurnServices, settings: TurnSettings, input: T
   const decide = (step: number, outcome: StepOutcome) =>
     Effect.gen(function* () {
       const steps: HandlerStep<StepOutcome, "continue" | "stop">[] = [];
-      // What the policy saw, which a handler may have rewritten; none, when a handler answered itself.
-      let why = settings.policy.decide(outcome).why;
+      // Why the default decides as it does, on what it saw (which a handler may have rewritten); on the step's own outcome
+      // when a handler answered without it.
+      let why = toolLoop(outcome).why;
       const result = yield* hooks
         .invoke(
           AgentContinueHook,
           { sessionId, turnId, step, message: outcome.message, results: outcome.results },
           (final) =>
             Effect.sync(() => {
-              const decided = settings.policy.decide(final);
+              const decided = toolLoop(final);
               why = decided.why;
               return decided.result;
             }),
