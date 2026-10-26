@@ -111,6 +111,15 @@ describe("entries coming and going", () => {
     expect(router.match().signal).toBe(signal);
     expect(signal.aborted).toBe(false);
   });
+
+  test("a destroyed router keeps the routes it last had and tells no one", () => {
+    const { history, router, seen } = setup("/", [entry(Home)]);
+    router.destroy();
+    router.setEntries([]);
+    expect(router.matchHref("/").status).toBe("matched");
+    history.push("/threads/x");
+    expect(seen).toEqual([]);
+  });
 });
 
 describe("navigation", () => {
@@ -218,6 +227,42 @@ describe("plugins' routes in conflict", () => {
     const OneOf = defineRoute("one-of", { path: "/u/:id", params: Schema.Struct({ id: Schema.Union(members, { mode: "oneOf" }) }) });
     router.setEntries([entry(AnyOf), entry(OneOf)]);
     expect(issues).toEqual([]);
+  });
+
+  test("the known routes it starts with are checked too, and journaled when they change", () => {
+    const issues: RouteIssue[] = [];
+    const Note = defineRoute("note", { path: "/notes/:id" });
+    const Memo = defineRoute("memo", { path: "/notes/:key" });
+    const router = createRouter<Entry>({ history: createMemoryHistory("/"), known: [Note, Memo], onIssue: (issue) => issues.push(issue) });
+    expect(issues.map((issue) => issue.kind)).toEqual(["same-addresses"]);
+    expect(router.issues()).toHaveLength(1);
+    // Reported once: a change that keeps the conflict does not report it again.
+    router.setEntries([entry(Home)]);
+    expect(issues).toHaveLength(1);
+    router.setKnown([]);
+    router.setKnown([Note, Memo]);
+    expect(issues).toHaveLength(2);
+    expect(router.journal().filter((event) => event.kind === "issue")).toHaveLength(1);
+  });
+
+  test("a reporter of conflicts that throws does not keep the router on the old routes", () => {
+    const Note = defineRoute("note", { path: "/notes/:id" });
+    const Memo = defineRoute("memo", { path: "/notes/:key" });
+    const router = createRouter<Entry>({
+      history: createMemoryHistory("/notes/1"),
+      onIssue: () => {
+        throw new Error("reporter broke");
+      },
+    });
+    const error = console.error;
+    console.error = () => {};
+    try {
+      router.setEntries([entry(Note), entry(Memo)]);
+    } finally {
+      console.error = error;
+    }
+    expect(shown(router.match())).toBe("memo");
+    expect(router.journal().filter((event) => event.kind === "issue")).toHaveLength(1);
   });
 
   test("routes told apart by their Schemas are a fallback, not a conflict", () => {

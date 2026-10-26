@@ -1,7 +1,7 @@
 export { createEntryStore } from "./entries.ts";
 export type { EntryStore, EntryStoreOptions, KeyValueStorage } from "./entries.ts";
 export { createBrowserHistory, createMemoryHistory } from "./history.ts";
-export type { HistoryAction, HistoryLocation, HistorySnapshot, HistoryUpdate, MemoryHistory, RouterHistory } from "./history.ts";
+export type { HistoryAction, HistoryLocation, HistoryUpdate, RouterHistory } from "./history.ts";
 export { interceptLinks } from "./links.ts";
 export type { LinkOptions } from "./links.ts";
 export type { Pattern, RawParams, Segment } from "./path.ts";
@@ -18,21 +18,7 @@ export type {
   SearchFromDefaults,
   SearchOf,
 } from "./route.ts";
-export { createNavigator, createRouter, createRouteTable, isRoute } from "./router.ts";
+export { createRouter, isRoute } from "./router.ts";
 export type { Explanation, MatchInfo, RouteInfo, RouterEvent, RouterSnapshot, RouteVerdict } from "./inspect.ts";
-export type {
-  BlockOptions,
-  Match,
-  Navigate,
-  NavigateOptions,
-  Navigator,
-  NavigatorOptions,
-  RouteEntry,
-  RouteIssue,
-  Router,
-  RouterOptions,
-  RouteTable,
-  RouteTableOptions,
-  Transition,
-} from "./router.ts";
+export type { BlockOptions, Match, Navigate, NavigateOptions, RouteEntry, RouteIssue, Router, RouterOptions, Transition } from "./router.ts";
 export type { RawSearch } from "./search.ts";

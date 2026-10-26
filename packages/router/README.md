@@ -47,34 +47,6 @@ fields are not the path's names, or a Schema that does not read strings
 a bad path, or a mismatch the types could not see, throws a `RouteError`
 naming the route.
 
-## Tables and navigators
-
-`createRouter` is a route table and one navigator over it, which is what a page
-with one location needs. A page with several (tabs, split panes, a preview)
-makes them separately. `createRouteTable({ known, onIssue, label })` holds the
-routes and what is registered at them, compiled once per change and checked
-for conflicts from the start (`onIssue` hears those among `known`, too). Each
-`createNavigator(table, { history, retain, onError, journal, settleTimeout })`
-has its own history, match, blockers, and journal:
-
-```ts
-const table = createRouteTable<Page>({ known });
-table.setEntries(pages); // compiled once, for every navigator
-const tabs = new Map(saved.map((tab) => [tab.id, createNavigator(table, { history: createMemoryHistory(tab.href) })]));
-tabs.get("a")!.navigate(User, { id: "ada" }); // moves that tab only
-```
-
-When the table changes, each navigator matches its own location again (about
-a resolve's cost each) and journals the new conflicts. A navigator costs a few
-microseconds to make and a few kilobytes when made (`bench/budgets.ts` holds
-the numbers); what it holds then grows with its history's entries and its
-journal (up to twice `journal` events between trims; `journal: 0` keeps none),
-so a page with many navigators sets a small journal. Destroying one stops it
-following its history and table. Destroying the table leaves its navigators
-the routes they last had: later `setEntries` and `setKnown` change nothing.
-Everything below applies to each navigator alike; `Router` is a `Navigator`
-with the table's `setEntries`, `setKnown`, and `issues`.
-
 ## Matching
 
 `setEntries(entries)` says what is registered, in priority order: for a route
@@ -134,7 +106,8 @@ the same code as navigation. `inspect()` is the router now: every route with
 what is registered at it in priority order, conflicts, blockers by label
 (`block(blocker, { label })`), and the retained keys. `journal()` keeps the
 latest events (navigations, matches, backs and forwards, refusals, failures,
-conflicts) and `onEvent` hears each. All of it is plain data (ids and strings,
+conflicts), 200 unless `journal` says otherwise (0 keeps none), and `onEvent`
+hears each. All of it is plain data (ids and strings,
 entries named by the `label` option), so a devtools panel, a log, or another
 process reads it alike.
 
@@ -164,18 +137,10 @@ while one is landing waits for it rather than being the entry it leaves, for
 is reported (during `history`) and the navigations go ahead; a refused
 move's undo that lands later is still taken as the undo. `retain` lists
 search keys every navigation keeps from the current location unless it sets
-them.
+them. `destroy()` stops the router following its history; it keeps the routes
+it last had, and later `setEntries` and `setKnown` change nothing.
 
-## Saving and restoring
-
-A memory history's `snapshot()` is its stack as data: each entry's address and
-key, and which is current. `createMemoryHistory(snapshot)` restores it, keys
-included, so a tab's back and forward survive a reload or a crash. Save it as
-the history changes (`history.subscribe`). A snapshot is read rather than
-trusted: an entry that is not a path in the app (not a string, or a URL naming
-another origin) is dropped, a repeated key is replaced, and the index still
-names the saved current entry (the last one kept before it, when it was the
-one dropped).
+## Entry state
 
 `createEntryStore({ storage, key, limit })` keeps state with history entries,
 by entry key and name: a scroll position, a draft. Going back to an entry
@@ -199,18 +164,8 @@ is and draws the match. No hash history, nested layouts, or route masking.
 From the repository root:
 
 ```sh
-nix develop -c pnpm --filter @lemma/router test           # behavior, types, and the benchmarks at tiny counts
-nix develop -c pnpm router:bench                          # warm microbenchmarks against bench/budgets.ts
-nix develop -c node packages/router/scripts/check-package.ts             # the packed package in a separate Node consumer
-nix develop .#browser -c node packages/router/scripts/check-package.ts --browser   # and in Chromium, with its bundle size
+nix develop -c pnpm --filter @lemma/router test           # behavior and types
 ```
 
-The package depends on Effect alone (for Schema), imports nothing else from
-this repository, and its docs link only within it, so it can leave as it is.
-`pnpm pack` builds `dist` and packs it; `publishConfig.exports` leaves the
-repository's `lemma-source` condition out of the packed manifest.
-
-[`bench/budgets.ts`](bench/budgets.ts) records each benchmark's budget and the
-reference machine. Timing budgets are advisory unless `LEMMA_PERF_ENFORCE=1`
-(measure on an idle, comparable machine); the browser bundle's size budget
-always fails when exceeded.
+The package depends on Effect alone (for Schema) and imports nothing else from
+this repository.
