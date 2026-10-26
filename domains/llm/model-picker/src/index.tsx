@@ -10,6 +10,7 @@ import type { PaletteItem } from "@lemma/actions";
 import { SectionIds, SettingsGroups } from "@lemma/settings";
 import { ComposerControls, PromptCommands, ThreadsActionIds } from "@lemma/threads";
 import { Slots, defineWebPlugin } from "@lemma/web";
+import { formatKeys, matchesKeys, withKeys } from "@lemma/web/keys";
 import type { ModelsService } from "@lemma/llm/web";
 import { BrainIcon, CheckIcon, ChevronDownIcon, ImageIcon, PlusIcon, Popover, SearchIcon, SettingRow, StarIcon } from "@lemma/look";
 import type { Placement } from "@lemma/look";
@@ -119,6 +120,9 @@ function ThinkingPicker(props: {
 
 type Rail = "favorites" | "all" | string;
 
+/** Stars or unstars the model highlighted in the menu, as a browser's bookmarks the page shown. */
+const FAVORITE_KEYS = "mod+d";
+
 /**
  * What a model picker shows and sets: the composer's preferred model, or a setting's own (`ModelPickerPart`). A picker
  * is one or the other for as long as it is drawn.
@@ -191,6 +195,30 @@ function ModelPicker(props: {
     event.preventDefault();
     setRail(keys[(index + (event.key === "ArrowRight" ? 1 : -1) + keys.length) % keys.length]!);
   };
+  /** What an empty list offers, connecting a provider, which Enter takes while nothing shows; none while the favorites are empty. */
+  const emptyAction = () => (props.models.models().length > 0 && rail() === "favorites" && query() === "" ? undefined : props.onProviders);
+  // The search field's keys, before the menu's (`Popover`): Enter with nothing to pick takes what the empty list offers,
+  // the favorite keys star the highlighted model, and the arrows move along the rail.
+  const searchKeys = (event: KeyboardEvent, close: () => void) => {
+    if (event.isComposing) return;
+    if (event.key === "Enter" && shown().length === 0) {
+      const open = emptyAction();
+      if (open === undefined) return;
+      event.preventDefault();
+      close();
+      open();
+      return;
+    }
+    if (matchesKeys(FAVORITE_KEYS, event)) {
+      const ref = (event.currentTarget as HTMLElement).closest(".model-menu")?.querySelector<HTMLElement>('.model-row[data-active="true"]')?.dataset.ref;
+      if (ref === undefined) return;
+      event.preventDefault();
+      event.stopPropagation();
+      toggleFavorite(ref);
+      return;
+    }
+    railKeys(event);
+  };
 
   return (
     <Popover
@@ -224,7 +252,7 @@ function ModelPicker(props: {
               data-autofocus
               value={query()}
               onInput={(event) => setQuery(event.currentTarget.value)}
-              onKeyDown={railKeys}
+              onKeyDown={(event) => searchKeys(event, close)}
             />
             {/* Another provider's models: connecting one is a step away. */}
             <Show when={props.onProviders}>
@@ -310,7 +338,7 @@ function ModelPicker(props: {
                   const selected = () => selectedModel()?.ref === model.ref;
                   const favorite = () => favoriteModels().includes(model.ref);
                   return (
-                    <div class="model-row menu-item" role="option" aria-selected={selected()} onClick={() => pick(model.ref, close)}>
+                    <div class="model-row menu-item" role="option" aria-selected={selected()} data-ref={model.ref} onClick={() => pick(model.ref, close)}>
                       <Show when={mixed()}>
                         <span class="model-logo" data-tip={providerName(model.provider)}>
                           <ProviderLogo
@@ -351,6 +379,7 @@ function ModelPicker(props: {
                         classList={{ on: favorite() }}
                         tabindex="-1"
                         aria-label={favorite() ? `Unfavorite ${model.name}` : `Favorite ${model.name}`}
+                        data-tip={withKeys(favorite() ? "Unfavorite" : "Favorite", FAVORITE_KEYS)}
                         onClick={(event) => {
                           event.stopPropagation();
                           toggleFavorite(model.ref);
@@ -415,6 +444,20 @@ function ModelPicker(props: {
               </Show>
             </div>
           </div>
+          {/* The keys the list takes beyond a menu's, where they can be read. */}
+          <Show when={shown().length > 0}>
+            <footer class="model-foot">
+              <span>
+                <kbd>{formatKeys(FAVORITE_KEYS)}</kbd> favorite
+              </span>
+              <Show when={railShown() && query() === ""}>
+                <span>
+                  <kbd>←</kbd>
+                  <kbd>→</kbd> providers
+                </span>
+              </Show>
+            </footer>
+          </Show>
         </>
       )}
     </Popover>

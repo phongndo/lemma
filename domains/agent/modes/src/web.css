@@ -39,7 +39,7 @@
   border: 0;
   border-radius: var(--radius-sm);
   background: transparent;
-  color: var(--text-3);
+  color: var(--text-2);
   font-size: var(--font-size-sm);
   font-weight: 500;
   white-space: nowrap;
@@ -48,7 +48,7 @@
 .agent-mode-chip:hover,
 .agent-mode-chip[aria-expanded="true"] {
   background: var(--bg-hover);
-  color: var(--text-2);
+  color: var(--text);
 }
 
 /* No chevron, so the line reads as text; under the pointer or open, it shows as a button. */

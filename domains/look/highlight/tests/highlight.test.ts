@@ -32,8 +32,14 @@ describe("highlighting", () => {
     const keyword = highlightTokens("const x = 'a';", "ts", true)![0]![0]!;
     expect([keyword.content, keyword.htmlStyle]).toEqual([
       "const",
-      { "--shiki-light": "var(--code-keyword, #d73a49)", "--shiki-dark": "var(--code-keyword, #f97583)" },
+      { "--shiki-light": "var(--code-keyword, #cf222e)", "--shiki-dark": "var(--code-keyword, #f97583)" },
     ]);
+  });
+
+  it("shows a color that reads in place of one of GitHub's that does not", async () => {
+    expect(await loadLanguage("ts")).toBe(true);
+    const comment = highlightTokens("// note", "ts", true)![0]![0]!;
+    expect(comment.htmlStyle).toEqual({ "--shiki-light": "var(--code-comment, #59636e)", "--shiki-dark": "var(--code-comment, #8b949e)" });
   });
 
   it("makes every color of both themes a token", async () => {

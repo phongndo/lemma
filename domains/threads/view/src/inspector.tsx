@@ -33,6 +33,8 @@ import {
 import type { PaneState, Panes, Shows, Tab } from "./pane.ts";
 
 const PANES_KEY = "lemma.threads.view.panes";
+/** How far ← or → moves the pane's edge, focused, in px. */
+const EDGE_STEP = 16;
 
 /**
  * The tabs, which drag along the strip to another place among them, as the thread tabs do: the tab follows the
@@ -163,11 +165,20 @@ export interface Inspector {
   readonly closeShown: () => void;
   /**
    * The pane beside the chat, its `share` of the page wide (until its edge is dragged, its stylesheet's width) unless
-   * it fills the page; `resize` starts a drag of its edge, and `reset` (a double-click on it) gives it its first width.
+   * it fills the page; `resize` starts a drag of its edge, `resizeTo` makes it a width (px) from its edge's keys, and
+   * `reset` (a double-click on it, or Enter) gives it its first width. `most` is the widest it can be (px).
    */
-  readonly Pane: (props: { readonly share: number | undefined; readonly resize: (event: PointerEvent) => void; readonly reset: () => void }) => JSX.Element;
+  readonly Pane: (props: PaneProps) => JSX.Element;
   /** The thread header's switch while the pane is closed: opens it, or, with no tab, its menu of views. */
   readonly Switch: () => JSX.Element;
+}
+
+export interface PaneProps {
+  readonly share: number | undefined;
+  readonly resize: (event: PointerEvent) => void;
+  readonly resizeTo: (width: number) => void;
+  readonly reset: () => void;
+  readonly most: () => number;
 }
 
 /**
@@ -445,8 +456,21 @@ export function createInspector(deps: {
     );
   }
 
-  function Pane(props: { readonly share: number | undefined; readonly resize: (event: PointerEvent) => void; readonly reset: () => void }) {
+  function Pane(props: PaneProps) {
     onCleanup(() => (strip = undefined));
+    let aside!: HTMLElement;
+    // Its edge reads as the pane's width, from its least to its most, measured as the edge is focused, moved, or reset:
+    // the window changing meanwhile is read the next time.
+    const [extent, setExtent] = createSignal<{ readonly now: number; readonly most: number }>();
+    const measure = () => setExtent({ now: Math.round(aside.getBoundingClientRect().width), most: Math.round(props.most()) });
+    const edgeKeys = (event: KeyboardEvent) => {
+      if (event.key === "Enter") props.reset();
+      else if (event.key === "ArrowLeft" || event.key === "ArrowRight")
+        props.resizeTo(aside.getBoundingClientRect().width + (event.key === "ArrowLeft" ? EDGE_STEP : -EDGE_STEP));
+      else return;
+      event.preventDefault();
+      measure();
+    };
     // Opened from its switch's menu: the tab opened takes focus, unless its view took it (the browser's address bar).
     onMount(() => {
       if (!focusOpened) return;
@@ -457,6 +481,7 @@ export function createInspector(deps: {
       <aside
         class="thread-inspector"
         aria-label="Inspection pane"
+        ref={aside}
         style={{
           "--pane-width": props.share === undefined ? undefined : `${props.share * 100}%`,
           "--pane-least": `${LEAST.pane}px`,
@@ -469,9 +494,19 @@ export function createInspector(deps: {
             role="separator"
             aria-orientation="vertical"
             aria-label="Resize inspection pane"
+            aria-valuenow={extent()?.now}
+            aria-valuemin={LEAST.pane}
+            aria-valuemax={extent()?.most}
+            tabindex="0"
             data-tip="Drag to resize · double-click to reset"
             onPointerDown={(event) => props.resize(event)}
-            onDblClick={() => props.reset()}
+            onPointerUp={measure}
+            onDblClick={() => {
+              props.reset();
+              measure();
+            }}
+            onFocus={measure}
+            onKeyDown={edgeKeys}
           />
         </Show>
         <header class="main-head thread-inspector-head">

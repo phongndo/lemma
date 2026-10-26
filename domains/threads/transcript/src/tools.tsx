@@ -7,7 +7,7 @@ import { partialStringField, summarizeArgs, truncateLines, ToolViews, ChatTool }
 import { formatElapsed } from "./format.ts";
 import type { ToolResultView, ChatToolProps, ThreadsService, ToolBodyProps } from "@lemma/threads";
 import type { ClientService, SlotsService } from "@lemma/web";
-import { ChevronDownIcon, ChevronIcon, Icon, Spinner } from "@lemma/look";
+import { ChevronDownIcon, ChevronIcon, FileTypeIcon, Icon, Spinner } from "@lemma/look";
 import { Contained } from "@lemma/web";
 import type { Chat } from "./config.ts";
 
@@ -134,6 +134,8 @@ export const toolView = (deps: { readonly client: ClientService; readonly thread
     };
     /** A tool whose view gives an icon says what it did by it; any other is named. */
     const named = () => custom()?.icon === undefined || primary() === undefined;
+    /** A command or a path, which reads as code. */
+    const code = () => summary().shell === true || summary().file !== undefined;
     return (
       <div class={`tool tool-${props.state}`} classList={{ open: open() }}>
         <button class="row-head tool-head" aria-expanded={open()} onClick={() => props.onToggle()}>
@@ -147,8 +149,11 @@ export const toolView = (deps: { readonly client: ClientService; readonly thread
             <span class="tool-name" classList={{ "sr-only": !named() }}>
               {props.name || "tool"}
             </span>
+            <Show when={summary().file}>{(file) => <FileTypeIcon path={file().path} kind={file().kind} class="tool-file-icon" />}</Show>
             <Show when={primary()}>
-              <span class="tool-primary">{primary()}</span>
+              <span class="tool-primary" classList={{ "tool-code": code() }}>
+                {primary()}
+              </span>
             </Show>
             <Show when={summary().secondary}>
               <span class="tool-secondary">{summary().secondary}</span>

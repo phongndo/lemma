@@ -1,6 +1,7 @@
 /*
  * Highlighted code carries both themes' colors; the page's theme picks one.
- * Each color is a token with GitHub's as its fallback (lib/highlight.ts):
+ * Each color is a token with GitHub's as its fallback, made to read on a
+ * code block where GitHub's does not (`src/highlight.ts`):
  * `--code-text`, `--code-comment`, `--code-keyword`, `--code-string`,
  * `--code-regexp` (in the dark scheme; the light one colors regexps as
  * strings), `--code-constant`, `--code-entity` (functions and types),

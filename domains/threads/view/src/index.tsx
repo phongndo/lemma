@@ -4,6 +4,7 @@ import { isRoute } from "@lemma/router";
 import { tildePath } from "@lemma/web/format";
 import { load, save } from "@lemma/web/storage";
 import { dragEdge } from "@lemma/web/drag";
+import { withKeys } from "@lemma/web/keys";
 import {
   sessionTitle,
   ComposerRegion,
@@ -30,7 +31,7 @@ import { ArchiveIcon, CONFIRM_DELETE, CopyIcon, LogIcon, PenSquareIcon, PencilIc
 import { copyAndTell } from "@lemma/web/clipboard";
 import { CostRow } from "./card.tsx";
 import { createInspector } from "./inspector.tsx";
-import { shareOf } from "./pane.ts";
+import { LEAST, shareOf } from "./pane.ts";
 import styles from "./thread-view.css?inline";
 
 /** The inspection pane's share of the page, once its edge is dragged; before, its width is its stylesheet's. */
@@ -293,14 +294,14 @@ export default defineWebPlugin({
 
     // Its header's items go through the slot other plugins add theirs to.
     const header = (id: string, order: number, side: "start" | "end", component: () => JSX.Element) => slots.add(ThreadHeader, { id, order, side, component });
-    // While the sidebar shows, its own head has the toggle.
+    // While the sidebar shows, its own head has the toggle, with the same tooltip: the shell's action, and its keys.
     header("thread.sidebar-toggle", 0, "start", () => (
       <Show when={layout.sidebarHidden()}>
         <button
           class="icon-button sidebar-toggle"
           aria-label="Toggle sidebar"
-          data-tip="Toggle sidebar"
           data-sidebar-toggle
+          data-tip={withKeys("Toggle sidebar", keysOf("shell.toggle-sidebar"))}
           onClick={() => layout.toggleSidebar()}
         >
           <SidebarIcon />
@@ -426,15 +427,16 @@ export default defineWebPlugin({
       createEffect(() => {
         if (!inspector.open() || inspector.maximized()) setResizing(false);
       });
-      /** Its edge's drag sets its share from the pointer, leaving the chat its least. */
+      /** The pane `width` px wide, as its share of the page, leaving the chat its least. */
+      const widen = (width: number) => {
+        const next = shareOf(width, page.getBoundingClientRect().width);
+        if (next !== undefined) setShare(next);
+      };
+      /** Its edge's drag sets its share from the pointer. */
       // The drag ends however the pointer is let go: released, cancelled, or the edge gone (the pane closed mid-drag).
       const resize = (event: PointerEvent) => {
         const started = dragEdge(event, {
-          move: (moved) => {
-            const bounds = page.getBoundingClientRect();
-            const next = shareOf(bounds.right - moved.clientX, bounds.width);
-            if (next !== undefined) setShare(next);
-          },
+          move: (moved) => widen(page.getBoundingClientRect().right - moved.clientX),
           end: () => {
             setResizing(false);
             save(SHARE_KEY, share()?.toString());
@@ -442,6 +444,11 @@ export default defineWebPlugin({
         });
         if (started) setResizing(true);
       };
+      const resizeTo = (width: number) => {
+        widen(width);
+        save(SHARE_KEY, share()?.toString());
+      };
+      const most = () => Math.max(LEAST.pane, page.getBoundingClientRect().width - LEAST.chat);
       /** A new thread, nothing sent yet: its prompt in the middle of the page, over what it starts with (`ThreadStart`). */
       const starting = () => threads.blank() && unknown() === undefined && main()?.composer === true;
       return (
@@ -493,7 +500,7 @@ export default defineWebPlugin({
             </Show>
           </section>
           <Show when={unknown() === undefined && inspector.open()}>
-            <inspector.Pane share={share()} resize={resize} reset={resetShare} />
+            <inspector.Pane share={share()} resize={resize} resizeTo={resizeTo} reset={resetShare} most={most} />
           </Show>
         </main>
       );

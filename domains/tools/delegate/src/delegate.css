@@ -62,6 +62,19 @@
   min-width: 0;
 }
 
+/*
+ * Out in the chat, a row or a group lies where the chat's rows do (`.row-head`), reaching 8px past the column's start
+ * so its picture lines up with their icons; inside a group, under its rule, it does not.
+ */
+.agent-row,
+.agent-group {
+  margin: 0 8px 0 -8px;
+}
+
+.agent-group-rows > .agent-row {
+  margin: 0;
+}
+
 .agent-open {
   display: flex;
   align-items: center;
@@ -197,6 +210,23 @@
   color: var(--agent-working);
 }
 
+/* A failure among them: a dot before the count, as the chat's work lines mark theirs. */
+.agent-group-status.failed {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.agent-group-status.failed::before {
+  content: "";
+  flex: none;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--agent-failed);
+}
+
+/* Pointing at what opens, and down once it has, as the chat's rows' chevrons do. */
 .agent-group-chevron {
   display: inline-flex;
   color: var(--text-3);
@@ -204,7 +234,7 @@
 }
 
 .agent-group-head[aria-expanded="true"] .agent-group-chevron {
-  transform: rotate(180deg);
+  transform: rotate(90deg);
 }
 
 .agent-group-rows {
