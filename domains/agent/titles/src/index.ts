@@ -28,7 +28,7 @@ class TitleFailed extends Data.TaggedError("TitleFailed")<{ readonly message: st
 export default definePlugin({
   id: "agent.titles",
   version: "0.1.0",
-  uses: ["lemma/agent@2", "lemma/commands@1", "lemma/llm@3", "lemma/sessions@1"],
+  uses: ["lemma/agent@2", "lemma/commands@1", "lemma/llm@3", "lemma/sessions@2"],
   requires: { sessions: Sessions, llm: Llm, small: SmallModel },
   setup: function* ({ sessions, llm, small }, owner) {
     /** Sessions a first title is being written for, each done once it is written or given up on. */

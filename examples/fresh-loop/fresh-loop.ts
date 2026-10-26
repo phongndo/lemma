@@ -55,7 +55,7 @@ export const makeFreshLoop = (options: AgentOptions = {}) =>
     version: "0.1.0",
     // It is an Agent: it implements the agent domain's contract, and is written against the session log's.
     implements: ["lemma/agent@2"],
-    uses: ["lemma/agent@2", "lemma/sessions@1"],
+    uses: ["lemma/agent@2", "lemma/sessions@2"],
     config: AgentConfig,
     provides: { agent: Agent },
     requires: { sessions: Sessions, llm: Llm, tools: ToolRunner, host: HostControl, paths: Paths },

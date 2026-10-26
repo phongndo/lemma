@@ -17,7 +17,7 @@ export default ({ defineWebPlugin, contracts: { Icon, Slots, Threads, ToolViews,
   return defineWebPlugin({
     id: "todo",
     api: 5,
-    uses: ["lemma/threads@1"],
+    uses: ["lemma/threads@2"],
     styles,
     requires: { slots: Slots, threads: Threads },
     setup: ({ slots, threads }) => {

@@ -11,7 +11,7 @@ export const termsOf = (branch: readonly SessionEvent[]): Readonly<Record<string
 
 export default definePlugin({
   id: "glossary",
-  uses: ["lemma/sessions@1", "lemma/tools@2"],
+  uses: ["lemma/sessions@2", "lemma/tools@2"],
   requires: { sessions: Sessions },
   setup: ({ sessions }, { add }) => {
     add(Tools, {

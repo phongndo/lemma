@@ -106,7 +106,7 @@ const text = (value: string) => new ToolResult({ content: [{ type: "text", text:
 export default definePlugin({
   id: "inbox",
   version: "0.1.0",
-  uses: ["lemma/agent@2", "lemma/sessions@1", "lemma/tools@2"],
+  uses: ["lemma/agent@2", "lemma/sessions@2", "lemma/tools@2"],
   config: Config,
   setup: (_deps, { add, on, run, config }) => {
     const inbox = (cwd: string) => path.resolve(cwd, config.dir);
