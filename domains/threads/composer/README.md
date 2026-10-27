@@ -4,7 +4,7 @@ Where prompts are written: text, images pasted, dropped, or attached,
 completions for the word being typed, and the buttons to send, steer, and
 stop. Adds the composer to `ComposerRegion`, and draws what plugins add to
 `ComposerNotices` (above the box), `ComposerControls` and `ComposerActions`
-(its toolbar), `ComposerFooter` (under it), `ComposerCompletions` (the
+(its toolbar), `ComposerCompletions` (the
 completion menu), `PromptCommands` (it runs those with `run`), and `ComposerTakeovers` (a plugin's banner just above the box, which
 then takes the text box and the send button, or its line above the box), all
 in [`@lemma/threads`](../contract/src/threads.ts). Its own
@@ -75,13 +75,14 @@ the runtime's `Client`, `Notify`, `Router`, `Slots`, and `WebPlugins`.
   blank, and the shown thread stays. A command runs as Enter would run it.
 - **Drafts.** An unsent prompt is kept per thread, and one for the
   new-thread page, across switching threads and the composer leaving the page
-  (settings). Each thread's is told to `Threads.setDraft` as it changes, which
-  keeps its text across a reload and lets the sidebar show it; the composer
-  starts from what it kept (`Threads.drafts`). Closing or reloading the tab asks
-  first only for what a reload would lose: a draft's images, a send that did
-  not get through, or one written with no thread shown. What was written on
+  (settings). `Threads` keeps them: the composer writes each change
+  (`Threads.setDraft`) and reads a thread's back when it shows it
+  (`Threads.draft`). `Threads` keeps their text across a reload, lets the
+  sidebar show them, and drops a deleted thread's. Closing or reloading the tab
+  asks first only for what a reload would lose: a draft's images, a send that
+  did not get through, or one written with no thread shown. What was written on
   the new-thread page before its thread arrived goes to the blank thread it
-  lands on; a deleted thread's draft goes with it.
+  lands on.
 - **Sending again.** The composer clears as a prompt goes out. One that was
   not sent returns to the thread it was written in (for a new thread's, the
   one placing it created), with its request id, ahead

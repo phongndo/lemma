@@ -40,7 +40,7 @@ const INSTRUCTIONS = `Lemma itself, through the channels its plugins serve clien
  */
 export default definePlugin({
   id: "tools.lemma",
-  uses: ["lemma/agent@2", "lemma/llm@3", "lemma/sessions@1", "lemma/tools@2"],
+  uses: ["lemma/agent@2", "lemma/llm@3", "lemma/sessions@2", "lemma/tools@2"],
   version: "0.1.0",
   config: Config,
   requires: { interaction: Interaction },

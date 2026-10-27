@@ -3,6 +3,7 @@ import { Equal, Schema } from "effect";
 import { describe, expect, it } from "vitest";
 import {
   branchOf,
+  createMessageCount,
   customEvents,
   deriveHistory,
   deriveMessages,
@@ -275,6 +276,85 @@ describe("modelEntries", () => {
       content: [{ type: "text", text: "seen" }],
       timestamp: 1000,
     });
+  });
+});
+
+describe("createMessageCount", () => {
+  it("counts what deriveMessages derives for each prefix of any branch, with and without a restart", () => {
+    // mulberry32: the same cases each run.
+    let seed = 3;
+    const pick = (n: number) => {
+      seed = (seed + 0x6d2b79f5) | 0;
+      let t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
+      t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+      return ((t ^ (t >>> 14)) >>> 0) % n;
+    };
+    let made = 0;
+    // Before, at, or after the event naming it, or on no branch.
+    const eventId = () => `e${1 + pick(made + 2)}`;
+    const callId = () => `c${pick(4)}`;
+    const reply = (calls: number, stopReason: "toolUse" | "aborted"): EventData => ({
+      type: "message",
+      message: {
+        role: "assistant",
+        content: Array.from({ length: calls }, () => ({ type: "toolCall" as const, id: callId(), name: "read", arguments: {} })),
+        api: "test",
+        provider: "p",
+        model: "m",
+        usage: emptyUsage,
+        stopReason,
+        timestamp: 0,
+      },
+    });
+    // Compactions and edits naming events before or after them, results of responses omitted, prompt updates a restart
+    // said again, and events the model never sees.
+    const anyEvent = (): EventData => {
+      made++;
+      switch (pick(11)) {
+        case 0:
+          return user("go");
+        case 1:
+          return assistant("ok");
+        case 2:
+          return reply(1 + pick(2), pick(4) === 0 ? "aborted" : "toolUse");
+        case 3:
+          return {
+            type: "message",
+            message: { role: "toolResult", toolCallId: callId(), toolName: "read", content: [{ type: "text", text: "out" }], isError: false, timestamp: 0 },
+          };
+        case 4:
+          return { type: "context", source: "mail", content: [{ type: "text", text: "mail" }] };
+        case 5:
+          return { type: "prompt-update", sections: [{ id: "base", source: "agent", text: "new" }] };
+        case 6:
+          return request(pick(2) === 0 ? { restart: "start" } : {});
+        case 7:
+          return { type: "compaction", summary: "s", firstKeptId: eventId(), tokensBefore: 10, source: "c" };
+        case 8:
+        case 9:
+          return {
+            type: "context-edit",
+            target: eventId(),
+            op: pick(2) === 0 ? "omit" : "replace",
+            ...(pick(3) === 0 ? {} : { content: [{ type: "text" as const, text: "edited" }] }),
+            source: "x",
+          };
+        default:
+          return { type: "custom", kind: "x", data: null };
+      }
+    };
+    for (let round = 0; round < 300; round++) {
+      made = 0;
+      const events = log(...Array.from({ length: 1 + pick(30) }, anyEvent));
+      const counted = createMessageCount();
+      for (let end = 0; end <= events.length; end++) {
+        if (end > 0) counted.note(events, end - 1);
+        const prefix = events.slice(0, end);
+        const at = JSON.stringify(prefix.map((event) => event.data));
+        expect(counted.count(), at).toBe(deriveMessages(prefix).length);
+        expect(counted.count({ restart: true }), at).toBe(deriveMessages(prefix, { restart: true }).length);
+      }
+    }
   });
 });
 

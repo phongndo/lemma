@@ -1,23 +1,11 @@
 import * as path from "node:path";
 import { Clock, Deferred, Duration, Effect, Exit, Option, Result, Schedule, Schema, SchemaIssue, Semaphore } from "effect";
 import type { Context, Scope } from "effect";
-import { assert, Events, Hooks, PluginContext } from "@lemma/core";
+import { assert, Events, PluginContext } from "@lemma/core";
 import type { CoreClosed } from "@lemma/core";
 import { Notice, Paths, randomId } from "@lemma/contracts";
 import type { IdSource } from "@lemma/contracts";
-import {
-  SessionAppended,
-  SessionChanged,
-  SessionCheckedOut,
-  SessionCheckoutHook,
-  SessionError,
-  SessionEvent,
-  SessionRemoved,
-  SessionRemoveHook,
-  branchOf,
-  searchLog,
-  searchWords,
-} from "@lemma/sessions";
+import { SessionAppended, SessionChanged, SessionError, SessionEvent, SessionRemoved, branchOf, searchLog, searchWords } from "@lemma/sessions";
 import type { Contribution, SessionInfo, SessionSearchMatch, Sessions } from "@lemma/sessions";
 import { errorCode, syncDirectory, syncParents, writeFileAtomic } from "@lemma/contracts/fs";
 import type { FileSystem } from "@lemma/contracts/fs";
@@ -153,11 +141,10 @@ export const make = ({
   fs,
   ids,
   claimant,
-}: Options): Effect.Effect<Service, SessionError | CoreClosed, Paths | Events | Hooks | PluginContext | Scope.Scope> =>
+}: Options): Effect.Effect<Service, SessionError | CoreClosed, Paths | Events | PluginContext | Scope.Scope> =>
   Effect.gen(function* () {
     const paths = yield* Paths;
     const events = yield* Events;
-    const hooks = yield* Hooks;
     const owner = yield* PluginContext;
     const root = path.join(paths.home, "sessions");
     // Taken first, so it is released last, after every file is closed.
@@ -479,40 +466,21 @@ export const make = ({
         );
       });
 
-    /** What `checkout` does once every `SessionCheckoutHook` handler let it. */
-    const checkoutNow = (sessionId: string, target: string) =>
+    const checkout: Service["checkout"] = (sessionId, target) =>
       Effect.gen(function* () {
         const entry = yield* locate(sessionId);
         return yield* entry.lock.withPermits(1)(
           Effect.gen(function* () {
             const open = yield* openLocked(entry);
             if (!open.byId.has(target)) return yield* notFound(sessionId, `Event ${target} does not exist in session ${sessionId}`);
-            const from = open.leaf;
             const at = yield* Clock.currentTimeMillis;
-            yield* commit(
-              entry,
-              open,
-              { type: "checkout", leaf: target, at },
-              () => {
-                open.leaf = target;
-                open.updatedAt = Math.max(open.updatedAt, at);
-              },
-              events.publish(SessionCheckedOut, { sessionId, from, to: target }),
-            );
+            yield* commit(entry, open, { type: "checkout", leaf: target, at }, () => {
+              open.leaf = target;
+              open.updatedAt = Math.max(open.updatedAt, at);
+            });
             return entry.info;
           }),
         );
-      });
-
-    const checkout: Service["checkout"] = (sessionId, target) =>
-      Effect.gen(function* () {
-        const from = (yield* locate(sessionId)).info.leaf;
-        return yield* hooks
-          .invoke(SessionCheckoutHook, { sessionId, eventId: target, from }, (input) => checkoutNow(input.sessionId, input.eventId))
-          .pipe(
-            // Hook misuse and a closing core are defects here: the contract's error channel is SessionError.
-            Effect.catch((error) => (error._tag === "SessionError" ? Effect.fail(error) : Effect.die(error))),
-          );
       });
 
     const mark: Service["mark"] = (sessionId, marks) =>
@@ -533,7 +501,7 @@ export const make = ({
     /** How many holds each held session has (`hold`). */
     const holds = new Map<string, number>();
     /**
-     * The sessions whose file `removeNow` is deleting, each with what completes once it has, or has failed to. It
+     * The sessions whose file `remove` is deleting, each with what completes once it has, or has failed to. It
      * checks for holds and marks the session in one step, and calls nothing outside the store until the mark goes,
      * so a hold asked for meanwhile waits on the disk alone.
      */
@@ -721,13 +689,12 @@ export const make = ({
           // A damaged one may hold events past where it stops reading: never thrown away for looking empty.
           if (info.lastSeq > 0 || info.damaged !== undefined || info.kept === true || info.pinned === true || info.archived === true || info.createdAt > cutoff)
             continue;
-          // One in use, or refused by a hook, stays.
+          // One in use stays.
           yield* Effect.ignore(remove(info.id));
         }
       });
 
-    /** What `remove` does once every `SessionRemoveHook` handler let it. */
-    const removeNow = (sessionId: string) =>
+    const remove: Service["remove"] = (sessionId) =>
       Effect.gen(function* () {
         const entry = yield* locate(sessionId);
         yield* entry.lock.withPermits(1)(
@@ -761,19 +728,6 @@ export const make = ({
           ),
         );
       });
-
-    const remove: Service["remove"] = (sessionId) =>
-      Effect.suspend(() =>
-        // Refused before its handlers run, too, so they see no removal a hold refuses.
-        holds.has(sessionId)
-          ? Effect.fail(busy(sessionId))
-          : hooks
-              .invoke(SessionRemoveHook, { sessionId }, (input) => removeNow(input.sessionId))
-              .pipe(
-                // Hook misuse and a closing core are defects here: the contract's error channel is SessionError.
-                Effect.catch((error) => (error._tag === "SessionError" ? Effect.fail(error) : Effect.die(error))),
-              ),
-      );
 
     const branch: Service["branch"] = (sessionId, options) =>
       Effect.flatMap(opened(sessionId), (open) => {

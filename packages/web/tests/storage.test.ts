@@ -1,13 +1,19 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { loadJson, loadStrings, recordOf } from "../src/storage.ts";
+import { load, loadJson, loadStrings, recordOf, save } from "../src/storage.ts";
 
-const stored = new Map<string, string>();
-vi.stubGlobal("localStorage", {
+const area = (stored: Map<string, string>) => ({
   getItem: (key: string) => stored.get(key) ?? null,
   setItem: (key: string, value: string) => void stored.set(key, value),
   removeItem: (key: string) => void stored.delete(key),
 });
-afterEach(() => stored.clear());
+const stored = new Map<string, string>();
+const tab = new Map<string, string>();
+vi.stubGlobal("localStorage", area(stored));
+vi.stubGlobal("sessionStorage", area(tab));
+afterEach(() => {
+  stored.clear();
+  tab.clear();
+});
 
 describe("what a plugin reads back from storage", () => {
   it("is the value only when it has the shape asked for: another plugin's, or an older version's, under the key is not", () => {
@@ -33,5 +39,13 @@ describe("what a plugin reads back from storage", () => {
     expect(loadStrings("l")).toEqual([]);
     stored.set("l", "1");
     expect(loadStrings("l")).toEqual([]);
+  });
+
+  it("reads and writes the tab's own storage when asked, apart from what the browser's tabs share", () => {
+    save("k", '["mine"]', "session");
+    expect(loadStrings("k", "session")).toEqual(["mine"]);
+    expect(load("k")).toBeUndefined();
+    save("k", undefined, "session");
+    expect(load("k", "session")).toBeUndefined();
   });
 });

@@ -218,7 +218,8 @@ describe("createProjector", () => {
       { type: "message", turnId: "t2", message: assistant([call("c2")]) },
     );
     const before = project(events);
-    const after = project([...events, { seq: 8, id: "e8", parent: "e7", at: 9000, data: toolResult("c2", "out") }]);
+    const result: SessionEvent = { seq: 8, id: "e8", parent: "e7", at: 9000, data: toolResult("c2", "out") };
+    const after = project([...events, result]);
     expect(after.turns[0]).toBe(before.turns[0]);
     const [a, b] = [before.turns[1]!, after.turns[1]!];
     expect(b).not.toBe(a);
@@ -226,9 +227,8 @@ describe("createProjector", () => {
     expect(b.items[1]).not.toBe(a.items[1]);
     const block = (b.items[1] as AssistantItem).blocks[0]!;
     expect(block.kind === "tool" && block.result?.content).toEqual([{ type: "text", text: "out" }]);
-    // Stable again once nothing changes.
-    const again = project([...events, { seq: 8, id: "e8", parent: "e7", at: 9000, data: toolResult("c2", "out") }]);
-    expect(again.turns[1]).toBe(b);
+    // The same events again, in a new array: the same transcript.
+    expect(project([...events, result])).toBe(after);
   });
 
   it("projects a branch carried on through events appended as it would project it whole, keeping what is unchanged", () => {
@@ -288,28 +288,38 @@ describe("createProjector", () => {
       }
     };
     const shape = (transcript: ReturnType<ReturnType<typeof createProjector>>) => JSON.parse(JSON.stringify(transcript));
+    /** Whether a call in `events` from `from` on comes after a result for it with no call before: a result shown on its own. */
+    const answersAlone = (events: readonly SessionEvent[], from: number) => {
+      const calls = new Set<string>();
+      const alone = new Set<string>();
+      return events.some(({ data }, at) => {
+        if (data.type !== "message" || data.message.role === "user") return false;
+        if (data.message.role === "toolResult") {
+          if (!calls.has(data.message.toolCallId)) alone.add(data.message.toolCallId);
+          return false;
+        }
+        const made = data.message.content.flatMap((part) => (part.type === "toolCall" ? [part.id] : []));
+        for (const id of made) calls.add(id);
+        return at >= from && made.some((id) => alone.has(id));
+      });
+    };
     for (let round = 0; round < 300; round++) {
       turns = 0;
       const events = branch(...Array.from({ length: 1 + pick(30) }, anyEvent));
       const project = createProjector();
-      // One array grown in place, as a caller that keeps its branch may pass it: each call sees the events pushed since.
-      const inPlace = createProjector();
-      const grown: SessionEvent[] = [];
-      let shown: ReturnType<typeof project> | undefined;
+      let shown: { readonly transcript: ReturnType<typeof project>; readonly end: number } | undefined;
       for (let end = pick(3); end <= events.length; end += 1 + pick(3)) {
         const next = project(events.slice(0, end));
         expect(shape(next), JSON.stringify(events.slice(0, end).map((event) => event.data))).toEqual(shape(createProjector()(events.slice(0, end))));
-        grown.push(...events.slice(grown.length, end));
-        expect(shape(inPlace(grown))).toEqual(shape(next));
-        // A turn that did not change is the same object, so a view keyed by it keeps its DOM. (Not when turns share a
-        // key, as two do when a turn is started with an id a prompt before it already named: the cache is by key.)
-        const keys = next.turns.map((turn) => turn.key);
-        if (shown !== undefined && new Set(keys).size === keys.length)
+        // A turn that did not change is the same object, so a view keyed by it keeps its DOM. (Unless a call appended
+        // answers a result shown on its own before it: the branch is folded afresh then, as reading it whole shows the
+        // result with its call.)
+        if (shown !== undefined && !answersAlone(events.slice(0, end), shown.end))
           next.turns.forEach((turn, at) => {
-            const before = shown!.turns[at];
+            const before = shown!.transcript.turns[at];
             if (before !== undefined && JSON.stringify(before) === JSON.stringify(turn)) expect(turn).toBe(before);
           });
-        shown = next;
+        shown = { transcript: next, end };
       }
     }
   });

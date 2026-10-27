@@ -275,7 +275,7 @@ do (as of Pi's docs at `c30840c`, 2026-10-05), in Lemma's shapes:
 | `pi.sendMessage()`, a `custom_message`           | Append a `context` event, which the model reads as a user message, with a `display` for the transcript                                 |
 | `pi.registerFlag()`                              | A `config` Schema: a row in `config.jsonc`, a settings form                                                                            |
 | `session_start`, `session_shutdown`              | Setup and `onCleanup`: a plugin runs once per host, keying what it does for a session by its id until `SessionRemoved`                 |
-| Session replacement, tree navigation             | Intercept `SessionCheckoutHook`; observe `SessionCheckedOut`                                                                           |
+| Session replacement, tree navigation             | `Sessions.checkout` (the `sessions.checkout` channel from a client); observe `SessionChanged`, whose `leaf` it moves                   |
 | `ctx.ui.notify()`                                | Publish a `Notice` from the host, or call `Notify` in a web half                                                                       |
 | `pi.registerCommand()`                           | `add(Commands, command)`: the palette and `lemma commands run`                                                                         |
 | `pi.registerShortcut()`                          | A web half's `Actions` item                                                                                                            |

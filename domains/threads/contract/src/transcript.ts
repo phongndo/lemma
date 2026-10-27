@@ -1,18 +1,16 @@
 import { addUsage, emptyUsage } from "@lemma/llm";
 import type { AssistantMessage, ImageContent, TextContent, ToolCall, ToolResultMessage, Usage } from "@lemma/llm";
-import type { SessionEvent, Timing, TurnEndReason } from "@lemma/sessions";
+import { createTurnProjector } from "@lemma/sessions";
+import type { SessionEvent, Timing, TurnEndReason, TurnFold } from "@lemma/sessions";
 import { endingText } from "./fold.ts";
 
 /**
- * Projection of a session branch into what the chat transcript renders.
- * Pure and view-agnostic, so a future Trajectory view can reuse the turns.
+ * Projection of a session branch into what the chat transcript renders: its turns, folded as the trajectory's are
+ * (`createTurnProjector` in `@lemma/sessions`).
  *
- * Object identity is part of the contract: `createProjector` reuses unchanged
- * items and blocks across calls so keyed lists in the UI keep their DOM (and
- * expanded/collapsed state) while the log grows. A branch that carries on the
- * last one it was given (the same events, more at the end) costs what was
- * appended, not the branch: it folds again from the earliest turn the new
- * events change, almost always the last.
+ * Object identity is part of the contract: as the log grows, `createProjector` keeps each turn, item, and block the
+ * events appended did not change, so keyed lists in the UI keep their DOM (and expanded/collapsed state). A branch that
+ * carries on the last one it was given (the same events, more at the end) costs what was appended, not the branch.
  */
 
 export interface ToolResultView {
@@ -27,9 +25,6 @@ export interface ToolResultView {
    */
   readonly stopped?: true;
 }
-
-/** What a cached block or item holding `result` changes with: which result it is, and whether the stop caused it. */
-const resultSignature = (result: ToolResultView | undefined): string => (result === undefined ? "" : `${result.eventId}${result.stopped ? ":stopped" : ""}`);
 
 export type Block =
   | { readonly kind: "text"; readonly key: string; readonly text: string }
@@ -127,50 +122,8 @@ interface Transcript {
   readonly title?: string;
 }
 
-interface Cache {
-  readonly get: <T>(key: string, signature: string, make: () => T) => T;
-  /** From here to `sweep`, what is used is all that is kept. */
-  readonly begin: () => void;
-  readonly sweep: () => void;
-}
-
-/**
- * Objects by key, kept while their signature holds. A projection of the whole branch keeps only what it used
- * (`begin`, `sweep`); one carried on through events appended keeps the rest too, and finds the newest first.
- */
-const makeCache = (): Cache => {
-  let kept = new Map<string, { signature: string; value: unknown }>();
-  let used = new Map<string, { signature: string; value: unknown }>();
-  return {
-    get: <T>(key: string, signature: string, make: () => T): T => {
-      const hit = used.get(key) ?? kept.get(key);
-      const entry = hit !== undefined && hit.signature === signature ? hit : { signature, value: make() };
-      used.set(key, entry);
-      return entry.value as T;
-    },
-    begin: () => {
-      for (const [key, entry] of used) kept.set(key, entry);
-      used = new Map();
-    },
-    sweep: () => {
-      kept = used;
-      used = new Map();
-    },
-  };
-};
-
-const identities = new WeakMap<object, number>();
-let nextIdentity = 0;
-/** A number unique to `value` for as long as it lives; lets signatures compare identities. */
-const identity = (value: object): number => {
-  let id = identities.get(value);
-  if (id === undefined) identities.set(value, (id = ++nextIdentity));
-  return id;
-};
-
+/** A turn as it is folded: its view's fields, and what the fold reads of it. */
 interface MutableTurn {
-  /** Where in the branch the event that made it is. */
-  readonly first: number;
   key: string;
   turnId: string | undefined;
   items: Item[];
@@ -185,8 +138,7 @@ interface MutableTurn {
   hasOutput: boolean;
 }
 
-const newTurn = (first: number, key: string, at: number, turnId?: string): MutableTurn => ({
-  first,
+const newTurn = (key: string, at: number, turnId?: string): MutableTurn => ({
   key,
   turnId,
   items: [],
@@ -201,12 +153,15 @@ const newTurn = (first: number, key: string, at: number, turnId?: string): Mutab
   hasOutput: false,
 });
 
+const toolBlock = (key: string, call: ToolCall, result: ToolResultView | undefined): Block =>
+  result === undefined ? { kind: "tool", key, call } : { kind: "tool", key, call, result };
+
 /**
  * A message's content as blocks. Adjacent thinking parts read as one thought:
  * a model may return its reasoning as several items in a row (each kept in
  * the log, as each is replayed on its own), which say one thing to a reader.
  */
-const blocksOf = (cache: Cache, eventId: string, message: AssistantMessage, results: ReadonlyMap<string, ToolResultView>): Block[] => {
+const blocksOf = (eventId: string, message: AssistantMessage, results: ReadonlyMap<string, ToolResultView>): Block[] => {
   const blocks: Block[] = [];
   const content = message.content;
   for (let index = 0; index < content.length; index++) {
@@ -214,165 +169,121 @@ const blocksOf = (cache: Cache, eventId: string, message: AssistantMessage, resu
     const key = `${eventId}:${index}`;
     switch (part.type) {
       case "text":
-        blocks.push(cache.get(key, "", () => ({ kind: "text", key, text: part.text })));
+        blocks.push({ kind: "text", key, text: part.text });
         break;
       case "thinking": {
         let end = index + 1;
         while (content[end]?.type === "thinking") end++;
         const run = content.slice(index, end) as Extract<AssistantMessage["content"][number], { type: "thinking" }>[];
-        blocks.push(
-          cache.get(key, String(run.length), () => ({
-            kind: "thinking",
-            key,
-            index,
-            text: run
-              .map((thought) => thought.thinking.trim())
-              .filter(Boolean)
-              .join("\n\n"),
-            redacted: run.every((thought) => thought.redacted === true),
-          })),
-        );
+        blocks.push({
+          kind: "thinking",
+          key,
+          index,
+          text: run
+            .map((thought) => thought.thinking.trim())
+            .filter(Boolean)
+            .join("\n\n"),
+          redacted: run.every((thought) => thought.redacted === true),
+        });
         index = end - 1;
         break;
       }
-      case "toolCall": {
-        const result = results.get(part.id);
-        blocks.push(
-          cache.get(key, resultSignature(result), () => (result === undefined ? { kind: "tool", key, call: part } : { kind: "tool", key, call: part, result })),
-        );
+      case "toolCall":
+        blocks.push(toolBlock(key, part, results.get(part.id)));
         break;
-      }
     }
   }
   return blocks;
 };
 
-/**
- * A projection under way: the branch it read, what it gathered from the whole branch (each call's result, and what a
- * result's stop depends on), and the turns folded so far. Carried on through events appended to the branch, it folds
- * again only from the earliest turn they change, which is almost always the last.
- */
-interface Fold {
-  readonly branch: readonly SessionEvent[];
-  /** How many of its events were folded: a caller may grow the branch it passed in place since. */
-  readonly read: number;
-  /** Each turn's last step, and the turns the person stopped: what makes a result the stop's (`ToolResultView.stopped`). */
-  readonly lastSteps: Map<string, string>;
-  readonly stoppedTurns: Set<string>;
-  /** Each call's result, the last logged for it, and the event it is. */
-  readonly results: Map<string, ToolResultView>;
-  readonly resultEvents: Map<string, SessionEvent>;
-  /** The calls whose results were logged in each turn, by its id: what its stop or a new step changes. */
-  readonly resultsIn: Map<string, string[]>;
-  readonly callIds: Set<string>;
-  turns: MutableTurn[];
-  current: MutableTurn | undefined;
-  title: string | undefined;
-  /** The first turn, by position, whose item holds each call; and each result shown on its own, its call not on the branch. */
-  readonly callTurn: Map<string, number>;
-  readonly orphanTurn: Map<string, number>;
-  views: TurnView[];
+/** The transcript's fold of a branch, and the title it ends with. */
+interface TranscriptFold extends TurnFold<MutableTurn> {
+  readonly title: string | undefined;
 }
 
-const emptyFold = (branch: readonly SessionEvent[]): Fold => ({
-  branch,
-  read: branch.length,
-  lastSteps: new Map(),
-  stoppedTurns: new Set(),
-  results: new Map(),
-  resultEvents: new Map(),
-  resultsIn: new Map(),
-  callIds: new Set(),
-  turns: [],
-  current: undefined,
-  title: undefined,
-  callTurn: new Map(),
-  orphanTurn: new Map(),
-  views: [],
-});
-
-/** Whether a result is the stop's: an error in the last step of a turn the person stopped. */
-const isStopped = (fold: Fold, event: SessionEvent): boolean => {
-  const data = event.data;
-  if (data.type !== "message" || data.message.role !== "toolResult") return false;
-  return (
-    data.message.isError &&
-    data.turnId !== undefined &&
-    fold.stoppedTurns.has(data.turnId) &&
-    data.stepId !== undefined &&
-    data.stepId === fold.lastSteps.get(data.turnId)
-  );
-};
-
-/** `event`'s result as a call's block shows it, its identity kept while it is the same. */
-const resultView = (cache: Cache, fold: Fold, event: SessionEvent): ToolResultView => {
-  const data = event.data as Extract<SessionEvent["data"], { type: "message" }>;
-  const message = data.message as ToolResultMessage;
-  const stopped = isStopped(fold, event);
-  return cache.get(`result:${event.id}`, stopped ? "stopped" : "", () => ({
-    eventId: event.id,
-    content: message.content,
-    isError: message.isError,
-    ...(data.details === undefined ? {} : { details: data.details }),
-    ...(data.timing === undefined ? {} : { timing: data.timing }),
-    ...(stopped ? { stopped: true as const } : {}),
-  }));
-};
-
 /**
- * Gathers from `events` (the branch from `from` on) what a call's block needs from the whole branch: the turns' last
- * steps and stops, then each call's result (the last logged for it wins). Returns the turns, by id, whose stop or
- * last step changed, whose results may now be the stop's or no longer.
+ * Folds a branch (`whole`, then what is appended to it) into the transcript's turns. A call shows its result, the last
+ * logged for it, whether logged before or after it; and an error in the last step of a turn the person stopped shows as
+ * the stop's. A result logged, a step started, or a stop changes the items that show the results it concerns, in place;
+ * a result whose call is not on the branch shows on its own, and the call made after it has the branch folded afresh.
  */
-const gather = (fold: Fold, from: number): Set<string> => {
-  const restopped = new Set<string>();
-  const { branch } = fold;
-  for (let at = from; at < branch.length; at++) {
-    const data = branch[at]!.data;
-    if (data.type === "step-start") {
-      fold.lastSteps.set(data.turnId, data.stepId);
-      restopped.add(data.turnId);
-    } else if (data.type === "turn-end" && data.reason === "cancelled") {
-      fold.stoppedTurns.add(data.turnId);
-      restopped.add(data.turnId);
-    }
-  }
-  for (let at = from; at < branch.length; at++) {
-    const event = branch[at]!;
+const foldTranscript = (whole: readonly SessionEvent[]): TranscriptFold => {
+  const turns: MutableTurn[] = [];
+  let current: MutableTurn | undefined;
+  let title: string | undefined;
+  /** The calls made on the branch: those of `whole`, then each made as the fold is fed. */
+  const callIds = new Set<string>();
+  for (const { data } of whole)
+    if (data.type === "message" && data.message.role === "assistant")
+      for (const part of data.message.content) if (part.type === "toolCall") callIds.add(part.id);
+  /** Calls whose result shows on its own: one made later is folded afresh, without it. */
+  const orphans = new Set<string>();
+  /** Each turn's last step, and the turns the person stopped: what makes a result the stop's (`ToolResultView.stopped`). */
+  const lastSteps = new Map<string, string>();
+  const stoppedTurns = new Set<string>();
+  /** Each call's result as shown, the last logged for it, and the event it is. */
+  const results = new Map<string, ToolResultView>();
+  const resultEvents = new Map<string, SessionEvent>();
+  /** The calls whose results were logged in each turn, by its id: what its stop or a new step changes. */
+  const resultsIn = new Map<string, string[]>();
+  /** Where each call shows: the turns, and the place in each, of the responses that made it. */
+  const holders = new Map<string, { readonly turn: MutableTurn; readonly index: number }[]>();
+
+  /** Whether a result is the stop's: an error in the last step of a turn the person stopped. */
+  const isStopped = (event: SessionEvent): boolean => {
     const data = event.data;
-    if (data.type !== "message") continue;
-    if (data.message.role === "assistant") {
-      for (const part of data.message.content) if (part.type === "toolCall") fold.callIds.add(part.id);
-      continue;
-    }
-    if (data.message.role !== "toolResult") continue;
-    const id = data.message.toolCallId;
-    fold.resultEvents.set(id, event);
-    if (data.turnId !== undefined) fold.resultsIn.set(data.turnId, [...(fold.resultsIn.get(data.turnId) ?? []), id]);
-  }
-  return restopped;
-};
-
-/** Notes that turn `turn` holds `id`: a call's id may be logged in more than one message, and the first is what is kept. */
-const earliest = (turns: Map<string, number>, id: string, turn: number) => {
-  const known = turns.get(id);
-  if (known === undefined || turn < known) turns.set(id, turn);
-};
-
-/** Folds the branch from `from` (where a turn starts, or the start) into the turns, from `fold.current` on. */
-const foldTurns = (cache: Cache, fold: Fold, from: number): void => {
-  const { branch, turns, results, callIds } = fold;
-  const ensure = (event: SessionEvent, at: number): MutableTurn => {
-    if (fold.current === undefined) {
-      fold.current = newTurn(at, event.id, event.at);
-      turns.push(fold.current);
-    }
-    return fold.current;
+    if (data.type !== "message" || data.message.role !== "toolResult") return false;
+    return (
+      data.message.isError &&
+      data.turnId !== undefined &&
+      stoppedTurns.has(data.turnId) &&
+      data.stepId !== undefined &&
+      data.stepId === lastSteps.get(data.turnId)
+    );
   };
-  const start = (event: SessionEvent, at: number, turnId?: string): MutableTurn => {
-    fold.current = newTurn(at, turnId ?? event.id, event.at, turnId);
-    turns.push(fold.current);
-    return fold.current;
+
+  /** Shows `id`'s result as it now is, in each response that made the call, unless it shows so already. */
+  const showResult = (id: string, changed: Set<MutableTurn>): void => {
+    const event = resultEvents.get(id)!;
+    const data = event.data as Extract<SessionEvent["data"], { type: "message" }>;
+    const message = data.message as ToolResultMessage;
+    const stopped = isStopped(event);
+    const shown = results.get(id);
+    if (shown !== undefined && shown.eventId === event.id && (shown.stopped === true) === stopped) return;
+    const result: ToolResultView = {
+      eventId: event.id,
+      content: message.content,
+      isError: message.isError,
+      ...(data.details === undefined ? {} : { details: data.details }),
+      ...(data.timing === undefined ? {} : { timing: data.timing }),
+      ...(stopped ? { stopped: true as const } : {}),
+    };
+    results.set(id, result);
+    for (const { turn, index } of holders.get(id) ?? []) {
+      const item = turn.items[index] as AssistantItem;
+      turn.items[index] = {
+        ...item,
+        blocks: item.blocks.map((block) => (block.kind === "tool" && block.call.id === id ? toolBlock(block.key, block.call, result) : block)),
+      };
+      changed.add(turn);
+    }
+  };
+  /** A stop or a new step in `turnId`: its results show as they now are. */
+  const restop = (turnId: string, changed: Set<MutableTurn>): void => {
+    for (const id of resultsIn.get(turnId) ?? []) showResult(id, changed);
+  };
+
+  const ensure = (event: SessionEvent): MutableTurn => {
+    if (current === undefined) {
+      current = newTurn(event.id, event.at);
+      turns.push(current);
+    }
+    return current;
+  };
+  const start = (event: SessionEvent, turnId?: string): MutableTurn => {
+    current = newTurn(turnId ?? event.id, event.at, turnId);
+    turns.push(current);
+    return current;
   };
   const recordCall = (turn: MutableTurn, message: AssistantMessage, timing: Timing | undefined) => {
     turn.usage = addUsage(turn.usage, message.usage);
@@ -383,18 +294,19 @@ const foldTurns = (cache: Cache, fold: Fold, from: number): void => {
     turn.hasOutput = true;
   };
 
-  for (let at = from; at < branch.length; at++) {
-    const event = branch[at]!;
+  const feed = (branch: readonly SessionEvent[], position: number): Set<MutableTurn> | "afresh" => {
+    const event = branch[position]!;
     const data = event.data;
-    const current = fold.current;
+    const changed = new Set<MutableTurn>();
     switch (data.type) {
       case "turn-start": {
         // The user message may be logged before or after turn-start; attach to a turn holding only that message.
         if (current !== undefined && current.turnId === undefined && current.hasUser && !current.hasOutput) {
           current.turnId = data.turnId;
           current.key = data.turnId;
+          changed.add(current);
         } else {
-          start(event, at, data.turnId);
+          start(event, data.turnId);
         }
         break;
       }
@@ -403,25 +315,26 @@ const foldTurns = (cache: Cache, fold: Fold, from: number): void => {
         if (turn !== undefined) {
           turn.end = { reason: data.reason, ...(data.error === undefined ? {} : { error: data.error }) };
           turn.endedAt = event.at;
+          changed.add(turn);
+        }
+        if (data.reason === "cancelled") {
+          stoppedTurns.add(data.turnId);
+          restop(data.turnId, changed);
         }
         break;
       }
+      case "step-start":
+        lastSteps.set(data.turnId, data.stepId);
+        restop(data.turnId, changed);
+        break;
       case "message": {
         const message = data.message;
         if (message.role === "user") {
           // A steer: a prompt placed in the running turn between its steps, shown where it joined.
           if (current !== undefined && current.hasUser && data.turnId !== undefined && current.turnId === data.turnId) {
             const steer = current.hasOutput;
-            current.items.push(
-              // Whether it is a steer is part of what it is: a call logged later can take an earlier result out of the way.
-              cache.get(event.id, steer ? "steer" : "", (): UserItem => ({
-                kind: "user",
-                id: event.id,
-                at: event.at,
-                content: message.content,
-                ...(steer ? { steer } : {}),
-              })),
-            );
+            current.items.push({ kind: "user", id: event.id, at: event.at, content: message.content, ...(steer ? { steer } : {}) });
+            changed.add(current);
             break;
           }
           const turn =
@@ -430,189 +343,135 @@ const foldTurns = (cache: Cache, fold: Fold, from: number): void => {
             !current.hasOutput &&
             (current.turnId === undefined || current.turnId === data.turnId || data.turnId === undefined)
               ? current
-              : start(event, at, data.turnId);
+              : start(event, data.turnId);
           turn.hasUser = true;
-          turn.items.push(cache.get(event.id, "", (): UserItem => ({ kind: "user", id: event.id, at: event.at, content: message.content })));
+          turn.items.push({ kind: "user", id: event.id, at: event.at, content: message.content });
+          changed.add(turn);
         } else if (message.role === "assistant") {
-          const turn = ensure(event, at);
-          const resultIds = message.content.map((part) => (part.type === "toolCall" ? resultSignature(results.get(part.id)) : "")).join(",");
-          turn.items.push(
-            cache.get(event.id, resultIds, (): AssistantItem => ({
-              kind: "assistant",
-              id: event.id,
-              at: event.at,
-              message,
-              blocks: blocksOf(cache, event.id, message, results),
-              ...(data.stepId === undefined ? {} : { stepId: data.stepId }),
-              ...(data.timing === undefined ? {} : { timing: data.timing }),
-            })),
-          );
-          for (const part of message.content) if (part.type === "toolCall") earliest(fold.callTurn, part.id, turns.length - 1);
+          const calls = new Set(message.content.flatMap((part) => (part.type === "toolCall" ? [part.id] : [])));
+          if ([...calls].some((id) => orphans.has(id))) return "afresh";
+          const turn = ensure(event);
+          for (const id of calls) {
+            callIds.add(id);
+            holders.set(id, [...(holders.get(id) ?? []), { turn, index: turn.items.length }]);
+          }
+          turn.items.push({
+            kind: "assistant",
+            id: event.id,
+            at: event.at,
+            message,
+            blocks: blocksOf(event.id, message, results),
+            ...(data.stepId === undefined ? {} : { stepId: data.stepId }),
+            ...(data.timing === undefined ? {} : { timing: data.timing }),
+          });
           recordCall(turn, message, data.timing);
-        } else if (!callIds.has(message.toolCallId)) {
-          ensure(event, at).items.push(cache.get(event.id, "", (): OrphanResultItem => ({ kind: "orphan-result", id: event.id, at: event.at, message })));
-          earliest(fold.orphanTurn, message.toolCallId, turns.length - 1);
+          changed.add(turn);
+        } else {
+          const id = message.toolCallId;
+          resultEvents.set(id, event);
+          if (data.turnId !== undefined) resultsIn.set(data.turnId, [...(resultsIn.get(data.turnId) ?? []), id]);
+          if (!callIds.has(id)) {
+            const turn = ensure(event);
+            turn.items.push({ kind: "orphan-result", id: event.id, at: event.at, message });
+            orphans.add(id);
+            changed.add(turn);
+          }
+          showResult(id, changed);
         }
         break;
       }
       case "attempt": {
-        const turn = ensure(event, at);
-        turn.items.push(
-          cache.get(event.id, "", (): AttemptItem => ({
-            kind: "attempt",
-            id: event.id,
-            at: event.at,
-            stepId: data.stepId,
-            message: data.message,
-            blocks: blocksOf(cache, event.id, data.message, new Map()),
-            timing: data.timing,
-          })),
-        );
+        const turn = ensure(event);
+        turn.items.push({
+          kind: "attempt",
+          id: event.id,
+          at: event.at,
+          stepId: data.stepId,
+          message: data.message,
+          blocks: blocksOf(event.id, data.message, new Map()),
+          timing: data.timing,
+        });
         recordCall(turn, data.message, data.timing);
         turn.steps--; // A retried call is not a step of its own.
+        changed.add(turn);
         break;
       }
       case "compaction": {
-        const turn = ensure(event, at);
+        const turn = ensure(event);
         // Writing the summary is part of what the turn cost.
         if (data.usage !== undefined) turn.usage = addUsage(turn.usage, data.usage);
-        turn.items.push(
-          cache.get(event.id, "", (): CompactionItem => ({
-            kind: "compaction",
-            id: event.id,
-            at: event.at,
-            summary: data.summary,
-            tokensBefore: data.tokensBefore,
-          })),
-        );
+        turn.items.push({ kind: "compaction", id: event.id, at: event.at, summary: data.summary, tokensBefore: data.tokensBefore });
+        changed.add(turn);
         break;
       }
       case "context": {
-        const turn = ensure(event, at);
+        const turn = ensure(event);
         const content = data.content.map((part) => (part.type === "text" ? part.text : "[image]")).join("\n");
-        turn.items.push(
-          cache.get(event.id, "", (): ContextItem => ({
-            kind: "context",
-            id: event.id,
-            at: event.at,
-            source: data.source,
-            text: data.display ?? content,
-            content,
-            ...(data.display === undefined ? {} : { display: data.display }),
-            ...(data.requestId === undefined ? {} : { requestId: data.requestId }),
-          })),
-        );
+        turn.items.push({
+          kind: "context",
+          id: event.id,
+          at: event.at,
+          source: data.source,
+          text: data.display ?? content,
+          content,
+          ...(data.display === undefined ? {} : { display: data.display }),
+          ...(data.requestId === undefined ? {} : { requestId: data.requestId }),
+        });
+        changed.add(turn);
         break;
       }
       case "title":
-        fold.title = data.title;
+        title = data.title;
         break;
       default:
         break;
     }
-  }
-};
-
-/** A turn as the transcript shows it, kept while it is the same (its items by identity). */
-const viewOf = (cache: Cache, turn: MutableTurn): TurnView => {
-  const signature = [
-    turn.key,
-    turn.turnId ?? "",
-    turn.endedAt ?? "",
-    turn.end?.reason ?? "",
-    turn.end?.error ?? "",
-    turn.steps,
-    ...turn.items.map(identity),
-  ].join("|");
-  return cache.get(`turn:${turn.key}`, signature, () => ({
-    key: turn.key,
-    ...(turn.turnId === undefined ? {} : { turnId: turn.turnId }),
-    items: turn.items,
-    startedAt: turn.startedAt,
-    ...(turn.endedAt === undefined ? {} : { endedAt: turn.endedAt }),
-    ...(turn.end === undefined ? {} : { end: turn.end }),
-    usage: turn.usage,
-    models: turn.models,
-    steps: turn.steps,
-    ...(turn.firstTokenMs === undefined ? {} : { firstTokenMs: turn.firstTokenMs }),
-  }));
-};
-
-const transcriptOfFold = (fold: Fold): Transcript => ({ turns: fold.views, ...(fold.title === undefined ? {} : { title: fold.title }) });
-
-/** Projects a whole root-to-leaf branch (see `branchOf`), keeping what is unchanged from the cache's last. */
-const projectWhole = (branch: readonly SessionEvent[], cache: Cache): Fold => {
-  cache.begin();
-  const fold = emptyFold(branch);
-  gather(fold, 0);
-  for (const [id, event] of fold.resultEvents) fold.results.set(id, resultView(cache, fold, event));
-  foldTurns(cache, fold, 0);
-  fold.views = fold.turns.map((turn) => viewOf(cache, turn));
-  cache.sweep();
-  return fold;
-};
-
-/**
- * Carries `fold` on through the events appended to its branch (`branch` extends it), folding again from the earliest
- * turn they change: the last, unless a result closes a call of an earlier turn, a call answers a result shown on its
- * own, an earlier turn ends, or a stop makes an earlier turn's errors its own.
- */
-const projectAppended = (fold: Fold, branch: readonly SessionEvent[], cache: Cache): Fold => {
-  const from = fold.read;
-  const next: Fold = { ...fold, branch, read: branch.length };
-  let earliest = Math.max(0, next.turns.length - 1);
-  const touch = (turn: number | undefined) => {
-    if (turn !== undefined) earliest = Math.min(earliest, turn);
+    return changed;
   };
-  const restopped = gather(next, from);
-  // The results logged now, and those of each turn whose stop or last step changed, are shown as they now are.
-  const changed = new Set<string>();
-  for (let at = from; at < branch.length; at++) {
-    const data = branch[at]!.data;
-    if (data.type === "message" && data.message.role === "toolResult") changed.add(data.message.toolCallId);
-    if (data.type === "message" && data.message.role === "assistant")
-      for (const part of data.message.content) if (part.type === "toolCall") touch(next.orphanTurn.get(part.id));
-    if (data.type === "turn-end") {
-      const ended = next.turns.findIndex((turn) => turn.turnId === data.turnId);
-      if (ended !== -1) touch(ended);
-    }
-  }
-  for (const turnId of restopped) for (const id of next.resultsIn.get(turnId) ?? []) changed.add(id);
-  for (const id of changed) {
-    const event = next.resultEvents.get(id)!;
-    const view = resultView(cache, next, event);
-    if (next.results.get(id) === view) continue;
-    next.results.set(id, view);
-    touch(next.callTurn.get(id));
-  }
-  // Fold again from where the earliest changed turn starts, after the turns before it.
-  const at = next.turns[earliest]?.first ?? 0;
-  next.turns = next.turns.slice(0, earliest);
-  next.current = next.turns.at(-1);
-  // The title is the last on the branch: what was folded before keeps its last, and the fold goes on from it.
-  foldTurns(cache, next, Math.min(at, from));
-  next.views = [...fold.views.slice(0, earliest), ...next.turns.slice(earliest).map((turn) => viewOf(cache, turn))];
-  return next;
+  return {
+    turns,
+    feed,
+    get title() {
+      return title;
+    },
+  };
 };
 
-/** A stateful projector for one session view; reuses unchanged objects between calls. */
+/** A turn as the transcript shows it: the view it had while it shows the same (its items by identity). */
+const viewOf = (turn: MutableTurn, before: TurnView | undefined): TurnView =>
+  before !== undefined &&
+  before.key === turn.key &&
+  before.turnId === turn.turnId &&
+  before.endedAt === turn.endedAt &&
+  before.end?.reason === turn.end?.reason &&
+  before.end?.error === turn.end?.error &&
+  before.steps === turn.steps &&
+  before.items.length === turn.items.length &&
+  turn.items.every((item, at) => item === before.items[at])
+    ? before
+    : {
+        key: turn.key,
+        ...(turn.turnId === undefined ? {} : { turnId: turn.turnId }),
+        items: [...turn.items],
+        startedAt: turn.startedAt,
+        ...(turn.endedAt === undefined ? {} : { endedAt: turn.endedAt }),
+        ...(turn.end === undefined ? {} : { end: turn.end }),
+        usage: turn.usage,
+        models: [...turn.models],
+        steps: turn.steps,
+        ...(turn.firstTokenMs === undefined ? {} : { firstTokenMs: turn.firstTokenMs }),
+      };
+
+/** A stateful projector for one session view; keeps what is unchanged between calls (above). */
 export const createProjector = (): ((branch: readonly SessionEvent[]) => Transcript) => {
-  const cache = makeCache();
-  let last: { readonly fold: Fold; readonly transcript: Transcript } | undefined;
+  let fold: TranscriptFold | undefined;
+  const project = createTurnProjector((branch) => (fold = foldTranscript(branch)), viewOf);
+  let last: Transcript | undefined;
   return (branch) => {
-    const before = last?.fold;
-    // The branch shown, grown at its end (a turn appending), whether a new array or the one before grown in place:
-    // carried on rather than projected whole.
-    const appended =
-      before !== undefined &&
-      before.read > 0 &&
-      branch.length >= before.read &&
-      branch[before.read - 1] === before.branch[before.read - 1] &&
-      branch[0] === before.branch[0];
-    if (appended && branch.length === before.read) return last!.transcript;
-    const fold = appended ? projectAppended(last!.fold, branch, cache) : projectWhole(branch, cache);
-    last = { fold, transcript: transcriptOfFold(fold) };
-    return last.transcript;
+    const turns = project(branch);
+    const title = fold!.title;
+    if (last?.turns !== turns || last.title !== title) last = { turns, ...(title === undefined ? {} : { title }) };
+    return last;
   };
 };
 

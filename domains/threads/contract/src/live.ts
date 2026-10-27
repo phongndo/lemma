@@ -35,17 +35,7 @@ export interface LiveState {
   readonly output: ReadonlyMap<string, string>;
   /** How much each running tool has printed in all, so a chunk the output already holds is not added twice. */
   readonly printed: ReadonlyMap<string, number>;
-  /**
-   * While a view of the running turn is on its way (`beginJoin`): the deltas
-   * and output that arrived meanwhile, held to be replayed over the view.
-   */
-  readonly joining?: readonly Held[];
 }
-
-/** An update held while joining. */
-type Held =
-  | { readonly kind: "delta"; readonly turnId: string; readonly stepId: string; readonly event: StreamEvent; readonly seq?: number }
-  | { readonly kind: "output"; readonly toolCallId: string; readonly chunk: string; readonly offset?: number };
 
 export const emptyLive: LiveState = { drafts: [], settled: new Set(), output: new Map(), printed: new Map() };
 
@@ -54,8 +44,6 @@ export const OUTPUT_TAIL_CHARS = 16 * 1024;
 
 /** A running tool printed `chunk`, after `offset` characters in all when known; the part the output already holds is skipped. */
 export const appendOutput = (state: LiveState, toolCallId: string, chunk: string, offset?: number): LiveState => {
-  if (state.joining !== undefined)
-    return { ...state, joining: [...state.joining, { kind: "output", toolCallId, chunk, ...(offset === undefined ? {} : { offset }) }] };
   const seen = state.printed.get(toolCallId) ?? 0;
   const start = offset ?? seen;
   const end = start + chunk.length;
@@ -66,16 +54,6 @@ export const appendOutput = (state: LiveState, toolCallId: string, chunk: string
   output.set(toolCallId, text.length > OUTPUT_TAIL_CHARS ? text.slice(-OUTPUT_TAIL_CHARS) : text);
   const printed = new Map(state.printed);
   printed.set(toolCallId, end);
-  return { ...state, output, printed };
-};
-
-/** The tool's result is logged: its live output is no longer shown. */
-export const dropOutput = (state: LiveState, toolCallId: string): LiveState => {
-  if (!state.output.has(toolCallId) && !state.printed.has(toolCallId)) return state;
-  const output = new Map(state.output);
-  output.delete(toolCallId);
-  const printed = new Map(state.printed);
-  printed.delete(toolCallId);
   return { ...state, output, printed };
 };
 
@@ -171,8 +149,6 @@ export const noteLogged = (finished: Finished, log: readonly SessionEvent[], fro
 /** Applies a stream event; one numbered at or below what the draft holds (it was seeded from a view) is skipped. */
 export const applyDelta = (state: LiveState, turnId: string, stepId: string, event: StreamEvent, seq?: number): LiveState => {
   if (state.settled.has(stepId)) return state;
-  if (state.joining !== undefined)
-    return { ...state, joining: [...state.joining, { kind: "delta", turnId, stepId, event, ...(seq === undefined ? {} : { seq }) }] };
   const index = state.drafts.findIndex((draft) => draft.stepId === stepId);
   const draft: StepDraft = index === -1 ? { turnId, stepId, blocks: [], finished: false, seq: 0 } : state.drafts[index]!;
   if (seq !== undefined && seq <= draft.seq) return state;
@@ -183,14 +159,6 @@ export const applyDelta = (state: LiveState, turnId: string, stepId: string, eve
   if (index === -1) drafts.push(next);
   else drafts[index] = next;
   return { ...state, drafts };
-};
-
-/** The durable event for `stepId` arrived: drop its draft and ignore stragglers. */
-export const settleStep = (state: LiveState, stepId: string): LiveState => {
-  if (state.settled.has(stepId) && !state.drafts.some((draft) => draft.stepId === stepId)) return state;
-  const settled = new Set(state.settled);
-  settled.add(stepId);
-  return { ...state, drafts: state.drafts.filter((draft) => draft.stepId !== stepId), settled };
 };
 
 /** Nothing more will stream for `turnId`: drops its drafts and ignores stragglers. */
@@ -218,10 +186,8 @@ const blockOf = (part: AssistantMessage["content"][number]): DraftBlock => {
 /**
  * What the agent says the running turn has produced so far (`agent.view`),
  * for a session opened or reconnected mid-turn: it replaces the draft of
- * that step and the running tools' output. Updates that arrived while it was
- * on its way are held (`beginJoin`) and replayed over it (`joinLive`), their
- * numbers and offsets skipping what it covers: a newer update alone says
- * nothing of what came before it, so it never stands in for the view.
+ * that step and the running tools' output. The updates that follow it go on
+ * from it, their numbers and offsets skipping what it covers.
  */
 export const seedLive = (state: LiveState, view: AgentView): LiveState => {
   const turnId = view.turnId;
@@ -275,25 +241,15 @@ export const reconcileLive = (state: LiveState, finished: Finished): LiveState =
   };
 };
 
-/** A view of the running turn has been asked for: deltas and output from now on are held until it arrives (`joinLive`). */
-export const beginJoin = (state: LiveState): LiveState => (state.joining !== undefined ? state : { ...state, joining: [] });
-
 /**
- * The view arrived (or, `undefined`, could not be had): it is applied
- * (`seedLive`), the updates held meanwhile replayed over it, and the result
- * checked against what is over as the log stands now (`finished`), since the
- * view and the log are fetched side by side and a view older than the log must
- * not bring back drafts or output the log already settled.
+ * A view of the running turn arrived (or, `undefined`, could not be had): it
+ * is applied (`seedLive`), and the result checked against what is over as the
+ * log stands now (`finished`), since the view and the log are fetched side by
+ * side and a view older than the log must not bring back drafts or output the
+ * log already settled.
  */
-export const joinLive = (state: LiveState, view: AgentView | undefined, finished: Finished): LiveState => {
-  const { joining = [], ...rest } = state;
-  let next: LiveState = view === undefined ? rest : seedLive(rest, view);
-  for (const held of joining) {
-    next =
-      held.kind === "delta" ? applyDelta(next, held.turnId, held.stepId, held.event, held.seq) : appendOutput(next, held.toolCallId, held.chunk, held.offset);
-  }
-  return reconcileLive(next, finished);
-};
+export const joinLive = (state: LiveState, view: AgentView | undefined, finished: Finished): LiveState =>
+  reconcileLive(view === undefined ? state : seedLive(state, view), finished);
 
 /** A draft's block as shown: where it starts in the stream, and whether it is the one being written now. */
 export interface DraftEntry {

@@ -66,7 +66,7 @@ export function createSender(host: SenderHost) {
     const key = host.key();
     const sent: Outgoing = { text: held.text, images: held.images, requestId: host.drafts.get(key)?.requestId ?? host.newRequestId() };
     host.outgoing.add(sent);
-    host.drafts.delete(key);
+    host.drafts.set(key, undefined);
     host.write({ text: "", images: [] });
     host.setSending(true);
     let ok = false;

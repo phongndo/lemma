@@ -27,7 +27,7 @@ export const termsOf = (branch: readonly SessionEvent[]): Readonly<Record<string
 
 export default definePlugin({
   id: "glossary",
-  uses: ["lemma/sessions@1", "lemma/tools@2"],
+  uses: ["lemma/sessions@2", "lemma/tools@2"],
   requires: { sessions: Sessions },
   setup: ({ sessions }, { add }) => {
     add(Tools, {
@@ -81,7 +81,7 @@ export default ({ defineWebPlugin, contracts: { Icon, Slots, Threads, ToolViews,
   defineWebPlugin({
     id: "glossary",
     api: 5,
-    uses: ["lemma/threads@1"],
+    uses: ["lemma/threads@2"],
     styles: `
       .glossary-view { flex: 1; min-height: 0; overflow: auto; padding: 32px 24px; }
       .glossary-view dl { max-width: var(--content); margin: 0 auto; }

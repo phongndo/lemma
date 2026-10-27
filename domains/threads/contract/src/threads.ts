@@ -52,12 +52,16 @@ export interface ThreadsService {
    */
   readonly pendingCwd: Accessor<string | undefined>;
   /**
-   * The prompts written in threads and not yet sent, by thread id: what the composer holds for each (it writes them,
-   * `setDraft`), so a list can show a new thread left mid-prompt as a draft. Their text is kept in this browser, and
-   * comes back after a reload, and another tab's arrive as it saves them; their images last while the page does. A
-   * thread's goes with it when it is deleted.
+   * The prompts written in threads and not yet sent, by thread id, and `""`'s, the new-thread page's with no thread
+   * shown: what the composer holds for each, which it writes (`setDraft`) and reads back (`draft`), so a list can show a
+   * new thread left mid-prompt as a draft. A list hears at once of a draft gained or lost, and of its changes a moment
+   * after the last. Their text is kept in this browser, and comes back after a reload, and another tab's arrive as it
+   * saves them; their images, a retry's request id, and `""`'s last while the page does. A thread's goes with it when it
+   * is deleted.
    */
   readonly drafts: Accessor<ReadonlyMap<string, ThreadDraft>>;
+  /** A thread's draft as it is now (`""` for the new-thread page's): `drafts` tells of a change a moment after it. */
+  readonly draft: (sessionId: string) => ThreadDraft | undefined;
   /** Keeps a thread's unsent prompt (`drafts`); one with no text and no images, or none, drops it. */
   readonly setDraft: (sessionId: string, draft: ThreadDraft | undefined) => void;
   /**
@@ -135,6 +139,8 @@ export class Threads extends Context.Service<Threads, ThreadsService>()("lemma-w
 export interface ThreadDraft {
   readonly text: string;
   readonly images: readonly ImageContent[];
+  /** Kept from a send that did not get through, so sending it again unchanged cannot place it twice; an edit drops it. */
+  readonly requestId?: string;
 }
 
 /** Holds something to send: text other than whitespace, or an image. What counts as a draft (`Threads.drafts`). */
@@ -519,9 +525,6 @@ export interface TurnOptionSource {
 
 export const TurnOptionSources = defineSlot<TurnOptionSource>("composer.turn-options");
 
-/** Under the composer: the workspace bar. */
-export const ComposerFooter = defineSlot<Region>("composer.footer");
-
 /**
  * Under a new thread's prompt, while nothing is sent: what the thread starts with and keeps (its mode, its project), in
  * one centered line, in order; a menu an item opens goes below it, centered on it (`placement: "bottom"`). Gone once
@@ -625,16 +628,6 @@ export interface ContextView {
 }
 
 export const ContextViews = defineSlot<ContextView>("chat.context");
-
-/** An inspector tab in the trajectory view, for the records `when` picks. */
-export interface TrajectoryTab {
-  readonly label: string;
-  readonly when: (record: LedgerRecord) => boolean;
-  readonly component: Component<{ readonly record: LedgerRecord }>;
-}
-
-/** Tabs added after the trajectory view's own for a selected record. A tool's `ToolViews` body is one already. */
-export const TrajectoryTabs = defineSlot<TrajectoryTab>("trajectory.tabs");
 
 /** An item in a trajectory record's context menu, after the view's own. */
 export interface TrajectoryAction {

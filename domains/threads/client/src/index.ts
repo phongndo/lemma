@@ -1,79 +1,19 @@
-import { batch, createEffect, createMemo, createSignal, on, untrack } from "solid-js";
+import { batch, createEffect, createMemo, createSignal } from "solid-js";
 import { PromptRefused, startPrompt } from "@lemma/agent/prompt";
 import { HostError } from "@lemma/contracts";
 import { AgentChannels } from "@lemma/agent";
-import { branchOf, SessionChannels, NewThreadRoute, ThreadRoute } from "@lemma/sessions";
+import { SessionChannels, NewThreadRoute, ThreadRoute } from "@lemma/sessions";
 import { isRoute } from "@lemma/router";
-import type { AgentActivity, PromptContent, QueuedPrompt, TurnOptions } from "@lemma/agent";
-import type { SessionEvent, SessionInfo, SessionMarks, SessionsChange } from "@lemma/sessions";
-import {
-  appendLog,
-  appendOutput,
-  applyDelta,
-  applySessionsChange,
-  attentionOf,
-  createFinished,
-  emptyLive,
-  endTurn,
-  isBlank,
-  isUnseenEnd,
-  joinLive,
-  LEAVING_MS,
-  logFailure,
-  newerQueue,
-  noteEnded,
-  noteLogged,
-  recentRequests,
-  reconcileLive,
-  resolveLeaf,
-  tells,
-  ThreadHolds,
-  ThreadWaits,
-  growBranch,
-  Threads,
-  THREADS_CONTRACT,
-  trackTurn,
-  upsertSession,
-  waitingOn,
-  waitingPrompts,
-  written,
-} from "@lemma/threads";
-import type { Finished, LiveState, KnownQueue, LogState, PromptAnswer, ThreadAttention, ThreadDraft, UnseenEnd, WalkedBranch } from "@lemma/threads";
+import type { PromptContent, TurnOptions } from "@lemma/agent";
+import type { SessionInfo, SessionMarks, SessionsChange } from "@lemma/sessions";
+import { applySessionsChange, isBlank, Threads, THREADS_CONTRACT, trackTurn, upsertSession } from "@lemma/threads";
+import type { PromptAnswer } from "@lemma/threads";
 import { PluginsFacts } from "@lemma/settings";
 import { Client, Notify, Router, Slots, defineWebPlugin } from "@lemma/web";
-import { load, loadJson, recordOf, save } from "@lemma/web/storage";
-
-/** How long a preloaded log stays fresh enough to open with (ms). */
-const PRELOAD_MS = 15_000;
-/** The blank threads this tab made (`made` below), in the tab's own storage. */
-const MADE_KEY = "lemma.threads.client.made";
-/** The unsent prompts' text, by thread (`Threads.drafts`). */
-const DRAFTS_KEY = "lemma.threads.client.drafts";
-/** How long after a draft's last change it is written to storage (ms). */
-const SAVE_MS = 400;
-const isTexts = recordOf((text): text is string => typeof text === "string");
-/** The turns' ends not looked at yet, by thread (`Threads.attention`), shared by this browser's tabs. */
-const UNSEEN_KEY = "lemma.threads.client.unseen";
-const isUnseen = recordOf(isUnseenEnd);
-/** At most this many unseen ends are kept in storage, the newest. */
-const UNSEEN_KEPT = 200;
-
-/** What this tab keeps across its reloads (`sessionStorage`): no other tab reads it. */
-const tabLoad = (key: string): string[] => {
-  try {
-    const value: unknown = JSON.parse(sessionStorage.getItem(key) ?? "[]");
-    return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : [];
-  } catch {
-    return [];
-  }
-};
-const tabSave = (key: string, value: readonly string[]) => {
-  try {
-    sessionStorage.setItem(key, JSON.stringify(value));
-  } catch {
-    // Storage off: kept for this page only.
-  }
-};
+import { createAttention } from "./attention.ts";
+import { manageBlankThreads } from "./blank.ts";
+import { createDrafts } from "./drafts.ts";
+import { followOpen } from "./follow.ts";
 
 /** A thread's id in an address from before threads had paths (`/#<id>`), if any; a malformed one reads as none. */
 const hashThread = (): string | undefined => {
@@ -91,7 +31,9 @@ const hashThread = (): string | undefined => {
  * address names the open thread (`/threads/<id>`): the active thread follows
  * it, so a link, back and forward, and a reload all open the thread they name.
  * It follows the host through `sessions.changes`, `agent.activity`, and the
- * open thread's `sessions.log`.
+ * open thread's `sessions.log`. Its parts are modules of their own: the drafts
+ * (`drafts.ts`), each thread's attention (`attention.ts`), the open thread
+ * (`follow.ts`), and this tab's blank threads (`blank.ts`).
  */
 export default defineWebPlugin({
   id: "threads.client",
@@ -105,100 +47,8 @@ export default defineWebPlugin({
     /** The last prompt a plugin answered instead of placing it, in whichever thread. */
     const [answered, setAnswered] = createSignal<PromptAnswer>();
     const [pendingCwd, setPendingCwd] = createSignal<string>();
-    /**
-     * The unsent prompts (`Threads.drafts`): their text kept in this browser, their images while the page lasts. `held`
-     * is the truth, at once; the signal is told at once when a thread gains or loses one, and a moment after the last
-     * change otherwise, so typing does not redraw every list that reads it at each key.
-     */
-    const held = new Map<string, ThreadDraft>(Object.entries(loadJson(DRAFTS_KEY, {}, isTexts)).map(([id, text]) => [id, { text, images: [] }] as const));
-    const [drafts, setDrafts] = createSignal<ReadonlyMap<string, ThreadDraft>>(new Map(held));
-    let telling: (() => void) | undefined;
-    const tell = () => {
-      telling?.();
-      telling = undefined;
-      setDrafts(new Map(held));
-    };
-    /**
-     * Drafts' texts not yet written to storage, by thread (undefined: none). They are written a moment after the last
-     * change, and as the page goes, merged into what storage holds then: another tab's drafts stay.
-     */
-    const unsaved = new Map<string, string | undefined>();
-    let saving: (() => void) | undefined;
-    const saveDrafts = () => {
-      saving?.();
-      saving = undefined;
-      if (unsaved.size === 0) return;
-      const kept: Record<string, string> = { ...loadJson(DRAFTS_KEY, {}, isTexts) };
-      for (const [id, text] of unsaved) {
-        if (text === undefined) delete kept[id];
-        else kept[id] = text;
-      }
-      unsaved.clear();
-      save(DRAFTS_KEY, JSON.stringify(kept));
-    };
-    plugin.listen(window, "pagehide", saveDrafts);
-    plugin.onCleanup(saveDrafts);
-    const setDraft = (sessionId: string, draft: ThreadDraft | undefined) => {
-      const was = held.get(sessionId);
-      const now = written(draft) ? draft : undefined;
-      if (now === undefined ? was === undefined : was?.text === now.text && was.images === now.images) return;
-      if (now === undefined) held.delete(sessionId);
-      else held.set(sessionId, { text: now.text, images: now.images });
-      if ((was === undefined) !== (now === undefined)) tell();
-      else telling ??= plugin.after(SAVE_MS, tell);
-      unsaved.set(sessionId, now !== undefined && now.text.trim() !== "" ? now.text : undefined);
-      saving ??= plugin.after(SAVE_MS, saveDrafts);
-    };
-    // Another tab's drafts, as it saves them: its text for each thread this tab has not changed since its last save.
-    plugin.listen(window, "storage", (event) => {
-      if (event.key !== DRAFTS_KEY) return;
-      const stored = loadJson(DRAFTS_KEY, {}, isTexts);
-      let changed = false;
-      for (const [id, text] of Object.entries(stored)) {
-        if (unsaved.has(id) || held.get(id)?.text === text) continue;
-        held.set(id, { text, images: held.get(id)?.images ?? [] });
-        changed = true;
-      }
-      for (const [id, draft] of held) {
-        if (unsaved.has(id) || id in stored || draft.images.length > 0) continue;
-        held.delete(id);
-        changed = true;
-      }
-      if (changed) tell();
-    });
-    // Event arrays and streaming drafts change often and are replaced wholesale.
-    const [events, setEvents] = createSignal<readonly SessionEvent[]>([], { equals: false });
-    const [log, setLog] = createSignal<LogState>({ loaded: true });
-    /** The open thread's drafts and running tools' output: only the thread shown keeps them, and opening one asks the agent for its own. */
-    const [live, setLive] = createSignal<LiveState>(emptyLive);
-    /** What is over of the open thread's live output: its log's events noted as they are appended, and the turns the agent ended. */
-    let finished: Finished = createFinished();
-    /** The open thread's queue as the agent last reported it, with its revision: an older report never replaces a newer. */
-    const [queue, setQueue] = createSignal<KnownQueue>();
-    /**
-     * Prompts that left the open thread's queue and may not be in its log yet, which reaches the page on a channel of
-     * its own: they still wait (`waitingPrompts`) until the log has them, or for `LEAVING_MS`. Not the ones withdrawn
-     * here (`withdrawn`), which are gone.
-     */
-    const [leaving, setLeaving] = createSignal<readonly QueuedPrompt[]>([]);
-    let withdrawn = new Set<string>();
-    const reportQueue = (report: KnownQueue) => {
-      const known = queue();
-      const next = newerQueue(known, report);
-      if (next === known) return;
-      const left = (known?.queue ?? []).filter(
-        (prompt) => !withdrawn.has(prompt.requestId) && !next.queue.some((queued) => queued.requestId === prompt.requestId),
-      );
-      batch(() => {
-        setQueue(next);
-        if (left.length === 0) return;
-        setLeaving((all) => [...all, ...left]);
-        plugin.after(LEAVING_MS, () => setLeaving((all) => all.filter((prompt) => !left.includes(prompt))));
-      });
-    };
+    const drafts = createDrafts(plugin, { list, loaded });
 
-    /** The last ended turn per session, so a late `turn-started` cannot mark it running again (see `trackTurn`). */
-    let endedTurns: Readonly<Record<string, string>> = {};
     /** The thread the address names; another page (settings) keeps the one it was opened over. */
     const routed = createMemo<string | undefined>((previous) => {
       const match = router.match();
@@ -218,192 +68,12 @@ export default defineWebPlugin({
       const session = active();
       return session === undefined || unsent(session);
     });
-    const leaf = createMemo(() => resolveLeaf(events(), active()?.leaf, active()?.lastSeq));
-    /** The log and leaf the branch was last read from, to go on from as the log grows. */
-    let walked: WalkedBranch | undefined;
-    /**
-     * The branch shown, root to leaf. A log grown at its end along the branch (a turn appending) extends the last one
-     * (`growBranch`): `branchOf` maps the whole log, and this runs on every event appended.
-     */
-    const branch = createMemo(() => {
-      const all = events();
-      const at = leaf();
-      const last = walked;
-      const next = (last === undefined ? undefined : growBranch(last, all, at)) ?? branchOf(all, at);
-      walked = { events: all, leaf: at, branch: next };
-      return next;
-    });
     const busy = createMemo(() => {
       const id = activeId();
       return id !== undefined && running().includes(id);
     });
+    const attention = createAttention(plugin, slots, { list, loaded, running, activeId });
 
-    // ---------------------------------------------------------------- attention
-
-    /** The person is looking at this window: the page shows, and its window has focus. */
-    const looking = () => document.visibilityState === "visible" && document.hasFocus();
-    const [attending, setAttending] = createSignal(looking());
-    const lookAgain = () => setAttending(looking());
-    plugin.listen(document, "visibilitychange", lookAgain);
-    plugin.listen(window, "focus", lookAgain);
-    plugin.listen(window, "blur", lookAgain);
-    /**
-     * Turns' ends not looked at yet, by thread: kept in this browser for this page's threads. Each change is written as
-     * itself into what storage holds (another tab's ends stay), and another tab's changes arrive the same way, for the
-     * threads this page lists.
-     */
-    const [unseen, setUnseen] = createSignal<Readonly<Record<string, UnseenEnd>>>({});
-    const readEnds = (text: string | null | undefined): Record<string, UnseenEnd> => {
-      try {
-        const value: unknown = JSON.parse(text ?? "{}");
-        return isUnseen(value) ? { ...value } : {};
-      } catch {
-        return {};
-      }
-    };
-    const writeEnds = (change: (ends: Record<string, UnseenEnd>) => void) => {
-      const ends = readEnds(load(UNSEEN_KEY));
-      change(ends);
-      // The newest only, so ends of threads no tab lists any more do not pile up.
-      const kept = Object.entries(ends)
-        .sort(([, a], [, b]) => b.at - a.at)
-        .slice(0, UNSEEN_KEPT);
-      save(UNSEEN_KEY, kept.length === 0 ? undefined : JSON.stringify(Object.fromEntries(kept)));
-    };
-    const listed = () => new Set(untrack(list).map((session) => session.id));
-    plugin.listen(window, "storage", (event) => {
-      if (event.key !== UNSEEN_KEY) return;
-      const before = readEnds(event.oldValue);
-      const after = readEnds(event.newValue);
-      const mine = listed();
-      const next = { ...untrack(unseen) };
-      let changed = false;
-      for (const [id, end] of Object.entries(after))
-        if (mine.has(id) && (before[id]?.at !== end.at || before[id]?.reason !== end.reason)) {
-          next[id] = end;
-          changed = true;
-        }
-      for (const id of Object.keys(before))
-        if (!(id in after) && id in next) {
-          delete next[id];
-          changed = true;
-        }
-      if (changed) setUnseen(next);
-    });
-    // Once the list is in, the ends kept for its threads are this page's.
-    createEffect(
-      on(loaded, (ready) => {
-        if (!ready) return;
-        const mine = listed();
-        const kept = Object.entries(readEnds(load(UNSEEN_KEY))).filter(([id]) => mine.has(id));
-        if (kept.length > 0) setUnseen({ ...Object.fromEntries(kept), ...untrack(unseen) });
-      }),
-    );
-    const markSeen = (sessionId?: string) => {
-      const now = untrack(unseen);
-      const ids = sessionId === undefined ? Object.keys(now) : sessionId in now ? [sessionId] : [];
-      if (ids.length === 0) return;
-      const next = { ...now };
-      for (const id of ids) delete next[id];
-      setUnseen(next);
-      writeEnds((ends) => {
-        for (const id of ids) delete ends[id];
-      });
-    };
-    /** The threads whose turn's end this page heard since their turn began: one that stops running unheard ended unseen. */
-    const heardEnd = new Set<string>();
-    /** A turn ended: one to tell of is there to see, unless its thread shows to the person now. */
-    const turnEnded = (sessionId: string, reason: Parameters<typeof tells>[0]) => {
-      heardEnd.add(sessionId);
-      if (!tells(reason)) return markSeen(sessionId);
-      if (sessionId === untrack(activeId) && untrack(attending)) return markSeen(sessionId);
-      const end = { reason, at: Date.now() };
-      setUnseen({ ...untrack(unseen), [sessionId]: end });
-      writeEnds((ends) => {
-        ends[sessionId] = end;
-      });
-    };
-    /** A turn began: the last one's end is left behind. Only the agent's word for it: `running` is also guessed from replies. */
-    const turnStarted = (sessionId: string) => {
-      heardEnd.delete(sessionId);
-      markSeen(sessionId);
-    };
-    // The thread shown, to a person looking, is seen (an end kept from before a reload, or another tab's, too); one that
-    // is gone has nothing to see.
-    createEffect(() => {
-      const id = activeId();
-      if (id !== undefined && attending() && id in unseen()) markSeen(id);
-    });
-    createEffect(() => {
-      if (!loaded()) return;
-      const known = new Set(list().map((session) => session.id));
-      const gone = Object.keys(untrack(unseen)).filter((id) => !known.has(id));
-      for (const id of gone) markSeen(id);
-    });
-    /** When this page saw each turn start, and each thread begin waiting: what attention counts from. */
-    const [startedAt, setStartedAt] = createSignal<Readonly<Record<string, number>>>({});
-    createEffect(
-      on(running, (now, before) => {
-        const started = now.filter((id) => !(before ?? []).includes(id));
-        // A turn that stopped with no end heard (the agent's activity fell behind): it ended, unseen.
-        for (const id of before ?? []) if (!now.includes(id) && !heardEnd.has(id)) turnEnded(id, "done");
-        const at = untrack(startedAt);
-        setStartedAt(
-          Object.fromEntries([...Object.entries(at).filter(([id]) => now.includes(id)), ...started.map((id) => [id, at[id] ?? Date.now()] as const)]),
-        );
-      }),
-    );
-    const waits = createMemo(() => {
-      const items = slots.list(ThreadWaits);
-      const waiting = new Map<string, string>();
-      for (const session of list()) {
-        const label = waitingOn(items, session.id);
-        if (label !== undefined) waiting.set(session.id, label);
-      }
-      return waiting;
-    });
-    // Derived with the waits rather than after them, so a thread begins waiting once, at one time: an effect would set
-    // it a moment later, and a reader in between would see a wait begin twice.
-    const waitingSince = createMemo<Readonly<Record<string, number>>>((at) => {
-      const now = Date.now();
-      return Object.fromEntries([...waits().keys()].map((id) => [id, at[id] ?? now] as const));
-    }, {});
-    const attention = createMemo((): ReadonlyMap<string, ThreadAttention> => {
-      const ends = unseen();
-      const turns = running();
-      const ids = new Set([...turns, ...waits().keys(), ...Object.keys(ends)]);
-      const now = Date.now();
-      const all = new Map<string, ThreadAttention>();
-      for (const id of ids) {
-        const found = attentionOf(
-          {
-            waiting: waits().get(id),
-            waitingSince: waitingSince()[id],
-            running: turns.includes(id),
-            runningSince: startedAt()[id],
-            unseen: ends[id],
-          },
-          now,
-        );
-        if (found !== undefined) all.set(id, found);
-      }
-      return all;
-    });
-    const activeQueue = createMemo<readonly QueuedPrompt[]>((previous) => waitingPrompts(queue()?.queue ?? [], leaving(), branch(), previous), []);
-    // One the log has placed leaves for good, as it arrives: `waitingPrompts` reads only the log's last turns, which
-    // move on past it.
-    createEffect(() => {
-      const left = leaving();
-      if (left.length === 0) return;
-      const placed = recentRequests(branch());
-      if (left.some((prompt) => placed.has(prompt.requestId))) setLeaving(left.filter((prompt) => !placed.has(prompt.requestId)));
-    });
-
-    const updateLive = (update: (state: LiveState) => LiveState): void => {
-      const current = live();
-      const next = update(current);
-      if (next !== current) setLive(next);
-    };
     const upsert = (info: SessionInfo) => setList((threads) => upsertSession(threads, info));
     /** Sessions deleted while the page is open. */
     const [removed, setRemoved] = createSignal<ReadonlySet<string>>(new Set());
@@ -417,6 +87,7 @@ export default defineWebPlugin({
       setRemoved((ids) => new Set(ids).add(sessionId));
       setList((threads) => threads.filter((session) => session.id !== sessionId));
     };
+    const open = followOpen(plugin, client, { activeId, active });
 
     /**
      * The list, from `sessions.changes`: on each `subscribed`, listed afresh,
@@ -431,9 +102,9 @@ export default defineWebPlugin({
         (threads) => {
           if (heard !== since) return;
           heard = undefined;
-          const shown = threads.filter((session) => !removed().has(session.id));
+          const listed = threads.filter((session) => !removed().has(session.id));
           batch(() => {
-            setList(since.reduce(applySessionsChange, shown));
+            setList(since.reduce(applySessionsChange, listed));
             setLoaded(true);
           });
         },
@@ -452,78 +123,13 @@ export default defineWebPlugin({
       }),
     );
 
-    /** Logs fetched before their thread opened (a link to it hovered): opening one follows on from it. */
-    const preloaded = new Map<string, { readonly at: number; readonly events: Promise<readonly SessionEvent[]> }>();
-    const fresh = (found: { readonly at: number } | undefined) => found !== undefined && Date.now() - found.at < PRELOAD_MS;
-    const preload = (sessionId: string) => {
-      if (sessionId === activeId() || fresh(preloaded.get(sessionId))) return;
-      for (const [id, found] of preloaded) if (!fresh(found)) preloaded.delete(id);
-      const events = client.channel.call(SessionChannels.events, { sessionId });
-      // A failed preload is only a missed head start: opening reads the whole log.
-      events.catch(() => preloaded.delete(sessionId));
-      preloaded.set(sessionId, { at: Date.now(), events });
-    };
-
-    // Deltas and tool output arrive many times a frame; they are applied together, once per frame, in order. A hidden
-    // tab gets no frames, so a long queue is applied at once instead.
-    const QUEUE_LIMIT = 256;
-    let deltas: Extract<AgentActivity, { type: "delta" | "tool-output" }>[] = [];
-    let frame: number | undefined;
-    function flushDeltas() {
-      if (frame !== undefined) cancelAnimationFrame(frame);
-      frame = undefined;
-      if (deltas.length === 0) return;
-      const pending = deltas;
-      deltas = [];
-      // Output comes on a stream of its own, so it can come after the log, or the agent, said its step or turn is over.
-      updateLive((state) =>
-        reconcileLive(
-          pending.reduce(
-            (next, event) =>
-              event.type === "delta"
-                ? applyDelta(next, event.turnId, event.stepId, event.event, event.seq)
-                : appendOutput(next, event.toolCallId, event.chunk, event.offset),
-            state,
-          ),
-          finished,
-        ),
-      );
-    }
-    plugin.onCleanup(() => {
-      if (frame !== undefined) cancelAnimationFrame(frame);
-    });
-
-    /**
-     * The open thread's model and tool output (`agent.output`). It opens, and
-     * opens again after a reconnect, with what the agent has of the thread
-     * beyond its log (a turn running since before this page saw it: its output
-     * so far; and the queue), so a thread opened or reconnected midway shows it
-     * all, and the numbered deltas that follow go on from it. That may be older
-     * than the log that arrived first, so it is checked against the log as it
-     * stands.
-     */
-    const followOutput = (sessionId: string) =>
-      client.follow(AgentChannels.output, { sessionId }, (element) => {
-        if (element.type !== "subscribed") {
-          deltas.push(element);
-          if (deltas.length >= QUEUE_LIMIT) flushDeltas();
-          else frame ??= requestAnimationFrame(flushDeltas);
-          return;
-        }
-        const { view } = element;
-        batch(() => {
-          // What streamed before it is older: it applies first.
-          flushDeltas();
-          updateLive((state) => joinLive(state, view, finished));
-          if (view !== undefined) reportQueue({ queue: view.queue, revision: view.queueRevision });
-        });
-      });
-
-    // Every thread's turns and queue; only the open thread's output, on a stream of its own (`followOutput`).
+    /** The last ended turn per session, so a late `turn-started` cannot mark it running again (see `trackTurn`). */
+    let endedTurns: Readonly<Record<string, string>> = {};
+    // Every thread's turns and queue; only the open thread's output, on a stream of its own (`followOpen`).
     plugin.onCleanup(
       client.follow(AgentChannels.activity, { output: false }, (activity) => {
         // What the open thread streamed before it comes first.
-        flushDeltas();
+        open.flush();
         switch (activity.type) {
           case "subscribed":
             // Heard from now on; what came before is the turns running now.
@@ -531,127 +137,36 @@ export default defineWebPlugin({
             return;
           case "turn-started":
             // A late start of a turn already over is not a new turn.
-            if (endedTurns[activity.sessionId] !== activity.turnId) turnStarted(activity.sessionId);
+            if (endedTurns[activity.sessionId] !== activity.turnId) attention.turnStarted(activity.sessionId);
             setRunning(trackTurn({ running: running(), ended: endedTurns }, activity).running);
             return;
           case "queue-changed":
-            if (activity.sessionId === activeId()) reportQueue({ queue: activity.queue, revision: activity.revision });
+            if (activity.sessionId === activeId()) open.reportQueue({ queue: activity.queue, revision: activity.revision });
             return;
           case "turn-ended": {
             const next = trackTurn({ running: running(), ended: endedTurns }, activity);
             endedTurns = next.ended;
             batch(() => {
               setRunning(next.running);
-              turnEnded(activity.sessionId, activity.reason);
+              attention.turnEnded(activity.sessionId, activity.reason);
             });
-            if (activity.sessionId !== activeId()) return;
-            noteEnded(finished, activity.turnId);
-            updateLive((state) => endTurn(state, activity.turnId));
+            if (activity.sessionId === activeId()) open.turnEnded(activity.turnId);
             return;
           }
         }
       }),
     );
 
-    /** The open thread's `sessions.log`, and its `agent.output`. */
-    let stopLog: (() => void) | undefined;
-    let stopOutput: (() => void) | undefined;
-    plugin.onCleanup(() => {
-      stopLog?.();
-      stopOutput?.();
-    });
-    /** Settles once the active thread's log has first loaded. */
-    let opened: Promise<void> = Promise.resolve();
-    /** Follows the log of the thread the address names, and what the agent has of it, in place of the last one's. */
-    const open = (sessionId: string | undefined) => {
-      stopLog?.();
-      stopOutput?.();
-      stopLog = stopOutput = undefined;
-      // What streamed belongs to the thread left.
-      deltas = [];
-      batch(() => {
-        setEvents([]);
-        setLog({ loaded: sessionId === undefined });
-        setLive(emptyLive);
-        finished = createFinished();
-        setQueue(undefined);
-        setLeaving([]);
-        withdrawn = new Set();
-      });
-      if (sessionId === undefined) {
-        opened = Promise.resolve();
-        return;
-      }
-      let first!: () => void;
-      opened = new Promise((resolve) => (first = resolve));
-      const append = (incoming: readonly SessionEvent[]) => {
-        const before = untrack(events);
-        const next = appendLog(before, incoming);
-        if (next === before) return;
-        setEvents(next);
-        // Only what was appended is read: what is over of the rest was noted as it came.
-        noteLogged(finished, next, before.length);
-        updateLive((state) => reconcileLive(state, finished));
-      };
-      // Leaving the thread settles `opened` too, so a `select` of it never waits on a log no longer read.
-      let left = false;
-      stopLog = () => {
-        left = true;
-        first();
-      };
-      const follow = (head: readonly SessionEvent[]) => {
-        if (left) return;
-        if (head.length > 0) {
-          batch(() => {
-            append(head);
-            setLog({ loaded: true });
-          });
-          first();
-        }
-        // The log after the last event this page has, then each one appended: again after a reconnect or a reload.
-        const unfollow = client.follow(
-          SessionChannels.log,
-          () => ({ sessionId, after: untrack(events).at(-1)?.seq ?? 0 }),
-          (update) => {
-            batch(() => {
-              append(update.type === "subscribed" ? update.events : [update.event]);
-              if (update.type === "subscribed") setLog({ loaded: true });
-            });
-            first();
-          },
-          (error) => {
-            // A reload opens it again at once, a dropped connection once it is back, and the channel not served
-            // (`sessions` being replaced) once it is listed, each from the last event this page has; what else ends it
-            // is said (`logFailure`).
-            if (error instanceof HostError && error.code === "Withdrawn") return;
-            const failure = logFailure(error);
-            if (failure !== undefined) setLog({ loaded: true, error: failure });
-            first();
-          },
-        );
-        stopLog = () => {
-          unfollow();
-          first();
-        };
-      };
-      const warm = preloaded.get(sessionId);
-      preloaded.delete(sessionId);
-      if (fresh(warm)) warm!.events.then(follow, () => follow([]));
-      else follow([]);
-      stopOutput = followOutput(sessionId);
-    };
-    createEffect(on(activeId, open));
-
     const href = (sessionId: string, view?: string) => router.href(ThreadRoute, { id: sessionId, ...(view === undefined ? {} : { view }) });
     const select = async (sessionId: string | undefined): Promise<void> => {
       // The thread as it was left: what beside its chat shows is its own (`Pane`), not the address's.
       router.navigate(sessionId === undefined ? router.href(NewThreadRoute, {}) : href(sessionId));
-      await opened;
+      await open.opened();
     };
-    /** Goes to a new thread, in its first view; `replace`, in place of the address shown. */
+    /** Goes to a thread, in its first view; `replace`, in place of the address shown. */
     const go = async (sessionId: string, replace = false): Promise<void> => {
       router.navigate(href(sessionId), { replace });
-      await opened;
+      await open.opened();
     };
 
     /** A new, empty session in `cwd` (the host's directory when absent), listed; undefined, and reported, when it fails. */
@@ -686,147 +201,24 @@ export default defineWebPlugin({
         return false;
       }
     };
-    /**
-     * The blank threads this tab made, kept across its reloads and seen by no other tab: the new-thread page lands on
-     * one of these, and only these are moved or deleted here, never one another tab or window or a script (`lemma
-     * sessions new`) made. One a closed tab left goes on the host once it has been empty a while (`SessionMarks.kept`).
-     */
-    const made = new Set(tabLoad(MADE_KEY));
-    /** Told each change to `made`, for what follows which blank threads are this tab's. */
-    const [madeChanged, setMadeChanged] = createSignal(0);
-    const keepMade = () => {
-      tabSave(MADE_KEY, [...made]);
-      setMadeChanged((count) => count + 1);
-    };
-    /** The new threads being made, by directory: asked for again meanwhile, the one under way is the answer. */
-    const making = new Map<string, Promise<SessionInfo | undefined>>();
-    const tab = (cwd: string | undefined): Promise<SessionInfo | undefined> => {
-      const key = cwd ?? "";
-      const pending = making.get(key);
-      if (pending !== undefined) return pending;
-      const made_ = create(cwd)
-        .then((info) => {
-          if (info !== undefined) {
-            made.add(info.id);
-            keepMade();
-          }
-          return info;
-        })
-        .finally(() => making.delete(key));
-      making.set(key, made_);
-      return made_;
-    };
-    // One no longer blank (or gone) is no longer a tab to land on.
-    createEffect(() => {
-      if (!loaded()) return;
-      const blanks = new Set(
-        list()
-          .filter(isBlank)
-          .map((session) => session.id),
-      );
-      const before = made.size;
-      for (const id of made) if (!blanks.has(id)) made.delete(id);
-      if (made.size !== before) keepMade();
-    });
-    // A deleted thread's draft goes with it.
-    createEffect(() => {
-      if (!loaded()) return;
-      const known = new Set(list().map((session) => session.id));
-      // Deleting while iterating a Map is safe: the iteration goes on past each deleted key.
-      for (const id of held.keys()) if (!known.has(id)) setDraft(id, undefined);
-    });
-    /** Something is kept for a thread: a draft, or what a plugin holds for it (`ThreadHolds`: a page in its pane). */
-    const keeps = (sessionId: string) => drafts().has(sessionId) || slots.list(ThreadHolds).some((hold) => hold.holds(sessionId));
-    // The host keeps a blank thread made here while something is kept for it, and lets one go once nothing is
-    // (`SessionMarks.kept`): left in a tab that closed, it goes there once it has been empty a while.
-    const marking = new Set<string>();
-    createEffect(() => {
-      if (!loaded()) return;
-      madeChanged();
-      for (const session of list()) {
-        if (!made.has(session.id) || !isBlank(session) || marking.has(session.id)) continue;
-        const kept = keeps(session.id);
-        if ((session.kept === true) === kept) continue;
-        marking.add(session.id);
-        client.channel
-          .call(SessionChannels.mark, { sessionId: session.id, kept })
-          .then(upsert, () => {
-            // Gone meanwhile, or the host away: tried again on the next change.
-          })
-          .finally(() => marking.delete(session.id));
-      }
-    });
-    // A blank thread made here, left with nothing kept for it, goes, as a tab closed does: new threads do not pile up
-    // on the host. Not for the new-thread page, which lands on it again.
-    createEffect(
-      on(activeId, (id, left) => {
-        if (left === undefined || id === undefined || left === id) return;
-        const session = untrack(list).find((candidate) => candidate.id === left);
-        if (session === undefined || !made.has(left) || !unsent(session) || untrack(() => keeps(left))) return;
-        // Quietly: one in use meanwhile (Busy) stays.
-        client.channel.call(SessionChannels.delete, { sessionId: left }).then(
-          () => forget(left),
-          () => {},
-        );
-      }),
-    );
-    /** The blank threads being moved, so asking again while one is under way waits for it rather than racing it. */
-    const moving = new Map<string, Promise<void>>();
-    const newThread = async (cwd?: string, options: { readonly inPlace?: boolean } = {}): Promise<void> => {
-      const shown = active();
-      const dir = cwd ?? pendingCwd() ?? shown?.cwd;
-      const over = options.inPlace === true && shown !== undefined && unsent(shown) && made.has(shown.id) ? shown : undefined;
-      // Nowhere said yet (the workspace not yet known): the new-thread page, which makes one once there is somewhere.
-      if (over === undefined && dir === undefined) return select(undefined);
-      if (over === undefined) {
-        // One new thread per directory: an empty one made here is gone to rather than another made beside it. One with a
-        // prompt written in it is held as a draft, not empty.
-        const empty = [...(shown === undefined ? [] : [shown]), ...list()].find(
-          (session) => made.has(session.id) && unsent(session) && !drafts().has(session.id) && session.archived !== true && session.cwd === dir,
-        );
-        if (empty !== undefined) {
-          if (router.matchOf(ThreadRoute)?.params.id !== empty.id) await go(empty.id);
-          return;
-        }
-        const info = await tab(dir);
-        if (info !== undefined) await go(info.id);
-        return;
-      }
-      // Already there: it is the new thread, gone to from wherever is shown (settings, say).
-      if (over.cwd === dir || dir === undefined) {
-        if (router.matchOf(ThreadRoute)?.params.id !== over.id) await go(over.id);
-        return;
-      }
-      const pending = moving.get(over.id);
-      if (pending !== undefined) return pending;
-      const done = relocate(over.id, dir)
-        .then(() => {})
-        .finally(() => moving.delete(over.id));
-      moving.set(over.id, done);
-      return done;
-    };
-
-    // The new-thread page shows a blank thread: the newest made here with nothing written in it, else one made once there
-    // is somewhere to start it (`pendingCwd`), which the list then holds. Until then, or with nothing to say where, its
-    // first prompt creates it. A place it could not be made in is not tried again until there is another.
-    let landing = false;
-    let failedIn: string | undefined;
-    createEffect(() => {
-      if (router.matchOf(NewThreadRoute) === undefined || !loaded()) return;
-      const newest = list()
-        .filter((session) => made.has(session.id) && isBlank(session) && !drafts().has(session.id) && session.archived !== true)
-        .reduce<SessionInfo | undefined>((best, session) => (best === undefined || session.createdAt > best.createdAt ? session : best), undefined);
-      if (newest !== undefined) return void router.navigate(href(newest.id), { replace: true });
-      const cwd = pendingCwd();
-      if (cwd === undefined || landing || cwd === failedIn) return;
-      landing = true;
-      void tab(cwd)
-        .then((info) => {
-          failedIn = info === undefined ? cwd : undefined;
-          // Made, it is gone to: the list held it before it was known to be made here.
-          if (info !== undefined && router.matchOf(NewThreadRoute) !== undefined) router.navigate(href(info.id), { replace: true });
-        })
-        .finally(() => (landing = false));
+    const blanks = manageBlankThreads({
+      client,
+      slots,
+      list,
+      loaded,
+      activeId,
+      active,
+      pendingCwd,
+      drafted: (sessionId) => drafts.drafts().has(sessionId),
+      unsent,
+      addressed: () => router.matchOf(ThreadRoute)?.params.id,
+      onNewThreadPage: () => router.matchOf(NewThreadRoute) !== undefined,
+      go,
+      select,
+      create,
+      relocate,
+      forget,
+      upsert,
     });
 
     // An address from before threads had paths (`/#<id>`) becomes the thread's own.
@@ -867,7 +259,7 @@ export default defineWebPlugin({
       } else if (options.cwd !== undefined && options.cwd !== shown.cwd && unsent(shown)) {
         // A first prompt for elsewhere (its own worktree): the blank thread moves there. One another window or a script
         // made is not this one's to move: a new thread there takes the prompt, and is gone to.
-        if (made.has(shown.id)) {
+        if (blanks.madeHere(shown.id)) {
           if (!(await relocate(shown.id, options.cwd))) return false;
           id = shown.id;
         } else {
@@ -878,8 +270,7 @@ export default defineWebPlugin({
         }
       } else id = shown.id;
       setAnswered(undefined);
-      // A prompt sent starts a turn, whose end is the one to hear.
-      heardEnd.delete(id);
+      attention.sent(id);
       if (!running().includes(id)) setRunning((current) => [...current, id]);
       const prompt = startPrompt(client, id, content, options.turn, {
         whenBusy: options.whenBusy ?? "steer",
@@ -934,21 +325,20 @@ export default defineWebPlugin({
         loaded,
         activeId,
         active,
-        branch,
-        log,
-        live,
+        branch: open.branch,
+        log: open.log,
+        live: open.live,
         running,
         busy,
-        attention,
-        markSeen,
+        attention: attention.attention,
+        markSeen: attention.markSeen,
         blank,
         pendingCwd,
-        drafts,
-        setDraft,
+        ...drafts,
         select,
         href,
-        preload,
-        newThread,
+        preload: open.preload,
+        newThread: blanks.newThread,
         startIn: setPendingCwd,
         rename: async (sessionId: string, title: string) => {
           const trimmed = title.trim();
@@ -980,7 +370,7 @@ export default defineWebPlugin({
         },
         remove,
         send,
-        queue: activeQueue,
+        queue: open.queue,
         answer: () => {
           const last = answered();
           return last !== undefined && last.sessionId === (activeId() ?? "") ? last : undefined;
@@ -989,9 +379,7 @@ export default defineWebPlugin({
         withdraw: async (requestId: string) => {
           const sessionId = activeId();
           if (sessionId === undefined) return;
-          // Gone once the agent has it out, not kept waiting for a log that will never have it.
-          withdrawn.add(requestId);
-          setLeaving((all) => all.filter((prompt) => prompt.requestId !== requestId));
+          open.withdrawing(requestId);
           try {
             await client.channel.call(AgentChannels.withdraw, { sessionId, requestId });
           } catch (error) {

@@ -1,9 +1,8 @@
 import { describe, expect, test } from "vitest";
-import { Effect, Exit, Layer } from "effect";
-import { SessionError, SessionRemoveHook, Sessions, SessionChannels } from "@lemma/sessions";
+import { Effect, Exit, Scope } from "effect";
+import { Sessions, SessionChannels } from "@lemma/sessions";
 import type { ChannelInfo } from "@lemma/contracts";
 import type { EventData, RequestView, SessionEvent, SessionInfo, SessionRecords } from "@lemma/sessions";
-import { definePlugin, PluginContext } from "@lemma/core";
 import { pathsPlugin } from "@lemma/contracts/testing";
 import sessions from "../src/index.ts";
 import { call, collect, hostError, open, served } from "./served.ts";
@@ -12,19 +11,6 @@ import { call, collect, hostError, open, served } from "./served.ts";
 type AssistantMessage = Extract<Extract<EventData, { readonly type: "message" }>["message"], { readonly role: "assistant" }>;
 
 const withSessions = <A, E>(body: Parameters<typeof served<A, E>>[1]) => served((home) => [pathsPlugin(home, { cwd: "/work" }), sessions], body);
-
-/** Refuses to remove `kept`, as a `SessionRemoveHook` handler may. */
-const keeper = (kept: { id?: string }) =>
-  definePlugin({
-    id: "keeper",
-    layer: Layer.effectDiscard(
-      Effect.flatMap(PluginContext, (owner) =>
-        owner.on(SessionRemoveHook, (input, next) =>
-          input.sessionId === kept.id ? Effect.fail(new SessionError({ sessionId: input.sessionId, reason: "Busy", message: "kept" })) : next(input),
-        ),
-      ).pipe(Effect.orDie),
-    ),
-  });
 
 describe("the sessions channels, through the transport", () => {
   test("are listed with their titles, served by the sessions plugin", () =>
@@ -85,25 +71,22 @@ describe("the sessions channels, through the transport", () => {
       }),
     ));
 
-  test("a removal a SessionRemoveHook handler refuses fails with its code, for a client and for a plugin alike, and keeps the session", () => {
-    const kept: { id?: string } = {};
-    return served(
-      (home) => [pathsPlugin(home), sessions, keeper(kept)],
-      (client, core) =>
-        Effect.gen(function* () {
-          const { id } = (yield* call(client, "sessions.create", {})) as SessionInfo;
-          kept.id = id;
-          expect(hostError(yield* Effect.exit(call(client, "sessions.delete", { sessionId: id })))).toMatchObject({ code: "Busy", subject: id });
-          const removed = yield* Effect.exit(core.run(Effect.flatMap(Sessions, (store) => store.remove(id))));
-          expect(Exit.isFailure(removed) && Exit.findErrorOption(removed)).toMatchObject({ _tag: "Some", value: { reason: "Busy", sessionId: id } });
-          expect(yield* call(client, "sessions.get", { sessionId: id })).toMatchObject({ id });
+  test("a removal of a held session fails Busy, for a client and for a plugin alike, and keeps the session", () =>
+    withSessions((client, core) =>
+      Effect.gen(function* () {
+        const { id } = (yield* call(client, "sessions.create", {})) as SessionInfo;
+        const scope = yield* Scope.make();
+        yield* core.run(Effect.flatMap(Sessions, (store) => store.hold(id).pipe(Scope.provide(scope))));
+        expect(hostError(yield* Effect.exit(call(client, "sessions.delete", { sessionId: id })))).toMatchObject({ code: "Busy", subject: id });
+        const removed = yield* Effect.exit(core.run(Effect.flatMap(Sessions, (store) => store.remove(id))));
+        expect(Exit.isFailure(removed) && Exit.findErrorOption(removed)).toMatchObject({ _tag: "Some", value: { reason: "Busy", sessionId: id } });
+        expect(yield* call(client, "sessions.get", { sessionId: id })).toMatchObject({ id });
 
-          const { id: other } = (yield* call(client, "sessions.create", {})) as SessionInfo;
-          yield* call(client, "sessions.delete", { sessionId: other });
-          expect(hostError(yield* Effect.exit(call(client, "sessions.get", { sessionId: other })))).toMatchObject({ code: "NotFound" });
-        }),
-    );
-  });
+        yield* Scope.close(scope, Exit.void);
+        yield* call(client, "sessions.delete", { sessionId: id });
+        expect(hostError(yield* Effect.exit(call(client, "sessions.get", { sessionId: id })))).toMatchObject({ code: "NotFound" });
+      }),
+    ));
 
   test("changes start with subscribed, then report every session created, changed, and removed, an append as its new lastSeq", () =>
     withSessions((client) =>

@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { ATTENTION_RANK, attentionOf, isUnseenEnd, needsYou, tells } from "../src/attention.ts";
-import type { AttentionState } from "../src/attention.ts";
+import { attentionOf, isUnseenEnd, tells } from "../src/attention.ts";
 
 describe("attentionOf", () => {
   it("puts what waits on the person above a running turn, and a running turn above a turn's end", () => {
@@ -26,21 +25,9 @@ describe("attentionOf", () => {
   });
 });
 
-describe("tells and needsYou", () => {
+describe("tells", () => {
   it("tells of every end but one the person cancelled", () => {
     expect(["done", "error", "max-steps", "cancelled"].filter((reason) => tells(reason as never))).toEqual(["done", "error", "max-steps"]);
-  });
-
-  it("needs the person for all but a thread at work", () => {
-    expect(needsYou(undefined)).toBe(false);
-    expect(needsYou({ state: "working", label: "Working", since: 0 })).toBe(false);
-    expect(needsYou({ state: "done", label: "Done", since: 0 })).toBe(true);
-    expect(needsYou({ state: "waiting", label: "Needs input", since: 0 })).toBe(true);
-  });
-
-  it("ranks waiting first and work last", () => {
-    const states: AttentionState[] = ["working", "done", "waiting", "failed"];
-    expect(states.sort((a, b) => ATTENTION_RANK[a] - ATTENTION_RANK[b])).toEqual(["waiting", "failed", "done", "working"]);
   });
 });
 

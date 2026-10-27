@@ -3,7 +3,7 @@ export default ({ defineWebPlugin, contracts: { Icon, Slots, Threads, ToolViews,
   defineWebPlugin({
     id: "glossary",
     api: 5,
-    uses: ["lemma/threads@1"],
+    uses: ["lemma/threads@2"],
     styles: `
       .glossary-view { flex: 1; min-height: 0; overflow: auto; padding: 32px 24px; }
       .glossary-view dl { max-width: var(--content); margin: 0 auto; }

@@ -11,7 +11,6 @@ import {
   applySuggestion,
   ComposerActions,
   ComposerControls,
-  ComposerFooter,
   ComposerNotices,
   ComposerQueuedPart,
   ComposerRegion,
@@ -39,7 +38,7 @@ import type { WorkspaceService } from "@lemma/workspace/web";
 import { ChatIcon, ChevronDownIcon, ImageIcon, LogIcon, Segmented, SendIcon, SettingRow, StopIcon, UndoIcon, XIcon } from "@lemma/look";
 import { commandTurn } from "./command.ts";
 import { createCompletion, ghostText } from "./completion.ts";
-import { SharedDrafts, dropRetry, keepDraft, lostOnReload, returned, unsent } from "./drafts.ts";
+import { draftsOf, dropRetry, keepDraft, lostOnReload, returned, unsent } from "./drafts.ts";
 import type { Draft, Drafts } from "./drafts.ts";
 import { promptOf, recallTarget, sentPrompts } from "./history.ts";
 import type { SentPrompt } from "./history.ts";
@@ -180,7 +179,7 @@ function Composer(props: { deps: Deps }) {
         const early = drafts.get("");
         if (before === undefined && id !== undefined && early !== undefined && unsent(early) && threads.blank() && !unsent(drafts.get(id) ?? noPrompt)) {
           drafts.set(id, early);
-          drafts.delete("");
+          drafts.set("", undefined);
         }
         const draft = drafts.get(draftKey());
         setRecalled(undefined);
@@ -800,7 +799,6 @@ function Composer(props: { deps: Deps }) {
           </div>
         </div>
       </form>
-      <Each slot={ComposerFooter} />
     </div>
   );
 }
@@ -1015,15 +1013,9 @@ export default defineWebPlugin({
   setup: (use, plugin) => {
     const [focus, setFocus] = createSignal<() => void>();
     const [queueOpen, setQueueOpen] = createSignal(true);
-    const drafts = new SharedDrafts(use.threads.drafts(), use.threads.setDraft);
+    const drafts = draftsOf(use.threads);
     const outgoing = new Set<Draft>();
     const [editing, setEditing] = createSignal<{ readonly sessionId: string; readonly cursor: number }>();
-    // A deleted thread (a blank tab closed) takes its draft with it, so closing the app does not ask about it.
-    createEffect(() => {
-      if (!use.threads.loaded()) return;
-      const known = new Set(use.threads.list().map((session) => session.id));
-      for (const key of drafts.keys()) if (key !== "" && !known.has(key)) drafts.delete(key);
-    });
     const deps: Deps = {
       ...use,
       config: plugin.config,
@@ -1036,9 +1028,12 @@ export default defineWebPlugin({
     };
     // An unsent prompt a reload would lose (its images, a send that did not get through), in any thread, or one still
     // going out: closing or reloading the tab asks first. Drafts' text comes back (`Threads.drafts`), so it does not ask.
+    // Each as it is now: `drafts` tells of a change in one a moment after it.
     plugin.onCleanup(
       use.router.block(
-        (transition) => transition.action !== "unload" || (outgoing.size === 0 && ![...drafts].some(([key, draft]) => lostOnReload(key, draft))),
+        (transition) =>
+          transition.action !== "unload" ||
+          (outgoing.size === 0 && ![...use.threads.drafts().keys()].some((key) => lostOnReload(key, use.threads.draft(key) ?? { text: "", images: [] }))),
         { label: "composer: an unsent prompt a reload would lose asks before the tab closes" },
       ),
     );
