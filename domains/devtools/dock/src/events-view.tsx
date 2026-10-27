@@ -2,6 +2,7 @@ import { For, Show, createEffect, createMemo, createSignal, on } from "solid-js"
 import type { Accessor } from "solid-js";
 import { ThreadRoute } from "@lemma/sessions";
 import { clockTime } from "@lemma/web/format";
+import { createStickToBottom } from "@lemma/web/scroll";
 import type { ClientService, RouterService } from "@lemma/web";
 import { XIcon } from "@lemma/look";
 import { clearsOnEscape, rowKeys } from "@lemma/devtools/web";
@@ -19,7 +20,7 @@ const size = (bytes: number) => (bytes < 1024 ? `${bytes}B` : `${(bytes / 1024).
  * changes, and the agent's activity), and changes in the connection carrying
  * them. One row per element with its time, the gap since the one before, its
  * stream and type, session, and size. Follows the tail while scrolled to the
- * bottom; a row selected opens its raw JSON, and a session its thread's
+ * bottom (`createStickToBottom`); a row selected opens its raw JSON, and a session its thread's
  * trajectory.
  */
 export function EventLog(props: { client: ClientService; router: RouterService; lines: Accessor<readonly Line[]>; clear: () => void }) {
@@ -27,8 +28,8 @@ export function EventLog(props: { client: ClientService; router: RouterService; 
   const [deltas, setDeltas] = createSignal(false);
   const [paused, setPaused] = createSignal<readonly Line[]>();
   const [selected, setSelected] = createSignal<number>();
-  const [stuck, setStuck] = createSignal(true);
   let scroller!: HTMLDivElement;
+  const stick = createStickToBottom(() => scroller);
 
   const source = () => paused() ?? props.lines();
   const shown = createMemo(() => {
@@ -49,12 +50,7 @@ export function EventLog(props: { client: ClientService; router: RouterService; 
   const url = () => `${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/rpc`;
   const state = () => props.client.status().state;
 
-  createEffect(
-    on(shown, () => {
-      if (stuck()) queueMicrotask(() => scroller.scrollTo({ top: scroller.scrollHeight }));
-    }),
-  );
-  const onScroll = () => setStuck(scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 24);
+  createEffect(on(shown, () => stick.keep()));
 
   return (
     <div class="dt-scope log-view" aria-label="Host events">
@@ -87,21 +83,15 @@ export function EventLog(props: { client: ClientService; router: RouterService; 
         >
           Clear
         </button>
-        <Show when={!stuck()}>
+        <Show when={!stick.stuck()}>
           <span class="dt-sep" />
-          <button
-            class="dt-chip"
-            onClick={() => {
-              setStuck(true);
-              scroller.scrollTo({ top: scroller.scrollHeight });
-            }}
-          >
+          <button class="dt-chip" onClick={() => stick.follow()}>
             ↓ Follow
           </button>
         </Show>
       </div>
       <div class="dt-split">
-        <div class="dt-main" ref={scroller} onScroll={onScroll} tabindex="-1" role="log" aria-live="off">
+        <div class="dt-main" ref={scroller} onScroll={stick.onScroll} tabindex="-1" role="log" aria-live="off">
           <table
             class="dt-table log-table"
             aria-label="Events"

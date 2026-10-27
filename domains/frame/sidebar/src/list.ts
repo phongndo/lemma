@@ -312,3 +312,18 @@ export const afterArchiving = (order: readonly SessionInfo[], id: string): strin
   if (rest.length === 0) return undefined;
   return rest[at === -1 ? 0 : Math.min(at, rest.length - 1)]?.id;
 };
+
+/** The archived panel's least height (px), and the room it leaves the list above it at least. */
+export const ARCHIVED_MIN = 96;
+export const LIST_MIN = 120;
+
+/**
+ * The archived panel's height to keep for its edge dragged to `height`: within what leaves the list above `LIST_MIN`
+ * of the `area` they share, and short of `full`, the height showing every row, where the panel shows them all already
+ * and so the height `kept` stays (raised to them at least). A height past them would show nothing now, then the panel
+ * jumping to it as more are archived.
+ */
+export const fitArchivedHeight = (height: number, kept: number, area: number, full: number): number => {
+  const fitted = Math.round(Math.max(ARCHIVED_MIN, Math.min(height, area - LIST_MIN)));
+  return fitted < full ? fitted : Math.max(kept, Math.round(full));
+};

@@ -35,8 +35,9 @@ Requires `Client`, `Threads`, `Workspace` (`@lemma/workspace/web`), `Settings`, 
   searches, and the toolbar, and the delete dialog, say how many selected threads the search hides, which the actions
   still take. A thread leaves the selection once it is unarchived, here or elsewhere, so archiving it again does not
   bring it back selected; one that fails to unarchive stays selected.
-- **Keys.** ↓ goes from the search into the list, ↑ and ↓ move between rows, and ↑ from the top returns to the search;
-  with Shift, the run from the row picked last follows, as Shift-clicking does. Space picks the row in focus. Escape
+- **Keys.** ↓ goes from the search into the list, ↑ and ↓ move between rows (↓ from the last goes round to the first,
+  as in every list), and ↑ from the top returns to the search; with Shift, the run from the row picked last follows, as
+  Shift-clicking does, and stops at the ends. Space picks the row in focus. Escape
   clears the selection (before it closes settings), and ⌘A (Ctrl+A) selects every thread shown, wherever focus is on
   the page but a field (in the search, it selects the text): these two are actions (`archived-page.clear-selection`, `archived-page.select-all`), so
   Settings › Keyboard can change them. Leaving the page drops the selection.

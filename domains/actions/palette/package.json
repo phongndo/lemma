@@ -8,7 +8,8 @@
     ".": "./src/index.tsx"
   },
   "scripts": {
-    "check": "tsrs --noEmit"
+    "check": "tsrs --noEmit",
+    "test": "vitest run"
   },
   "dependencies": {
     "@lemma/actions": "workspace:*",

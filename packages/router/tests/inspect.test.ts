@@ -114,4 +114,15 @@ describe("journal", () => {
     // One match for the entries, then a navigation and a match each.
     expect(router.journal().map((event) => event.seq)).toEqual([5, 6, 7]);
   });
+
+  test("a journal of 0 keeps nothing; one that is not a whole number keeps the default", () => {
+    const none = createRouter<Entry>({ history: createMemoryHistory("/"), journal: 0 });
+    const odd = createRouter<Entry>({ history: createMemoryHistory("/"), journal: Number.NaN });
+    for (const router of [none, odd]) {
+      router.setEntries([entry(Item)]);
+      for (let n = 0; n < 500; n++) router.navigate(`/items/${n}`);
+    }
+    expect(none.journal()).toEqual([]);
+    expect(odd.journal()).toHaveLength(200);
+  });
 });

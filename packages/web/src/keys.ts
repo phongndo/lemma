@@ -135,9 +135,19 @@ export const bindsTyping = (binding: string): boolean => !parse(binding).mod;
 export const typing = (target: EventTarget | null): boolean =>
   target instanceof HTMLElement && (target.isContentEditable || ["INPUT", "TEXTAREA", "SELECT"].includes(target.tagName));
 
-/** Where ↓ or ↑ moves from `index` in a list of `length`, staying in it; undefined for any other key. From nothing (-1), both go to the first. */
-export const stepFor = (key: string, index: number, length: number): number | undefined =>
-  key === "ArrowDown" ? Math.min(length - 1, index + 1) : key === "ArrowUp" ? Math.max(0, index - 1) : undefined;
+/**
+ * Where moving `by` from `index` lands in a list of `length`: past either end it wraps to the other, as the palette's
+ * does, so every list's keys go round alike. From nothing (-1), forward goes to the first and back to the last. -1 for
+ * an empty list.
+ */
+export const wrapStep = (index: number, by: number, length: number): number =>
+  length <= 0 ? -1 : index < 0 ? (by > 0 ? 0 : length - 1) : (((index + by) % length) + length) % length;
+
+/** Where ↓ or ↑ moves from `index` in a list of `length` (`wrapStep`); undefined for any other key, or an empty list. */
+export const stepFor = (key: string, index: number, length: number): number | undefined => {
+  const by = key === "ArrowDown" ? 1 : key === "ArrowUp" ? -1 : 0;
+  return by === 0 || length <= 0 ? undefined : wrapStep(index, by, length);
+};
 
 /**
  * Where a key moves the choice in a radio group of `length` options, as ARIA's pattern has it: either arrow along
@@ -146,7 +156,7 @@ export const stepFor = (key: string, index: number, length: number): number | un
  */
 export const radioStep = (key: string, index: number, length: number): number | undefined => {
   const step = key === "ArrowRight" || key === "ArrowDown" ? 1 : key === "ArrowLeft" || key === "ArrowUp" ? -1 : undefined;
-  return step !== undefined ? (index + step + length) % length : key === "Home" ? 0 : key === "End" ? length - 1 : undefined;
+  return step !== undefined ? wrapStep(index, step, length) : key === "Home" ? 0 : key === "End" ? length - 1 : undefined;
 };
 
 /**
@@ -166,7 +176,7 @@ export const radioGroupKey = (event: KeyboardEvent & { readonly currentTarget: E
   return next;
 };
 
-/** What a key does in a list being searched: moves the active item, or picks one of the first nine at once. */
+/** What a key does in a list being searched: moves the active item (`wrapStep`), or picks one of the first nine at once. */
 export type ListKey = { readonly move: 1 | -1 } | { readonly pick: number };
 
 /**

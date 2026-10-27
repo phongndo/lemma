@@ -18,10 +18,10 @@ The page's frame: its regions, layers, docks, dialogs, and what shows in them be
 
 What the contract offers in each of the [five shapes](../../docs/plugins.md#the-five-shapes):
 
-| Shape     | What the contract offers                                                        |
-| --------- | ------------------------------------------------------------------------------- |
-| Add       | `Layers` (what covers the page), `Docks`, `SidebarActions`, `SidebarFooter`     |
-| Intercept | `MainRegion`, `SidebarRegion`, and `TopRegion`: the first item draws the region |
-| Observe   | `Layout`'s signals                                                              |
-| Call      | `Dialogs`, `Layout`                                                             |
-| Serve     | `Dialogs`, `Layout`: a plugin providing one replaces the frame's                |
+| Shape     | What the contract offers                                                    |
+| --------- | --------------------------------------------------------------------------- |
+| Add       | `Layers` (what covers the page), `Docks`, `SidebarActions`, `SidebarFooter` |
+| Intercept | `MainRegion` and `SidebarRegion`: the first item draws the region           |
+| Observe   | `Layout`'s signals                                                          |
+| Call      | `Dialogs`, `Layout`                                                         |
+| Serve     | `Dialogs`, `Layout`: a plugin providing one replaces the frame's            |

@@ -2,7 +2,7 @@ import { For, Show, createEffect, createMemo, createSignal, on } from "solid-js"
 import type { JSX } from "solid-js";
 import type { SessionInfo } from "@lemma/sessions";
 import { relativeTime, tildePath } from "@lemma/web/format";
-import { typing } from "@lemma/web/keys";
+import { stepFor, typing } from "@lemma/web/keys";
 import { createNow } from "@lemma/web/now";
 import { Actions } from "@lemma/actions";
 import { Dialogs, Layers } from "@lemma/frame";
@@ -354,15 +354,19 @@ function ArchivedPage(props: { deps: Deps }) {
       // From the search down into the list, at its first row.
       if (focusRow(rows()[0], "check")) event.preventDefault();
     } else if ((event.key === "ArrowDown" || event.key === "ArrowUp") && row !== null && rowId !== undefined) {
-      // To the next row or the previous, at its checkbox or title as here; up from the first, back to the search. With
-      // Shift, the run from the anchor (this row, when there is none) follows.
-      const at = rows().indexOf(row);
-      const next = rows()[at + (event.key === "ArrowDown" ? 1 : -1)];
+      // To the next row or the previous, at its checkbox or title as here, round past the ends as every list goes
+      // (`stepFor`); up from the first, back to the search, where the list starts. With Shift, the run from the anchor
+      // (this row, when there is none) follows, and stops at the ends: a run does not go round.
+      const all = rows();
+      const at = all.indexOf(row);
       event.preventDefault();
-      if (next === undefined) {
-        if (event.key === "ArrowUp") search?.focus();
+      if (event.key === "ArrowUp" && at === 0) {
+        search?.focus();
         return;
       }
+      const step = stepFor(event.key, at, all.length)!;
+      if (event.shiftKey && step > at !== (event.key === "ArrowDown")) return;
+      const next = all[step]!;
       focusRow(next, target.closest<HTMLElement>("[data-nav]")?.dataset.nav ?? "check");
       if (!event.shiftKey) return;
       if (selection.anchor() === undefined) selection.settle(withSelection(selected(), [rowId], true), rowId);

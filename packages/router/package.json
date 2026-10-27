@@ -28,8 +28,7 @@
     "build": "tsrs -p tsconfig.build.json",
     "prepack": "pnpm build",
     "check": "tsrs --noEmit",
-    "test": "vitest run",
-    "bench": "node --expose-gc bench/router.ts"
+    "test": "vitest run"
   },
   "dependencies": {
     "effect": "4.0.5"

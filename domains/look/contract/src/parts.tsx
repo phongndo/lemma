@@ -8,12 +8,13 @@ import { ConfigFormFallback, IconFallback, PopoverFallback, SearchFieldFallback,
  * is a region slot (see `definePart`): wherever a plugin uses one, the first
  * item renders, and a default is added in the phase `default`, so any plugin, a
  * user's web half too, replaces a part everywhere by adding an item of its own.
- * The `kit` plugin supplies the shared parts; a view supplies its own.
- * Plugins draw these through `ui/parts.tsx`, never by importing a component.
- * The parts the always-on plugins draw (`shell`, `pages`, `settings`, and
- * `plugins-page`) declare a plain fallback (`ui/fallbacks.tsx`), which renders
- * while nothing provides them, so with `kit` off the Plugins page still
- * searches, switches plugins, and edits their settings.
+ * `look.kit` supplies the shared parts; a view supplies its own.
+ * Plugins draw these through their views below (`partView`), never by
+ * importing a component. The parts the always-on plugins draw (`frame.shell`,
+ * `frame.pages`, `settings.page`, and `settings.plugins`) declare a plain
+ * fallback (`fallbacks.tsx`), which renders while nothing provides them, so
+ * with `look.kit` off the Plugins page still searches, switches plugins, and
+ * edits their settings.
  */
 
 export interface MarkdownProps {
@@ -80,6 +81,68 @@ export interface SearchFieldProps {
  * Its fallback is a plain search input.
  */
 export const SearchFieldPart = definePart<SearchFieldProps>("search-field", SearchFieldFallback);
+
+/** A line of a `SearchList`: an option, or a line between options that is none. */
+export type SearchListRow =
+  /** A section's name, before its options. */
+  | { readonly type: "heading"; readonly label: string }
+  /** A line that is no option: a search on its way, why one failed, what was left out. */
+  | { readonly type: "note"; readonly label: string }
+  /** An option: `index` is its place among the options (from 0), `content` draws what is in it, and `class` is added to its own. */
+  | { readonly type: "option"; readonly index: number; readonly content: () => JSX.Element; readonly class?: string };
+
+export interface SearchListProps {
+  /** Its accessible name; or `labelledBy`, the id of an element in `heading` that names it. */
+  readonly label?: string | undefined;
+  readonly labelledBy?: string | undefined;
+  /** Added to its panel's classes (`.palette`). */
+  readonly class?: string;
+  /** Out of sight, its field kept for focus to come back to: something shows over it (a form's dialog). */
+  readonly behind?: boolean | undefined;
+  /** Above the field: a title, or the question asked. */
+  readonly heading?: JSX.Element;
+  /** Before the field (an icon, a back button, a spinner), and after it. */
+  readonly lead?: JSX.Element;
+  readonly trail?: JSX.Element;
+  /** What is typed. `fieldLabel` names the field; `secret` hides what is typed. */
+  readonly value: string;
+  readonly onInput: (value: string) => void;
+  readonly fieldLabel: string;
+  readonly placeholder?: string | undefined;
+  readonly secret?: boolean | undefined;
+  readonly readOnly?: boolean | undefined;
+  readonly field?: (input: HTMLInputElement) => void;
+  /** Under the field: what a question is about. */
+  readonly detail?: JSX.Element;
+  readonly rows: readonly SearchListRow[];
+  /** Under the rows: why there are no options, or no more (nothing matches, a path that is not there). */
+  readonly empty?: string | undefined;
+  /** The list's element while it has rows. */
+  readonly list?: (list: HTMLElement) => void;
+  /** The active option, which Enter picks: the keys and the pointer move it (`onActive`), and it stays in view. */
+  readonly active: number;
+  readonly onActive: (index: number) => void;
+  /** An option clicked, or named by its quick key (`quick`: mod+1 … mod+9, which may name one past the last). */
+  readonly onPick: (index: number, quick: boolean) => void;
+  /** Enter: the active option, or what is typed where there is none. */
+  readonly onSubmit: () => void;
+  /** Escape. */
+  readonly onEscape: () => void;
+  /** A press on the backdrop. */
+  readonly onClose: () => void;
+  /** Keys before the list's own: one it handles (`preventDefault`) goes no further. */
+  readonly onKeyDown?: (event: KeyboardEvent) => void;
+  /** Under the list: what its keys do. */
+  readonly footer?: JSX.Element;
+}
+
+/**
+ * A searchable list over the page, as the command palette is: a field, the options for what is typed, and what the
+ * keys do. Its keys are every search list's (`listKey`: ↑ and ↓ move, round past the ends, and mod+1 … mod+9 pick),
+ * PgUp and PgDn move eight, Enter submits, Escape is the caller's, and Tab stays in it. While ⌘ (Ctrl off macOS) is held,
+ * the first nine options show the keys that pick them. It takes the focus when it opens and gives it back when it closes.
+ */
+export const SearchListPart = definePart<SearchListProps>("search-list");
 
 export interface CopyButtonProps {
   /** What it puts on the clipboard. */
@@ -314,6 +377,8 @@ export const Popover = partView(PopoverPart);
 export const Toggle = partView(TogglePart);
 
 export const SearchField = partView(SearchFieldPart);
+
+export const SearchList = partView(SearchListPart);
 
 export const CopyButton = partView(CopyButtonPart);
 

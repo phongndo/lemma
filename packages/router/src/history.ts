@@ -156,69 +156,11 @@ export const createBrowserHistory = (target: Window = window): RouterHistory => 
   };
 };
 
-/**
- * A memory history's stack as data: each entry's address and key, and which
- * is current. Saved (JSON) and handed back to `createMemoryHistory`, it
- * restores the stack, keys included, so state kept by entry key (scroll
- * positions, an `EntryStore`) returns with it.
- */
-export interface HistorySnapshot {
-  readonly entries: readonly { readonly href: string; readonly key: string }[];
-  readonly index: number;
-}
-
-/** A history in memory, which can be saved and restored (`snapshot`). */
-export interface MemoryHistory extends RouterHistory {
-  /** The stack now, as data to save; `createMemoryHistory(snapshot)` restores it. */
-  readonly snapshot: () => HistorySnapshot;
-}
-
-/**
- * The entries of `saved`, as far as they can be trusted: what is not an
- * address with a key is dropped, and the index is kept within what is left.
- * Saved state comes from storage, so it may be old, cut short, or not this
- * history's at all.
- */
-const restore = (saved: HistorySnapshot): { entries: HistoryLocation[]; index: number } => {
-  const raw: readonly unknown[] = Array.isArray(saved?.entries) ? saved.entries : [];
-  const wanted = Number.isInteger(saved?.index) ? saved.index : raw.length - 1;
-  const kept: { href: string; key: string }[] = [];
-  const keys = new Set<string>();
-  /** Where the saved current entry lands among those kept: itself, or the last kept before it when it was dropped. */
-  let index = 0;
-  for (const [position, entry] of raw.entries()) {
-    const { href, key } = (entry ?? {}) as { readonly href?: unknown; readonly key?: unknown };
-    // Only a path in the app: a URL naming an origin (`//host/x`, `https://host/x`) is another site's, not an entry here.
-    if (typeof href !== "string" || !isAppPath(href)) continue;
-    // A key seen twice would make two entries one; the second gets its own.
-    const own = typeof key === "string" && key !== "" && !keys.has(key) ? key : newKey();
-    keys.add(own);
-    kept.push({ href: split(href, "", 0).href, key: own });
-    if (position <= wanted) index = kept.length - 1;
-  }
-  if (kept.length === 0) return { entries: [split("/", newKey(), 0)], index: 0 };
-  return { entries: kept.map((entry, at) => split(entry.href, entry.key, at)), index };
-};
-
-/** Whether `href` is a path in the app (`/x?y#z`, or relative) rather than a URL naming an origin. */
-const isAppPath = (href: string): boolean => {
-  try {
-    return new URL(href, BASE).origin === BASE;
-  } catch {
-    return false;
-  }
-};
-
-/**
- * History in memory, starting at `initial` (default `/`), or restored from a
- * saved `snapshot`. `go` moves at once, as a popstate would. One per tab or
- * pane of a page, each saving its own stack.
- */
-export const createMemoryHistory = (initial: string | HistorySnapshot = "/"): MemoryHistory => {
+/** History in memory, starting at `initial` (default `/`), for tests and embedders. `go` moves at once, as a popstate would. */
+export const createMemoryHistory = (initial = "/"): RouterHistory => {
   const events = listeners();
-  const restored = typeof initial === "string" ? { entries: [split(initial, newKey(), 0)], index: 0 } : restore(initial);
-  const entries: HistoryLocation[] = restored.entries;
-  let index = restored.index;
+  const entries: HistoryLocation[] = [split(initial, newKey(), 0)];
+  let index = 0;
   const at = () => entries[index]!;
   return {
     location: at,
@@ -242,6 +184,5 @@ export const createMemoryHistory = (initial: string | HistorySnapshot = "/"): Me
     },
     subscribe: events.subscribe,
     destroy: events.clear,
-    snapshot: () => ({ entries: entries.map((entry) => ({ href: entry.href, key: entry.key })), index }),
   };
 };

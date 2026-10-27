@@ -2,13 +2,16 @@ import { describe, expect, test } from "vitest";
 import type { SessionInfo } from "@lemma/sessions";
 import { relativeTime } from "@lemma/web/format";
 import {
+  ARCHIVED_MIN,
   Heads,
+  LIST_MIN,
   afterArchiving,
   dragItems,
   dragTo,
   draftRows,
   dropVerb,
   dropped,
+  fitArchivedHeight,
   flagsOf,
   nestedAgents,
   nextNeeding,
@@ -267,5 +270,19 @@ describe("moving through the list", () => {
     expect(afterArchiving(order, "a")).toBe("b");
     expect(afterArchiving(order, "c")).toBe("b");
     expect(afterArchiving([order[0]!], "a")).toBeUndefined();
+  });
+});
+
+describe("the archived panel's height", () => {
+  test("stays within its least and what leaves the list above room", () => {
+    expect(fitArchivedHeight(10, 220, 800, Number.POSITIVE_INFINITY)).toBe(ARCHIVED_MIN);
+    expect(fitArchivedHeight(900, 220, 800, Number.POSITIVE_INFINITY)).toBe(800 - LIST_MIN);
+    expect(fitArchivedHeight(300.4, 220, 800, Number.POSITIVE_INFINITY)).toBe(300);
+  });
+
+  test("past every row's height, keeps the height it had, raised to them at least", () => {
+    expect(fitArchivedHeight(400, 220, 800, 260)).toBe(260);
+    expect(fitArchivedHeight(400, 300, 800, 260)).toBe(300);
+    expect(fitArchivedHeight(250, 300, 800, 260)).toBe(250);
   });
 });

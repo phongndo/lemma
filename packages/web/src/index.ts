@@ -15,7 +15,7 @@
  * - `data-theme` (`light`/`dark`) on `<html>` is the resolved scheme, and
  *   custom properties on its `style` (a theme's `--bg`, `--accent`,
  *   `--font-ui`, the `--content` width) are tokens set over the stylesheets'
- *   own; the `appearance` plugin sets them (through `lib/paint.ts`), and
+ *   own; the `appearance` plugin sets them (through `@lemma/web/paint`), and
  *   stylesheets and renderers (diagrams) read them. A `data-theme` on another
  *   element gives it that scheme's own tokens, for a preview (see "the look").
  * - `aria-expanded` on a button marks a disclosure: the chat keeps it in place

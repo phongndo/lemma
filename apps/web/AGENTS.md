@@ -45,7 +45,7 @@ replace it.
   `defineWebPlugin`, slots and parts (`defineSlot`, `definePart`, `partView`),
   drawing what slots hold (`Contained`, `Each`, `First`, `Isolated`), and
   helpers any plugin may use (`/keys`, `/storage`, `/now`, `/clipboard`,
-  `/quick-pick`, `/paint`, `/match`, `/format`, `/drag`). It is part of the runtime:
+  `/quick-pick`, `/paint`, `/match`, `/format`, `/drag`, `/scroll`). It is part of the runtime:
   it reaches no domain.
 - **A slot** is a core registry (`defineSlot`): an item belongs to the plugin
   that added it, leaves when that plugin stops, and shows on the Plugins page.

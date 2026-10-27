@@ -14,7 +14,7 @@ import { createPageTrace } from "./trace.ts";
 import type { PageTraceRuntime } from "./trace.ts";
 
 /*
- * The web app's runtime (`ui/runtime.ts`): what the boot provides every
+ * The web app's runtime (`src/runtime/`): what the boot provides every
  * plugin, written against nothing plugins contribute but reactively. Code
  * here imports the runtime's contracts, never a plugin, a component, or the
  * contracts plugins provide, and adds to no slot. A bad item from a plugin is

@@ -40,7 +40,7 @@ export default defineWebPlugin({
             height="16"
             viewBox={glyph().viewBox ?? "0 0 16 16"}
             aria-hidden="true"
-            // The glyphs are this app's own constants (lib/file-glyphs.ts), never input.
+            // The glyphs are this app's own constants (`file-glyphs.ts`), never input.
             innerHTML={glyph().body}
           />
         </Show>

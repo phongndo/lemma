@@ -15,6 +15,7 @@
     "./match": "./src/match.ts",
     "./format": "./src/format.ts",
     "./drag": "./src/drag.ts",
+    "./scroll": "./src/scroll.ts",
     "./vitest": "./vitest.web.ts"
   },
   "scripts": {

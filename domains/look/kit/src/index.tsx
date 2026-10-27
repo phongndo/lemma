@@ -11,6 +11,7 @@ import { Popover } from "./components/popover.tsx";
 import { ProviderLogo } from "./components/provider-logo.tsx";
 import { Segmented, SettingRow } from "./components/setting-row.tsx";
 import { SearchField } from "./components/search-field.tsx";
+import { SearchList } from "./components/search-list.tsx";
 import { Toggle } from "./components/toggle.tsx";
 import { ProviderLogoPart } from "@lemma/llm/web";
 import {
@@ -26,6 +27,7 @@ import {
   PicturePart,
   PopoverPart,
   SearchFieldPart,
+  SearchListPart,
   SegmentedPart,
   SettingRowPart,
   SvgDropPart,
@@ -36,7 +38,7 @@ import type { Part } from "@lemma/web";
 import styles from "./kit.css?inline";
 
 /**
- * The shared parts every view draws with: markdown, dialogs, menus, toggles,
+ * The shared parts every view draws with: markdown, dialogs, menus, search lists, toggles,
  * copy buttons, setting rows, the config form, provider logos, icons, file icons, and agents' avatars. The only plugin
  * that imports rendering components; everything else draws these parts, so
  * replacing one here (or adding one of its own from any plugin, as its items
@@ -54,6 +56,7 @@ export default defineWebPlugin({
     add(PopoverPart, Popover);
     add(TogglePart, Toggle);
     add(SearchFieldPart, SearchField);
+    add(SearchListPart, SearchList);
     add(CopyButtonPart, CopyButton);
     add(SettingRowPart, SettingRow);
     add(SegmentedPart, Segmented);

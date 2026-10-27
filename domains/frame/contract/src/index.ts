@@ -43,13 +43,6 @@ export const SidebarRegion = defineSlot<Region<{ readonly onPick: () => void }>>
 
 export const MainRegion = defineSlot<Region>("main", { shows: "first" });
 
-/**
- * A bar across the window's top, over the sidebar and the main region: horizontal tabs. In a desktop window it is the
- * title bar, beside the window's controls (`--titlebar-inset` is their width); what it draws drags the window unless
- * it is a control.
- */
-export const TopRegion = defineSlot<Region>("top", { shows: "first" });
-
 /** Buttons at the end of the sidebar's head, across from its toggle: the sidebar's search and new thread are its defaults. `onPick` closes the drawer on narrow screens. */
 export const SidebarActions = defineSlot<Region<{ readonly onPick: () => void }>>("sidebar.actions");
 

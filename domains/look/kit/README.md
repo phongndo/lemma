@@ -1,11 +1,11 @@
 # look.kit
 
 The shared parts' defaults: the markdown, dialogs, menus, switches, search
-fields, copy buttons, setting rows, choices, settings forms, icons, file
+fields, search lists, copy buttons, setting rows, choices, settings forms, icons, file
 icons, and provider logos every view draws with. Adds a default in the phase
 `default`, with the id `kit.<part>` (`kit.dialog`), to each part
 [`@lemma/look`](../contract/src/parts.tsx) declares (`MarkdownPart`,
-`DialogPart`, `PopoverPart`, `TogglePart`, `SearchFieldPart`,
+`DialogPart`, `PopoverPart`, `TogglePart`, `SearchFieldPart`, `SearchListPart`,
 `CopyButtonPart`, `SettingRowPart`, `SegmentedPart`, `ConfigFormPart`,
 `IconPart`, `FileIconPart`) and to `ProviderLogoPart`
 ([`@lemma/llm/web`](../../llm/contract/src/web/parts.tsx)). Requires `Slots`.
@@ -24,8 +24,8 @@ app hands web halves as `api.defaults`, to wrap or fall back to.
   field. The always-on plugins (`frame.shell`, `frame.pages`,
   `settings.page`, `settings.plugins`) draw only parts that have one, so the
   Plugins page still searches, switches plugins, and edits their settings.
-  The other parts draw nothing: no markdown, dialogs, menus, copy buttons,
-  setting rows, or provider logos, and file icons only while
+  The other parts draw nothing: no markdown, dialogs, menus, search lists (the
+  palette, Add project), copy buttons, setting rows, or provider logos, and file icons only while
   `look.file-icons` runs.
 - **Its stylesheet leaves with it.** `kit.css` styles the defaults (`.md`,
   `.dialog`, `.popover`, `.switch`, …) in the `plugins` layer's `parts`

@@ -2,7 +2,7 @@ import { Show, createSignal, onCleanup } from "solid-js";
 import { Portal } from "solid-js/web";
 
 import { usePlugin } from "@lemma/web";
-import { bindingOf, listKey, modKey, quickKey } from "@lemma/web/keys";
+import { bindingOf, listKey, modKey, quickKey, wrapStep } from "@lemma/web/keys";
 import type { Placement, PopoverProps } from "@lemma/look";
 
 const MARGIN = 8;
@@ -186,7 +186,7 @@ export function Popover(props: PopoverProps) {
     if (list !== undefined) {
       event.preventDefault();
       if ("pick" in list) all[list.pick]?.click();
-      else activate(all.length === 0 ? -1 : (index + list.move + all.length) % all.length);
+      else activate(wrapStep(index, list.move, all.length));
       return;
     }
     switch (event.key) {

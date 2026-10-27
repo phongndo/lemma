@@ -5,7 +5,7 @@ import { folderName, ProjectActions, Workspace, WorkspaceActionIds, WorktreeActi
 import { Actions } from "@lemma/actions";
 import { ActionMenu, Dialogs, Layers } from "@lemma/frame";
 import { SectionIds, SettingsGroups } from "@lemma/settings";
-import { ComposerNotices, ThreadCard, Threads, ThreadStart } from "@lemma/threads";
+import { ComposerNotices, ThreadCard, Threads, ThreadStart, threadCount } from "@lemma/threads";
 import { Client, Notify, Slots, defineWebPlugin, usePlugin } from "@lemma/web";
 import { copyAndTell } from "@lemma/web/clipboard";
 import type { DialogsService } from "@lemma/frame";
@@ -89,8 +89,6 @@ const worktreesIn = (deps: Deps, project: string): { readonly path: string; read
   }
   return [...found.entries()].sort(([, a], [, b]) => b.at - a.at).map(([path, { branch, threads: count }]) => ({ path, branch, threads: count }));
 };
-
-const threadCount = (n: number) => `${n} thread${n === 1 ? "" : "s"}`;
 
 /**
  * The thread card's row for an open thread's project (`ThreadCard`), or that it is a thread of its own; its menu is

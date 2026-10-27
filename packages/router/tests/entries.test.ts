@@ -1,11 +1,6 @@
 import { describe, expect, test } from "vitest";
 import { createEntryStore } from "../src/entries.ts";
 import type { KeyValueStorage } from "../src/entries.ts";
-import { createMemoryHistory } from "../src/history.ts";
-import type { HistorySnapshot } from "../src/history.ts";
-import { defineRoute } from "../src/route.ts";
-import type { AnyRoute } from "../src/route.ts";
-import { createNavigator, createRouteTable } from "../src/router.ts";
 
 /** A storage that keeps strings, and can be told to refuse writes as a full one does. */
 const memoryStorage = () => {
@@ -20,54 +15,6 @@ const memoryStorage = () => {
   };
   return { storage, items, fill: () => (full = true) };
 };
-
-describe("a memory history's snapshot", () => {
-  test("restores the stack, its keys, and where it was", () => {
-    const history = createMemoryHistory("/a");
-    history.push("/b?x=1");
-    history.push("/c#top");
-    history.go(-1);
-    const saved = JSON.parse(JSON.stringify(history.snapshot())) as HistorySnapshot;
-    const restored = createMemoryHistory(saved);
-    expect(restored.location()).toEqual(history.location());
-    restored.go(1);
-    expect(restored.location().href).toBe("/c#top");
-    expect(restored.snapshot().entries.map((entry) => entry.key)).toEqual(history.snapshot().entries.map((entry) => entry.key));
-  });
-
-  test("takes what it can trust from a damaged one", () => {
-    const damaged = {
-      entries: [{ href: "/a", key: "k1" }, { href: 42 }, null, { href: "/b", key: "k1" }, { href: "https://elsewhere.example/c?q", key: "k3" }],
-      index: 99,
-    } as unknown as HistorySnapshot;
-    const restored = createMemoryHistory(damaged);
-    const { entries, index } = restored.snapshot();
-    // Another site's URL is not an entry here: dropped, not rewritten to a path.
-    expect(entries.map((entry) => entry.href)).toEqual(["/a", "/b"]);
-    expect(new Set(entries.map((entry) => entry.key)).size).toBe(2);
-    expect(entries[0]!.key).toBe("k1");
-    expect(index).toBe(1);
-    expect(createMemoryHistory({ entries: [], index: 0 }).location().href).toBe("/");
-    // The index names the saved entry, not a position among those kept: dropping one before it does not move it.
-    const shifted = createMemoryHistory({
-      entries: [{ href: 42 }, { href: "/a", key: "a" }, { href: "/b", key: "b" }],
-      index: 1,
-    } as unknown as HistorySnapshot);
-    expect(shifted.location().href).toBe("/a");
-    // A current entry that was dropped lands on the last kept before it.
-    expect(
-      createMemoryHistory({
-        entries: [
-          { href: "/a", key: "a" },
-          { href: "//evil.example/x", key: "x" },
-          { href: "/c", key: "c" },
-        ],
-        index: 1,
-      }).location().href,
-    ).toBe("/a");
-    expect(createMemoryHistory(null as unknown as HistorySnapshot).location().href).toBe("/");
-  });
-});
 
 describe("an entry store", () => {
   test("keeps state by entry across a reload, dropping the least recently written past its limit", () => {
@@ -166,34 +113,5 @@ describe("an entry store, at its edges", () => {
     store.set("e1", "scroll", 2);
     expect(heard).toBe(1);
     expect(errors).toHaveLength(1);
-  });
-});
-
-describe("crash and restore", () => {
-  test("a navigator rebuilt from what was saved shows the same page, with its entries' state and its back and forward", () => {
-    const Item = defineRoute("item", { path: "/items/:id", search: { tab: "info" } });
-    const table = createRouteTable<{ readonly route: AnyRoute }>();
-    table.setEntries([{ route: Item }]);
-    const { storage, items } = memoryStorage();
-    const store = createEntryStore({ storage });
-    const history = createMemoryHistory("/items/1");
-    const navigator = createNavigator(table, { history });
-    navigator.navigate(Item, { id: "2" }, { search: { tab: "files" } });
-    store.set(navigator.location().key, "scroll", 120);
-    navigator.navigate(Item, { id: "3" });
-    navigator.back();
-    // What the app saved as it went, and nothing else, survives the crash.
-    const saved = JSON.stringify(history.snapshot());
-    navigator.destroy();
-
-    const again = createNavigator(table, { history: createMemoryHistory(JSON.parse(saved) as HistorySnapshot) });
-    const restoredStore = createEntryStore({ storage });
-    expect(again.matchOf(Item)).toEqual({ params: { id: "2" }, search: { tab: "files" } });
-    expect(restoredStore.get(again.location().key, "scroll")).toBe(120);
-    again.go(1);
-    expect(again.matchOf(Item)?.params.id).toBe("3");
-    again.go(-2);
-    expect(again.matchOf(Item)?.params.id).toBe("1");
-    expect(items.size).toBe(1);
   });
 });

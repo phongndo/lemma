@@ -30,8 +30,6 @@ export const projectStats = (
   };
 };
 
-export const threadCount = (n: number): string => `${n} thread${n === 1 ? "" : "s"}`;
-
 /** A project's mark: the first letter or digit of its name, upper-cased; `#` for a name with none. */
 export const initialOf = (name: string): string => /[\p{L}\p{N}]/u.exec(name)?.[0]?.toLocaleUpperCase() ?? "#";
 

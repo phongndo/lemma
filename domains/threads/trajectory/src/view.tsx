@@ -37,7 +37,7 @@ export function createTrajectory(deps: TrajectoryDeps): () => JSX.Element {
     menu,
     setMenu,
     stuck,
-    setStuck,
+    stick,
     follow,
     select,
     typeMatches,
@@ -83,7 +83,7 @@ export function createTrajectory(deps: TrajectoryDeps): () => JSX.Element {
           // Drawn again over the thread it last showed (its tab shown again), it is as it was, where it was scrolled to.
           if (id === shownFor) {
             if (stuck() && sort().key === "time") follow();
-            else queueMicrotask(() => refs.scroller?.scrollTo({ top: refs.lastTop }));
+            else queueMicrotask(() => refs.scroller?.scrollTo({ top: stick.lastTop() }));
             return;
           }
           shownFor = id;
@@ -125,13 +125,6 @@ export function createTrajectory(deps: TrajectoryDeps): () => JSX.Element {
         { defer: true },
       ),
     );
-    const onScroll = () => {
-      const top = refs.scroller!.scrollTop;
-      // Only scrolling up stops following: rows added below move the bottom away too.
-      if (refs.scroller!.scrollHeight - top - refs.scroller!.clientHeight < 24) setStuck(true);
-      else if (top < refs.lastTop) setStuck(false);
-      refs.lastTop = top;
-    };
 
     // DevTools keys: arrows move the selection, Escape closes the panel (or the menu), "/" and Ctrl/Cmd+F focus the filter.
     const onKeyDown = (event: KeyboardEvent) => {
@@ -198,7 +191,7 @@ export function createTrajectory(deps: TrajectoryDeps): () => JSX.Element {
             ref={(el) => {
               refs.scroller = el;
             }}
-            onScroll={onScroll}
+            onScroll={stick.onScroll}
           >
             <Show
               when={records().length > 0}

@@ -66,6 +66,7 @@ import { displayedCalls, displayEntries, workEntries } from "./work.ts";
 import type { DisplayEntry, ToolBlock, WorkEntry, WorkRow } from "./work.ts";
 import { JUMP_MARGIN, jumpOver, locate as locatePrompts } from "./prompt-rail.ts";
 import { createNow } from "@lemma/web/now";
+import { createStickToBottom } from "@lemma/web/scroll";
 import { Client, Contained, Each, Notify, Router, Slots, WebPlugins, defineWebPlugin, usePlugin } from "@lemma/web";
 import type { SlotsService, Part } from "@lemma/web";
 import { AlertIcon, ChatIcon, ChevronDownIcon, ChevronIcon, BrainIcon, Icon, Markdown, RedoIcon, SearchIcon, Spinner, CopyButton, XIcon } from "@lemma/look";
@@ -849,7 +850,9 @@ function ChatView(props: { chat: Chat; turns: () => readonly TurnView[]; findWit
   const threads = props.chat.threads;
   let scroller!: HTMLDivElement;
   let content!: HTMLDivElement;
-  const [stuck, setStuck] = createSignal(true);
+  // Follows new output while the reader is at the bottom, and leaves them alone once they scroll up.
+  const stick = createStickToBottom(() => scroller);
+  const stuck = stick.stuck;
   // Every prompt a person sent that the chat shows: each turn's, its steers, and the steers sent and not yet placed, at
   // the end. A plugin's notice is none.
   const marks = createMemo((): readonly PromptMark[] => [
@@ -929,8 +932,6 @@ function ChatView(props: { chat: Chat; turns: () => readonly TurnView[]; findWit
     scroller.scrollTo({ top: target, behavior: "smooth" });
     locate();
   };
-  const toBottom = (smooth = false) => scroller.scrollTo({ top: scroller.scrollHeight, behavior: smooth ? "smooth" : "auto" });
-  let lastTop = 0;
   /** Where the reader was in this history entry (back or forward returns there), or undefined at the bottom. */
   const remembered = () => props.chat.router.entry<number | undefined>(SCROLL_STATE);
   /** A position to return to once the transcript is tall enough to hold it. */
@@ -939,18 +940,15 @@ function ChatView(props: { chat: Chat; turns: () => readonly TurnView[]; findWit
   const restore = (settled = false) => {
     const reach = scroller.scrollHeight - scroller.clientHeight;
     if (restoring === undefined || (!settled && reach < restoring)) return;
-    scroller.scrollTop = lastTop = Math.min(restoring, reach);
+    scroller.scrollTop = Math.min(restoring, reach);
     restoring = undefined;
-    setStuck(scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 80);
+    stick.placed();
   };
   let saving = 0;
   const onScroll = () => {
-    // Stop following only when the reader scrolls up: output that grows faster than it is followed moves the bottom away too.
-    const nearBottom = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 80;
-    if (nearBottom) setStuck(true);
-    else if (scroller.scrollTop < lastTop) setStuck(false);
+    const lastTop = stick.lastTop();
+    stick.onScroll();
     if (heading !== undefined && jumpOver(heading, scroller.scrollTop, lastTop)) heading = undefined;
-    lastTop = scroller.scrollTop;
     locateSoon();
     if (restoring !== undefined) return;
     cancelAnimationFrame(saving);
@@ -982,10 +980,9 @@ function ChatView(props: { chat: Chat; turns: () => readonly TurnView[]; findWit
       anchor = undefined;
       if (held !== undefined && held.element.isConnected) {
         scroller.scrollTop += held.element.getBoundingClientRect().top - held.top;
-        lastTop = scroller.scrollTop;
-        setStuck(scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 80);
+        stick.placed();
       } else if (restoring !== undefined) restore();
-      else if (stuck()) toBottom();
+      else stick.keep();
       relocate();
     });
     // Its border box: the end it pads for the composer grows with the composer, and the end stays in view.
@@ -1006,8 +1003,11 @@ function ChatView(props: { chat: Chat; turns: () => readonly TurnView[]; findWit
     on(threads.activeId, () => {
       heading = undefined;
       restoring = untrack(() => remembered().get());
-      setStuck(restoring === undefined);
-      queueMicrotask(() => (restoring === undefined ? toBottom() : restore()));
+      if (restoring === undefined) stick.follow();
+      else {
+        stick.release();
+        queueMicrotask(() => restore());
+      }
     }),
   );
   /** The prompt the address names (`#prompt-<event id>`, a prompt's link), which the view goes to once it shows it. */
@@ -1022,8 +1022,8 @@ function ChatView(props: { chat: Chat; turns: () => readonly TurnView[]; findWit
     if (element === null) return false;
     restoring = undefined;
     heading = undefined;
-    scroller.scrollTop = lastTop = Math.min(Math.max(0, topOf(element) - JUMP_MARGIN), scroller.scrollHeight - scroller.clientHeight);
-    setStuck(scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 80);
+    scroller.scrollTop = Math.min(Math.max(0, topOf(element) - JUMP_MARGIN), scroller.scrollHeight - scroller.clientHeight);
+    stick.placed();
     for (const marked of content.querySelectorAll<HTMLElement>("[data-linked]")) delete marked.dataset.linked;
     // Read the layout between, so the mark starts over on a prompt marked before.
     void element.offsetWidth;
@@ -1088,14 +1088,7 @@ function ChatView(props: { chat: Chat; turns: () => readonly TurnView[]; findWit
           </Show>
         </div>
         <Show when={!stuck()}>
-          <button
-            class="jump"
-            aria-label="Jump to latest"
-            onClick={() => {
-              setStuck(true);
-              toBottom(true);
-            }}
-          >
+          <button class="jump" aria-label="Jump to latest" onClick={() => stick.follow(true)}>
             <ChevronDownIcon />
           </button>
         </Show>

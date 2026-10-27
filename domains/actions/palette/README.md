@@ -55,9 +55,11 @@ of the threads, searched the same way.
   its command) and keeps the palette open; with no question it clears the
   query, then goes back from a page, then closes. Backspace in an empty field steps back from an item's
   `input`, unless the palette opened asking it, which Escape then closes.
-- **Keys** in the list are `listKey`'s (`@lemma/web/keys`), and PgUp and PgDn
-  move by eight. Its own key, `mod+k`, closes it first: where the modifier is
-  Ctrl, `listKey` would take Ctrl+K as up.
+- **Keys** in the list are a search list's (`SearchListPart` in
+  [`@lemma/look`](../../look/contract/src/parts.tsx), which it draws with):
+  ↑ and ↓ move, round past the ends, PgUp and PgDn move by eight, and mod+1 …
+  mod+9 pick. Its own key, `mod+k`, closes it first: where the modifier is
+  Ctrl, the list would take Ctrl+K as up.
 - **Opening.** `palette.open` does nothing while the host waits on a question
   and the palette is closed: the question keeps the screen until answered. Run
   with an action's id, as the keymap runs it for an action with `input`, it

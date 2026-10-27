@@ -1,15 +1,12 @@
-import { For, Show, createEffect, createMemo, createSignal, createUniqueId, on, onCleanup, onMount } from "solid-js";
+import { Show, createEffect, createMemo, createSignal, on, onCleanup, onMount } from "solid-js";
 import type { Component } from "solid-js";
-import { Portal } from "solid-js/web";
 import type { InteractionRequest } from "@lemma/contracts";
 import type { CommandInfo } from "@lemma/commands";
 import { keysFor, overridesFrom, shownKeys, ActionIds, Actions, PaletteSources } from "@lemma/actions";
-import { formatKeys, listKey, matchesKeys, quickKey } from "@lemma/web/keys";
-import { createQuickHold } from "@lemma/web/quick-pick";
+import { formatKeys, matchesKeys } from "@lemma/web/keys";
 import { loadStrings, save } from "@lemma/web/storage";
 import { relativeTime, tildePath } from "@lemma/web/format";
-import { rank, remember } from "@lemma/web/match";
-import type { Searchable } from "@lemma/web/match";
+import { remember } from "@lemma/web/match";
 import { isBlank, sessionTitle, Threads, ThreadWaits, waitingOn } from "@lemma/threads";
 import { SessionChannels } from "@lemma/sessions";
 import type { SessionInfo } from "@lemma/sessions";
@@ -32,8 +29,12 @@ import {
   PuzzleIcon,
   RefreshIcon,
   SearchIcon,
+  SearchList,
   Spinner,
 } from "@lemma/look";
+import type { SearchListRow } from "@lemma/look";
+import { listRows, optionRows } from "./rows.ts";
+import type { Found, Item, Row } from "./rows.ts";
 import styles from "./palette.css?inline";
 
 const DIALOG = "palette";
@@ -49,9 +50,6 @@ interface Deps {
   /** The keys that open it, and close it while it shows: its own, or what the user bound it to. Reactive. */
   readonly closeKeys: () => readonly string[];
 }
-
-/** A row: a source's item, or an option of a question (which has nothing to run). */
-type Item = Omit<PaletteItem, "run"> & Searchable & { readonly run?: PaletteItem["run"] };
 
 /** What the palette asks: a host question, or one of its own (renaming a session). */
 type Question =
@@ -75,7 +73,6 @@ interface Opened {
 }
 
 const RECENT_KEY = "lemma.palette.recent";
-const RESULTS = 60;
 /** A source's `search` is asked once this many letters are typed, and typing has paused this long (ms). */
 const SEARCH_MIN = 2;
 const SEARCH_PAUSE = 200;
@@ -151,8 +148,6 @@ function Palette(props: { deps: Deps }) {
   const [local, setLocal] = createSignal<Asking | undefined>();
   const [recent, setRecent] = createSignal(loadRecent());
   let input!: HTMLInputElement;
-  let list!: HTMLDivElement;
-  const previous = document.activeElement as HTMLElement | null;
   let disposed = false;
   // The host's questions show here while the palette is open, but a form, which needs its dialog.
   onCleanup(interactions.claim(inPalette));
@@ -202,8 +197,6 @@ function Palette(props: { deps: Deps }) {
   });
 
   const sources = () => slots.list(PaletteSources);
-  /** What a search at the top level looks through: every source's items. */
-  const pool = (): Item[] => sources().flatMap((source) => [...source.items()]);
 
   // ---------------------------------------------------------------- pages
 
@@ -274,13 +267,6 @@ function Palette(props: { deps: Deps }) {
 
   // ---------------------------------------------------------------- search
 
-  /** What the sources' `search` found for `text`, by source; `pending` until each has answered. */
-  interface Found {
-    readonly text: string;
-    readonly labels: readonly string[];
-    readonly groups: readonly { readonly label: string; readonly items: readonly Item[]; readonly error?: string }[];
-    readonly pending: boolean;
-  }
   const [found, setFound] = createSignal<Found>();
   const plugin = usePlugin();
   createEffect(() => {
@@ -315,89 +301,20 @@ function Palette(props: { deps: Deps }) {
 
   // ---------------------------------------------------------------- rows
 
-  type Row =
-    | { readonly type: "heading"; readonly label: string }
-    | { readonly type: "note"; readonly label: string }
-    | { readonly type: "item"; readonly item: Item; readonly matches: readonly number[]; readonly index: number };
-
   const rows = createMemo((): Row[] => {
     const current = asking();
     if (current !== undefined) {
       const question = current.question;
       if (question.type === "ask") return [];
-      const options = question.type === "confirm" ? CONFIRM : question.options;
-      return rank(options, filter()).map((ranked, index) => ({ type: "item", item: ranked.item, matches: ranked.matches, index }));
+      return optionRows(question.type === "confirm" ? CONFIRM : question.options, filter());
     }
     if (running() !== undefined) return [];
-    const shown = page();
-    const text = query();
-    let index = 0;
-    const item = (entry: { item: Item; matches: readonly number[] }): Row => ({ type: "item", ...entry, index: index++ });
-    if (text.trim() !== "") {
-      const ranked = rank(shown === undefined ? pool() : [...shown.items()], text, recent())
-        .slice(0, RESULTS)
-        .map(item);
-      // Then what the sources found elsewhere (`search`), but for what is listed already.
-      const more = found();
-      if (more === undefined || more.text !== text.trim()) return ranked;
-      if (more.pending) return [...ranked, { type: "note", label: `Searching ${more.labels.join(" and ")}…` }];
-      const listed = new Set(ranked.flatMap((row) => (row.type === "item" ? [row.item.key] : [])));
-      return [
-        ...ranked,
-        ...more.groups.flatMap((group): Row[] => {
-          if (group.error !== undefined)
-            return [
-              { type: "heading", label: `In ${group.label}` },
-              { type: "note", label: group.error },
-            ];
-          const items = group.items.filter((entry) => !listed.has(entry.key));
-          return items.length === 0 ? [] : [{ type: "heading", label: `In ${group.label}` }, ...items.map((entry) => item({ item: entry, matches: [] }))];
-        }),
-      ];
-    }
-    if (shown !== undefined) return shown.items().map((entry) => item({ item: entry, matches: [] }));
-    // Browsing: recent choices, then each source in order, up to its `browse` (the commands, and what plugins add;
-    // threads and projects show as a search finds them).
-    const byKey = new Map(pool().map((entry) => [entry.key, entry]));
-    const recentItems = recent()
-      .map((key) => byKey.get(key))
-      .filter((entry): entry is Item => entry !== undefined)
-      .slice(0, 5);
-    const listed = new Set(recentItems.map((entry) => entry.key));
-    // A source without a heading (commands) leads; the others are named so the switch from actions to places is visible.
-    const section = (label: string | undefined, items: readonly Item[]): Row[] =>
-      items.length === 0
-        ? []
-        : [...(label === undefined ? [] : [{ type: "heading" as const, label }]), ...items.map((entry) => item({ item: entry, matches: [] }))];
-    return [
-      ...section("Recent", recentItems),
-      ...sources().flatMap((source) =>
-        section(
-          source.heading,
-          source
-            .items()
-            .filter((entry) => !listed.has(entry.key))
-            .slice(0, source.browse ?? Number.POSITIVE_INFINITY),
-        ),
-      ),
-    ];
+    return listRows({ query: query(), sources: sources(), page: page(), recent: recent(), found: found() });
   });
 
   const items = createMemo(() => rows().filter((row): row is Extract<Row, { type: "item" }> => row.type === "item"));
 
-  // The row chosen stays in view, and so does the one a page goes back to.
-  createEffect(
-    on([active, page], ([index]) => {
-      list?.querySelector(`[data-index="${index}"]`)?.scrollIntoView({ block: "nearest" });
-    }),
-  );
-
   // ---------------------------------------------------------------- keys
-
-  const move = (by: number) => {
-    const count = items().length;
-    if (count > 0) setActive((index) => (index + by + count) % count);
-  };
 
   const submit = () => {
     const current = asking();
@@ -415,66 +332,45 @@ function Palette(props: { deps: Deps }) {
     choose(picked);
   };
 
-  const hold = createQuickHold();
+  /** Its own keys, before the list's (`SearchList`): those that close it, and Backspace back out of a question or page. */
   const onKeyDown = (event: KeyboardEvent) => {
-    hold.track(event);
-    if (event.isComposing) return;
     // Its own keys close it, as its footer says, before a list takes them (Ctrl+K moves up one where mod is Ctrl).
     if (props.deps.closeKeys().some((keys) => matchesKeys(keys, event))) {
       event.preventDefault();
       close();
-      return;
-    }
-    const list = listKey(event);
-    if (list !== undefined) {
-      event.preventDefault();
-      if (!("pick" in list)) move(list.move);
-      else if (list.pick < items().length) {
-        setActive(list.pick);
-        submit();
-      }
-    } else if (event.key === "PageDown") {
-      event.preventDefault();
-      move(Math.min(8, items().length - 1 - active()));
-    } else if (event.key === "PageUp") {
-      event.preventDefault();
-      move(-Math.min(8, active()));
-    } else if (event.key === "Enter") {
-      event.preventDefault();
-      submit();
-    } else if (event.key === "Escape") {
-      event.preventDefault();
-      event.stopPropagation();
-      const current = asking();
-      // Dismissing a command's question cancels the command; the palette stays for the next thing.
-      if (current !== undefined) current.dismiss();
-      else if (running() === undefined && query() !== "") type("");
-      else if (running() === undefined && canGoBack()) back();
-      else close();
     } else if (event.key === "Backspace" && local()?.escape === "back" && filter() === "") {
       event.preventDefault();
       setLocal(undefined);
     } else if (event.key === "Backspace" && asking() === undefined && running() === undefined && canGoBack() && query() === "") {
       event.preventDefault();
       back();
-    } else if (event.key === "Tab") {
-      event.preventDefault();
     }
+  };
+  const escape = () => {
+    const current = asking();
+    // Dismissing a command's question cancels the command; the palette stays for the next thing.
+    if (current !== undefined) current.dismiss();
+    else if (running() === undefined && query() !== "") type("");
+    else if (running() === undefined && canGoBack()) back();
+    else close();
   };
 
   onMount(() => {
     const requested = props.deps.takeRequested();
-    const item = requested === undefined ? undefined : pool().find((candidate) => candidate.key === `action:${requested}`);
+    const item =
+      requested === undefined
+        ? undefined
+        : sources()
+            .flatMap((source) => source.items())
+            .find((candidate) => candidate.key === `action:${requested}`);
     // Opened by an action's keys at its page or its question, it starts there: Escape closes it, not going back to a list never seen.
     if (item?.page !== undefined) {
       openPage(item.page());
       setStart(1);
     } else if (item?.input !== undefined) setLocal(askFor(item, item.input(), true));
-    queueMicrotask(() => input.focus());
   });
   onCleanup(() => {
     disposed = true;
-    previous?.focus?.();
   });
 
   // ---------------------------------------------------------------- view
@@ -504,9 +400,6 @@ function Palette(props: { deps: Deps }) {
     const question = asking()?.question;
     return question?.type === "confirm" || question?.type === "select" ? question.detail : undefined;
   };
-  // Unique per instance: the page could show two lists.
-  const listId = `palette-list-${createUniqueId()}`;
-  const activeId = () => (items()[active()] === undefined ? undefined : `${listId}-${active()}`);
   /** Rows in a list where some have an icon keep its room without one, so their names line up. */
   const iconRoom = createMemo(() => items().some((row) => row.item.icon !== undefined));
   /** And the room of the chevron of a row that opens a page, so their shortcuts end in line. */
@@ -514,168 +407,145 @@ function Palette(props: { deps: Deps }) {
   /** A question the palette did not claim (a form) shows over it: it steps out of sight, keeping its field to go back to. */
   const behind = () => interactions.open().some((request) => !interactions.claimed(request));
 
+  /** What an option shows: its icon, name, detail, keys, and whether it is current or opens a page. */
+  const content = (row: Extract<Row, { type: "item" }>) => (
+    <>
+      <Show when={row.item.icon} fallback={iconRoom() ? <span class="palette-icon-room" aria-hidden="true" /> : undefined}>
+        {(icon) => <Isolated component={icon()} />}
+      </Show>
+      <span class="palette-name">
+        <Show when={row.item.category}>
+          <span class="palette-category">{row.item.category}: </span>
+        </Show>
+        <Highlighted text={row.item.title} matches={row.matches} />
+      </span>
+      <span class="palette-hint">{row.item.detail}</span>
+      <Show when={row.item.shortcut}>
+        <kbd class="palette-kbd">{row.item.shortcut}</kbd>
+      </Show>
+      <Show when={row.item.current}>
+        <span class="palette-current" aria-label="current">
+          <CheckIcon />
+        </span>
+      </Show>
+      <Show when={row.item.page} fallback={moreRoom() ? <span class="palette-more" aria-hidden="true" /> : undefined}>
+        <span class="palette-more" aria-hidden="true">
+          <ChevronIcon />
+        </span>
+      </Show>
+    </>
+  );
+  const listed = createMemo(() =>
+    rows().map((row): SearchListRow => (row.type === "item" ? { type: "option", index: row.index, content: () => content(row) } : row)),
+  );
+
   return (
-    <Portal>
-      <div
-        class="backdrop palette-backdrop"
-        classList={{ behind: behind() }}
-        onMouseDown={(event) => {
-          if (event.target === event.currentTarget) close();
-        }}
-      >
-        <div class="palette" role="dialog" aria-modal="true" aria-label="Command palette" onKeyDown={onKeyDown} onKeyUp={hold.track} onFocusOut={hold.track}>
-          <Show when={heading()}>
-            <div class="palette-heading">{heading()}</div>
-          </Show>
-          <div class="palette-input palette-input-text">
-            <Show
-              when={running() !== undefined && asking() === undefined}
-              fallback={
-                <Show when={canGoBack() && asking() === undefined} fallback={<ChevronIcon />}>
-                  <button
-                    type="button"
-                    class="icon-button palette-back"
-                    aria-label="Back"
-                    data-tip="Back"
-                    onMouseDown={(event) => event.preventDefault()}
-                    onClick={back}
-                  >
-                    <ArrowLeftIcon />
-                  </button>
-                </Show>
-              }
-            >
-              <Spinner />
-            </Show>
-            <input
-              ref={input}
-              type={secret() ? "password" : "text"}
-              role="combobox"
-              aria-expanded="true"
-              aria-controls={listId}
-              aria-activedescendant={activeId()}
-              aria-label={asking()?.question.title ?? (page() === undefined ? "Search commands, threads, and projects" : `Filter ${page()!.title}`)}
-              autocomplete="off"
-              autocapitalize="off"
-              spellcheck={false}
-              placeholder={placeholder()}
-              // Read-only, not disabled, while a command runs: a disabled field drops focus, and with it Esc and typing once the command ends.
-              readOnly={asking() === undefined && running() !== undefined}
-              value={value()}
-              onInput={(event) => type(event.currentTarget.value)}
-            />
-          </div>
-          <Show when={questionDetail()}>{(detail) => <p class="palette-question-detail">{detail()}</p>}</Show>
-          <Show when={rows().length > 0}>
-            <div ref={list} id={listId} class="palette-list" role="listbox" aria-label="Results">
-              <For each={rows()}>
-                {(row) =>
-                  row.type === "heading" ? (
-                    <div class="palette-section" role="presentation">
-                      {row.label}
-                    </div>
-                  ) : row.type === "note" ? (
-                    <div class="palette-note" role="presentation">
-                      {row.label}
-                    </div>
-                  ) : (
-                    <div
-                      id={`${listId}-${row.index}`}
-                      class="palette-row"
-                      role="option"
-                      data-index={row.index}
-                      data-active={String(row.index === active())}
-                      data-quick-key={hold.held() ? quickKey(row.index) : undefined}
-                      aria-selected={row.index === active()}
-                      onPointerMove={() => setActive(row.index)}
-                      onMouseDown={(event) => event.preventDefault()}
-                      onClick={() => {
-                        setActive(row.index);
-                        submit();
-                      }}
-                    >
-                      <Show when={row.item.icon} fallback={iconRoom() ? <span class="palette-icon-room" aria-hidden="true" /> : undefined}>
-                        {(icon) => <Isolated component={icon()} />}
-                      </Show>
-                      <span class="palette-name">
-                        <Show when={row.item.category}>
-                          <span class="palette-category">{row.item.category}: </span>
-                        </Show>
-                        <Highlighted text={row.item.title} matches={row.matches} />
-                      </span>
-                      <span class="palette-hint">{row.item.detail}</span>
-                      <Show when={row.item.shortcut}>
-                        <kbd class="palette-kbd">{row.item.shortcut}</kbd>
-                      </Show>
-                      <Show when={row.item.current}>
-                        <span class="palette-current" aria-label="current">
-                          <CheckIcon />
-                        </span>
-                      </Show>
-                      <Show when={row.item.page} fallback={moreRoom() ? <span class="palette-more" aria-hidden="true" /> : undefined}>
-                        <span class="palette-more" aria-hidden="true">
-                          <ChevronIcon />
-                        </span>
-                      </Show>
-                    </div>
-                  )
-                }
-              </For>
-            </div>
-          </Show>
-          <Show when={rows().length === 0 && asking() === undefined && running() === undefined}>
-            <div class="palette-empty">
-              {query().trim() !== "" ? `Nothing matches “${query().trim()}”` : page() === undefined ? "Nothing to show" : `Nothing in ${page()!.title}`}
-            </div>
-          </Show>
-          <footer class="palette-foot">
-            <Show
-              when={asking() === undefined}
-              fallback={
-                <>
-                  <span>
-                    <kbd>↵</kbd> {asking()?.question.type === "ask" ? "submit" : "choose"}
-                  </span>
-                  <span>
-                    <kbd>esc</kbd> {asking()?.escape}
-                  </span>
-                </>
-              }
-            >
-              <span>
-                <kbd>↑</kbd>
-                <kbd>↓</kbd> move
-              </span>
-              <span>
-                <kbd>↵</kbd> {items()[active()]?.item.page === undefined ? "run" : "open"}
-              </span>
-              <Show when={canGoBack()}>
-                <span>
-                  <kbd>esc</kbd> back
-                </span>
-              </Show>
-              {/* At the page its keys opened it at, Escape closes it; elsewhere, its own keys do. */}
-              <Show
-                when={page() === undefined || canGoBack()}
-                fallback={
-                  <span class="palette-foot-end">
-                    <kbd>esc</kbd> close
-                  </span>
-                }
+    <SearchList
+      label="Command palette"
+      class="palette-text"
+      behind={behind()}
+      heading={
+        <Show when={heading()}>
+          <div class="palette-heading">{heading()}</div>
+        </Show>
+      }
+      lead={
+        <Show
+          when={running() !== undefined && asking() === undefined}
+          fallback={
+            <Show when={canGoBack() && asking() === undefined} fallback={<ChevronIcon />}>
+              <button
+                type="button"
+                class="icon-button palette-back"
+                aria-label="Back"
+                data-tip="Back"
+                onMouseDown={(event) => event.preventDefault()}
+                onClick={back}
               >
-                <Show when={props.deps.closeKeys()[0]}>
-                  {(keys) => (
-                    <span class="palette-foot-end">
-                      <kbd>{formatKeys(keys())}</kbd> close
-                    </span>
-                  )}
-                </Show>
-              </Show>
+                <ArrowLeftIcon />
+              </button>
             </Show>
-          </footer>
-        </div>
-      </div>
-    </Portal>
+          }
+        >
+          <Spinner />
+        </Show>
+      }
+      value={value()}
+      onInput={type}
+      fieldLabel={asking()?.question.title ?? (page() === undefined ? "Search commands, threads, and projects" : `Filter ${page()!.title}`)}
+      placeholder={placeholder()}
+      secret={secret()}
+      // While a command runs: what is typed waits for its question, and Escape still reaches it.
+      readOnly={asking() === undefined && running() !== undefined}
+      field={(element) => (input = element)}
+      detail={<Show when={questionDetail()}>{(detail) => <p class="palette-question-detail">{detail()}</p>}</Show>}
+      rows={listed()}
+      empty={
+        rows().length === 0 && asking() === undefined && running() === undefined
+          ? query().trim() !== ""
+            ? `Nothing matches “${query().trim()}”`
+            : page() === undefined
+              ? "Nothing to show"
+              : `Nothing in ${page()!.title}`
+          : undefined
+      }
+      active={active()}
+      onActive={setActive}
+      onPick={(index) => {
+        if (index >= items().length) return;
+        setActive(index);
+        submit();
+      }}
+      onSubmit={submit}
+      onEscape={escape}
+      onClose={close}
+      onKeyDown={onKeyDown}
+      footer={
+        <Show
+          when={asking() === undefined}
+          fallback={
+            <>
+              <span>
+                <kbd>↵</kbd> {asking()?.question.type === "ask" ? "submit" : "choose"}
+              </span>
+              <span>
+                <kbd>esc</kbd> {asking()?.escape}
+              </span>
+            </>
+          }
+        >
+          <span>
+            <kbd>↑</kbd>
+            <kbd>↓</kbd> move
+          </span>
+          <span>
+            <kbd>↵</kbd> {items()[active()]?.item.page === undefined ? "run" : "open"}
+          </span>
+          <Show when={canGoBack()}>
+            <span>
+              <kbd>esc</kbd> back
+            </span>
+          </Show>
+          {/* At the page its keys opened it at, Escape closes it; elsewhere, its own keys do. */}
+          <Show
+            when={page() === undefined || canGoBack()}
+            fallback={
+              <span class="palette-foot-end">
+                <kbd>esc</kbd> close
+              </span>
+            }
+          >
+            <Show when={props.deps.closeKeys()[0]}>
+              {(keys) => (
+                <span class="palette-foot-end">
+                  <kbd>{formatKeys(keys())}</kbd> close
+                </span>
+              )}
+            </Show>
+          </Show>
+        </Show>
+      }
+    />
   );
 }
 
