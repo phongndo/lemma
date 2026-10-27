@@ -27,7 +27,9 @@ Provides [`Browser`](../contract/src/browser.ts) over a Chromium that [Playwrigh
   sign-in popup) becomes a tab of its own and the current one, and the action
   that opened it (a click) resolves to it: Chromium says a window is coming
   while the action runs (`Page.windowOpen`), and only then does the action wait
-  for it, up to 3 seconds. A session's tabs close `idleSeconds` after its
+  for it, up to 3 seconds. The action waits up to 30 seconds for the popup's
+  document to finish parsing. It fails `Timeout` if the document does not
+  finish. A session's tabs close `idleSeconds` after its
   own last call, though other sessions keep the browser open: each session's
   profile is a renderer or more (about 70MB with one tab of a light page,
   measured 2026-10-21), which a session gone quiet would otherwise hold until

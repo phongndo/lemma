@@ -44,7 +44,21 @@ export const separate = async (): Promise<string> => {
   // connects. The scripted provider needs a key here, which no one has given it.
   const bare = await startHost({
     threads: false,
-    plugins: (provider) => ({ "llm.pi-ai": { config: { providers: [scripted(provider, { apiKey: { env: "SCRIPTED_API_KEY" } })] } } }),
+    plugins: (provider) => ({
+      "llm.pi-ai": {
+        config: {
+          providers: [
+            scripted(provider, {
+              apiKey: { env: "SCRIPTED_API_KEY" },
+              models: [
+                { id: "scripted", name: "Scripted model", reasoning: true },
+                { id: "alternate", name: "Alternate model", reasoning: true },
+              ],
+            }),
+          ],
+        },
+      },
+    }),
   });
   const fresh = await open(bare);
   fresh.on("pageerror", (error) => errors.push(error.message));
@@ -64,6 +78,27 @@ export const separate = async (): Promise<string> => {
   // With a model, ⌘⇧M and ⌘⇧E open the composer's model and reasoning pickers.
   await fresh.keyboard.press("ControlOrMeta+Shift+KeyM");
   await fresh.waitForSelector(".popover.model-menu", { timeout: 5_000 }).catch(() => assert.fail("⌘⇧M opened no model picker"));
+  await fresh.waitForSelector('.model-row[data-active="true"]');
+  const pickerPositions = () =>
+    fresh.locator(".model-menu, .model-name, .model-current, .model-star").evaluateAll((elements) =>
+      elements.map((element) => {
+        const item = element as HTMLElement;
+        return [item.offsetLeft, item.offsetTop, item.offsetWidth, item.offsetHeight];
+      }),
+    );
+  const beforeHints = await pickerPositions();
+  await fresh.keyboard.down("ControlOrMeta");
+  await fresh.waitForSelector(".model-row[data-quick-key]");
+  assert.deepEqual(await pickerPositions(), beforeHints, "holding the quick-pick modifier moved the model picker's contents");
+  await fresh.keyboard.up("ControlOrMeta");
+  // A stationary pointer must not leave a favorite action on the old row once the keys move the highlight.
+  await fresh.locator(".model-row").nth(1).hover();
+  await fresh.waitForFunction(() => getComputedStyle(document.querySelectorAll(".model-row .model-star")[1]!).opacity === "1");
+  await fresh.keyboard.press("ArrowUp");
+  await fresh
+    .waitForFunction(() => getComputedStyle(document.querySelectorAll(".model-row .model-star")[1]!).opacity === "0", undefined, { timeout: 1_000 })
+    .catch(() => assert.fail("keyboard navigation left the favorite action on the previously hovered model"));
+  assert.equal(await fresh.locator('.model-row[data-active="true"]').count(), 1, "the model picker must have one active row");
   await fresh.keyboard.press("Escape");
   await fresh.waitForSelector(".popover", { state: "detached", timeout: 5_000 });
   await fresh.keyboard.press("ControlOrMeta+Shift+KeyE");
