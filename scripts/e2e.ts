@@ -44,7 +44,7 @@ interface Watched {
   readonly output: () => string;
 }
 
-const launch = (name: string, args: readonly string[], env: Readonly<Record<string, string>>): Watched => {
+const launch = (name: string, args: readonly string[], env: Readonly<Record<string, string | undefined>>): Watched => {
   // A test's host is its home's default profile, whatever profile the shell running the tests names.
   const child = spawn(process.execPath, args, { env: { ...process.env, LEMMA_PROFILE: undefined, ...env }, stdio: "pipe" });
   const lines: string[] = [];
@@ -102,18 +102,24 @@ export interface Mock {
   readonly reached: (name: string) => Promise<void>;
   /** Opens the gate `name`: the ramble waiting there goes on, and later ones pass it. */
   readonly open: (name: string) => void;
+  /** Stops each answer that starts from now on after its first words, until `release`. */
+  readonly hold: () => void;
+  /** Lets the answers held go on, and holds no more. */
+  readonly release: () => void;
 }
 
 export interface LemmaOptions {
   /**
    * Plugin rows for the config, besides the transport's (port 0), the llm's (the provider as `mock/scripted`), and
-   * `agent.titles`' (off).
+   * `agent.titles`' (off); or the rows given the provider's base URL, to configure it otherwise.
    */
-  readonly plugins?: Readonly<Record<string, unknown>>;
+  readonly plugins?: Readonly<Record<string, unknown>> | ((provider: string) => Readonly<Record<string, unknown>>);
   /** Runs before the host starts: to put a plugin file in the home, say. */
   readonly prepare?: (home: string) => Promise<void>;
   /** The provider's pause between streamed words (`PACE_MS`, default 0: a test holds an answer with a gate instead). */
   readonly paceMs?: number;
+  /** The host's environment besides its home, given the home and the provider's base URL: a variable set to undefined is left out. */
+  readonly env?: (home: string, provider: string) => Readonly<Record<string, string | undefined>>;
 }
 
 export interface Lemma {
@@ -139,9 +145,15 @@ export const startLemma = async (prefix: string, options: LemmaOptions = {}): Pr
     await Promise.all(processes.map((watched) => stop(watched.child)));
     await rm(home, { recursive: true, force: true });
   };
+  /** The provider's base URL, once it listens. */
+  let url = "";
   const startHost = async () => {
     // With the flags every launcher gives it, so it need not start again for them.
-    const host = launch("host", ["--conditions=lemma-source", ...HOST_FLAGS, hostMain, "--no-open"], { LEMMA_HOME: home, INIT_CWD: home });
+    const host = launch("host", ["--conditions=lemma-source", ...HOST_FLAGS, hostMain, "--no-open"], {
+      ...options.env?.(home, url),
+      LEMMA_HOME: home,
+      INIT_CWD: home,
+    });
     processes.push(host);
     hosts.push(host.child);
     // Printed once it runs, after reading the transport.json its transport wrote (a killed host's is left behind).
@@ -151,7 +163,7 @@ export const startLemma = async (prefix: string, options: LemmaOptions = {}): Pr
   try {
     const provider = launch("mock-openai", [mockProvider], { PORT: "0", PACE_MS: String(options.paceMs ?? 0) });
     processes.push(provider);
-    const url = (await provider.line(/listening on (\S+)/))[1]!;
+    url = (await provider.line(/listening on (\S+)/))[1]!;
     const mock: Mock = {
       url,
       reached: async (name) => {
@@ -159,6 +171,12 @@ export const startLemma = async (prefix: string, options: LemmaOptions = {}): Pr
       },
       open: (name) => {
         provider.child.stdin!.write(`open ${name}\n`);
+      },
+      hold: () => {
+        provider.child.stdin!.write("hold\n");
+      },
+      release: () => {
+        provider.child.stdin!.write("release\n");
       },
     };
     await writeFile(
@@ -170,7 +188,7 @@ export const startLemma = async (prefix: string, options: LemmaOptions = {}): Pr
           // A thread's title would be asked of the scripted model too, with its prompt: a ramble, a gate, and a call id a
           // test counts on, taken by a request in the background. A test of titles turns it on.
           "agent.titles": { enabled: false },
-          ...options.plugins,
+          ...(typeof options.plugins === "function" ? options.plugins(url) : options.plugins),
         },
       }),
     );

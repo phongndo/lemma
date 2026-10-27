@@ -9,7 +9,7 @@ the router, messages, the plugins, and the host's questions. With every
 plugin off, the page is blank, and the runtime still runs.
 
 ```sh
-nix develop -c pnpm --filter @lemma/web-app dev    # http://127.0.0.1:5173/?mock runs against an in-browser fake host
+nix develop -c pnpm --filter @lemma/web-app dev    # http://127.0.0.1:5173, against the checkout's host (`pnpm dev` starts both)
 nix develop -c pnpm --filter @lemma/web-app test
 ```
 

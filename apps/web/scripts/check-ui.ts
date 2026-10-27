@@ -1,21 +1,30 @@
 import { recordFlake, summarizeFlakes } from "../../../scripts/flaky.ts";
 import type { Flake } from "../../../scripts/flaky.ts";
-import { browser, inLane, retries, saveArtifacts, server, shard, shards } from "./check-ui/shared.ts";
+import { closeRouter, inLane, stopHosts } from "./check-ui/hosts.ts";
+import { browser, closePages, only, retries, saveArtifacts, server, shard, shards } from "./check-ui/shared.ts";
+import { addresses } from "./check-ui/addresses.ts";
 import { devtools } from "./check-ui/devtools.ts";
+import { examples } from "./check-ui/examples.ts";
 import { pages } from "./check-ui/pages.ts";
+import { pane } from "./check-ui/pane.ts";
 import { parts } from "./check-ui/parts.ts";
 import { rail } from "./check-ui/rail.ts";
 import { separate } from "./check-ui/separate.ts";
+import { sidebar } from "./check-ui/sidebar.ts";
+import { slots } from "./check-ui/slots.ts";
 import { toggling } from "./check-ui/toggling.ts";
+import { turns } from "./check-ui/turns.ts";
 
 /**
  * The web app's replaceability, checked on the real composition: the dev
- * server with the in-browser mock host (`?mock`), in Chromium. It holds the
+ * server in Chromium, against real hosts started from the checkout, each with
+ * the scripted provider (scripts/mock-openai.ts) as its model, on a home of
+ * its own seeded with projects and threads (check-ui/seed.ts). It holds the
  * invariant in apps/web/AGENTS.md at runtime, where `check-boundaries` holds
  * it in the imports:
  *
  * 1. The app boots without errors, with the plugins the domains' manifests
- *    list: their web halves bundled, and their host halves on the mock host.
+ *    list: their web halves bundled, and their host halves on the host.
  * 2. Every part declared in `ui/contracts.ts` has a provider.
  * 3. Every plugin that is not pinned turns off and back on, as the Plugins
  *    page does it, and the page stays up and error-free either way; only the
@@ -71,28 +80,29 @@ import { toggling } from "./check-ui/toggling.ts";
  *    profile the page is.
  *
  * Run it in the browser shell: `nix develop .#browser -c pnpm --filter @lemma/web-app ui:check`.
- * `--shard=i/n` runs a share of it, as CI does on two runners: of the lanes the
- * checks run in (below), every n-th from the i-th. `--retry=n` runs a lane that
- * fails up to n more times, as CI does once: its failed try leaves its traces,
- * and a lane that passes on a retry is a warning, recorded as flaky
- * (scripts/flaky.ts).
+ * `--lane=<name>` runs that lane alone (given again, those lanes). `--shard=i/n`
+ * runs a share of it, as CI does on two runners: of the lanes the checks run in
+ * (below), every n-th from the i-th. `--retry=n` runs a lane that fails up to n
+ * more times, as CI does once: its failed try leaves its traces, and a lane
+ * that passes on a retry is a warning, recorded as flaky (scripts/flaky.ts).
  * `LEMMA_BROWSER=firefox` or `webkit` runs it in Playwright's builds of those
  * (`pnpm exec playwright install firefox webkit`; `PLAYWRIGHT_BROWSERS_PATH`
- * puts them elsewhere): history timing differs between engines. A failed run
- * leaves a Playwright trace and a screenshot of each open page in
- * `LEMMA_UI_ARTIFACTS` (by default a new directory under the OS temp
- * directory, named in the output); `pnpm exec playwright show-trace` opens a trace.
+ * puts them elsewhere): history timing differs between engines. A failed try
+ * leaves a Playwright trace and a screenshot of each of its pages, and what its
+ * hosts printed, in `LEMMA_UI_ARTIFACTS` (by default a new directory under the
+ * OS temp directory, named in the output); `pnpm exec playwright show-trace`
+ * opens a trace.
  */
 
 /*
- * The checks run in lanes, all at once, each on pages of its own; a lane's checks run in order. Like a real host, the
- * mock answers after a while rather than at once (a switch on the Plugins page takes 200 ms, a reply streams), so the
- * time is mostly waiting, and the lanes wait together. Each lane is a file in check-ui/, beside what they share
- * (`shared.ts`: the dev server, the browser, and the helpers that boot and drive a page).
+ * The checks run in lanes, AT_ONCE at a time, each on hosts and pages of its own, so what one lane does, fails, or runs
+ * again is its alone; a lane's checks run in order. Each lane is a file in check-ui/, beside what they share:
+ * `shared.ts` (the dev server, the browser, and the helpers that boot and drive a page), `hosts.ts` (the hosts, and the
+ * router that sends each page's calls to its own), and `seed.ts` (what a host's home holds).
  */
 
 /*
- * A share takes about a minute and a half in CI, and a lane run again up to as long more. A step that never returns
+ * A lane takes well under a minute, and one run again as long more. A step that never returns
  * (Playwright waits on some calls for ever: Chromium can leave a key unanswered whose frame goes as it lands) fails its
  * try once the try has run for TRY_MINUTES, so the lane runs again on pages of its own, closing the hung try's; a hung
  * try and a retry still end before the deadline. One still running at the deadline fails the check, naming the lanes
@@ -100,6 +110,8 @@ import { toggling } from "./check-ui/toggling.ts";
  */
 const TRY_MINUTES = 2.5;
 const DEADLINE_MINUTES = 6;
+/** Lanes running at once: each runs hosts and pages of its own, and a machine gives only so many processes and threads. */
+const AT_ONCE = 6;
 let deadline: NodeJS.Timeout | undefined;
 
 /** `run`, or a failure once it has run for TRY_MINUTES. */
@@ -120,7 +132,10 @@ const inTime = async <A>(name: string, run: Promise<A>): Promise<A> => {
 /** The lanes that passed only on a retry, for the job's summary. */
 const flakes: Flake[] = [];
 
-/** Runs `lane`, and again after a failed try, up to `--retry` more times; one that passes on a retry is flaky. */
+/**
+ * Runs `lane`, and again after a failed try, up to `--retry` more times; one that passes on a retry is flaky. A failed
+ * try leaves its traces and its hosts' logs; each try's pages close and its hosts stop when it ends.
+ */
 const attempt = async (lane: () => Promise<string>): Promise<string> => {
   let first: unknown;
   let tries = 1;
@@ -130,10 +145,13 @@ const attempt = async (lane: () => Promise<string>): Promise<string> => {
       done = await inTime(lane.name, inLane(lane.name, lane));
       break;
     } catch (error) {
+      await saveArtifacts({ lane: lane.name, try: tries });
       if (tries > retries) throw error;
       first ??= error;
       console.error(`UI check: ${lane.name} failed on try ${tries}, so runs again:`, error);
-      await saveArtifacts({ lane: lane.name, try: tries });
+    } finally {
+      await closePages(lane.name);
+      await stopHosts(lane.name);
     }
   }
   if (tries > 1) flakes.push(recordFlake({ name: `ui:check ${lane.name}`, tries, error: first instanceof Error ? first.message : String(first) }));
@@ -141,16 +159,41 @@ const attempt = async (lane: () => Promise<string>): Promise<string> => {
 };
 
 try {
-  // In this order, every other lane makes two shares that take about as long.
-  const lanes = [toggling, parts, rail, devtools, separate, pages].filter((_, at) => at % shards === shard - 1);
+  // In this order, every other lane makes two shares that end about together: the longest lane, toggling, with the
+  // shortest five; and the longest first, as AT_ONCE start.
+  const all = [toggling, sidebar, examples, addresses, pages, turns, parts, separate, devtools, pane, slots, rail];
+  const unknown = (only ?? []).filter((name) => !all.some((lane) => lane.name === name));
+  if (unknown.length > 0) throw new Error(`UI check: no lane ${unknown.join(", ")}; the lanes are ${all.map((lane) => lane.name).join(", ")}`);
+  const lanes = all.filter((lane) => only === undefined || only.includes(lane.name)).filter((_, at) => at % shards === shard - 1);
   const running = new Set(lanes.map((lane) => lane.name));
   const overdue = new Promise<never>((_, reject) => {
     deadline = setTimeout(
-      () => reject(new Error(`UI check: still running after ${DEADLINE_MINUTES} minutes: ${[...running].join(", ")}`)),
+      () => reject(new Error(`UI check: still to finish after ${DEADLINE_MINUTES} minutes: ${[...running].join(", ")}`)),
       DEADLINE_MINUTES * 60_000,
     );
   });
-  const done = await Promise.race([Promise.all(lanes.map((lane) => attempt(lane).finally(() => running.delete(lane.name)))), overdue]);
+  // Every lane runs to its end, so a failure hides none of the others'; AT_ONCE at a time, in order.
+  const settled = new Map<string, PromiseSettledResult<string>>();
+  const waiting = [...lanes];
+  const runNext = async (): Promise<void> => {
+    const lane = waiting.shift();
+    if (lane === undefined) return;
+    const result = await attempt(lane).then(
+      (value) => ({ status: "fulfilled", value }) as const,
+      (reason: unknown) => ({ status: "rejected", reason }) as const,
+    );
+    settled.set(lane.name, result);
+    running.delete(lane.name);
+    return runNext();
+  };
+  await Promise.race([Promise.all(Array.from({ length: AT_ONCE }, runNext)), overdue]);
+  const failed = lanes.flatMap((lane) => {
+    const result = settled.get(lane.name)!;
+    return result.status === "rejected" ? [{ lane: lane.name, error: result.reason as unknown }] : [];
+  });
+  for (const { lane, error } of failed) console.error(`UI check: ${lane} failed:`, error);
+  if (failed.length > 0) throw new Error(`UI check: ${failed.map(({ lane }) => lane).join(", ")} failed (above)`);
+  const done = lanes.map((lane) => (settled.get(lane.name) as PromiseFulfilledResult<string>).value);
   console.log(`UI check${shards > 1 ? ` (${shard}/${shards})` : ""}: ${done.join("; ")}.`);
 } catch (error) {
   await saveArtifacts();
@@ -160,4 +203,6 @@ try {
   clearTimeout(deadline);
   await browser.close();
   await server.close();
+  await stopHosts();
+  await closeRouter();
 }

@@ -1,28 +1,48 @@
 import assert from "node:assert/strict";
-import { AsyncLocalStorage } from "node:async_hooks";
-import { mkdirSync, mkdtempSync } from "node:fs";
+import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import { chromium, firefox, webkit } from "playwright";
 import type { Page } from "playwright";
-import { createServer } from "vite";
+import { createLogger, createServer } from "vite";
+import { HOST_COOKIE, hostsOf, laneNow, routerUrl } from "./hosts.ts";
+import type { Host } from "./hosts.ts";
 
 /*
- * What every lane of the UI check (check-ui.ts) shares: the options, the dev server with the in-browser mock host, the
- * browser, and the helpers that open, boot, and drive its pages.
+ * What every lane of the UI check (check-ui.ts) shares: the options, the dev server, the browser, and the helpers that
+ * open, boot, and drive its pages, each on a real host of its lane's (hosts.ts).
  */
 
-const { values: options } = parseArgs({ options: { shard: { type: "string", default: "1/1" }, retry: { type: "string", default: "0" } } });
+const { values: options } = parseArgs({
+  options: { shard: { type: "string", default: "1/1" }, retry: { type: "string", default: "0" }, lane: { type: "string", multiple: true } },
+});
 export const [shard, shards] = options.shard.split("/").map(Number) as [number, number];
 assert(Number.isInteger(shard) && Number.isInteger(shards) && shard >= 1 && shard <= shards, `--shard is i/n, not "${options.shard}"`);
 /** How many more times a lane that fails runs, as CI asks (`--retry=n`); none by default, so a flake shows at once. */
 export const retries = Number(options.retry);
 assert(Number.isInteger(retries) && retries >= 0, `--retry is a count, not "${options.retry}"`);
+/** The lanes `--lane` names (it may be given more than once), else all of them. */
+export const only: readonly string[] | undefined = options.lane;
 
 export const root = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
-export const server = await createServer({ root, configFile: resolve(root, "vite.config.ts"), logLevel: "error", server: { port: 0, host: "127.0.0.1" } });
+// Its `/rpc` and `/api` go to the router, which sends each page's to its host (vite.config.ts reads `LEMMA_HOST_URL`).
+process.env.LEMMA_HOST_URL = routerUrl;
+delete process.env.LEMMA_HOST_TOKEN;
+// A page closed, or its host stopped, at the end of its lane's try cuts its streams off midway: the proxy's word on that
+// is no failure of the check's.
+const logger = createLogger("error");
+const logError = logger.error;
+logger.error = (message, options) => {
+  if (!/(?:ws|http) proxy (?:socket )?error/.test(message)) logError(message, options);
+};
+export const server = await createServer({
+  root,
+  configFile: resolve(root, "vite.config.ts"),
+  customLogger: logger,
+  server: { port: 0, host: "127.0.0.1" },
+});
 await server.listen();
 const address = server.httpServer?.address();
 assert(address !== null && typeof address === "object", "the dev server has no address");
@@ -76,26 +96,32 @@ export const atBlankThread = async (page: Page) => {
   });
 };
 
-/** The lane running (check-ui.ts runs each in `inLane`), so that the pages of a lane's failed try can be set apart. */
-const lane = new AsyncLocalStorage<string>();
-export const inLane = <A>(name: string, run: () => Promise<A>): Promise<A> => lane.run(name, run);
-
-/** Every page opened, traced, with its lane, so that a failure can leave its trace and a screenshot behind. */
-const pages: { readonly page: Page; readonly lane: string | undefined }[] = [];
-export const open = async () => {
+/** Every page opened, traced, with its lane and host, so that a failure can leave its trace and a screenshot behind. */
+const pages: { readonly page: Page; readonly lane: string | undefined; readonly host: Host }[] = [];
+/** The host a page was opened on. */
+export const hostOf = (page: Page): Host => pages.find((opened) => opened.page === page)!.host;
+/** A page of its own (a new browser context) on `host`, which its cookie names to the router. */
+export const open = async (host: Host) => {
   const page = await browser.newPage({ viewport: { width: 1200, height: 900 } });
+  await page.context().addCookies([{ name: HOST_COOKIE, value: host.key, url }]);
   await page.context().tracing.start({ screenshots: true, snapshots: true });
-  pages.push({ page, lane: lane.getStore() });
+  pages.push({ page, lane: laneNow(), host });
   return page;
 };
+/** Where a run's traces, screenshots, and host logs go: `LEMMA_UI_ARTIFACTS`, else a new directory under the OS temp directory. */
+let artifacts: string | undefined;
+const artifactsDir = () => {
+  artifacts ??= process.env.LEMMA_UI_ARTIFACTS ?? mkdtempSync(join(tmpdir(), "lemma-ui-check-"));
+  mkdirSync(artifacts, { recursive: true });
+  return artifacts;
+};
 /**
- * Leaves a trace and a screenshot of each page still open in `LEMMA_UI_ARTIFACTS` (by default a new directory under
- * the OS temp directory), and says where. For a lane's failed try, those of its pages alone, named for it, which then
- * close: the lane's next try opens its own.
+ * Leaves a trace and a screenshot of each page still open, and what each host printed, in the artifacts directory,
+ * and says where. For a lane's failed try, those of its pages and hosts alone, named for it, whose pages then close:
+ * the lane's next try opens its own.
  */
 export const saveArtifacts = async (failed?: { readonly lane: string; readonly try: number }) => {
-  const directory = process.env.LEMMA_UI_ARTIFACTS ?? mkdtempSync(join(tmpdir(), "lemma-ui-check-"));
-  mkdirSync(directory, { recursive: true });
+  const directory = artifactsDir();
   const prefix = failed === undefined ? "" : `${failed.lane}-try-${failed.try}-`;
   for (const [index, opened] of pages.entries()) {
     if (opened.page.isClosed() || (failed !== undefined && opened.lane !== failed.lane)) continue;
@@ -110,39 +136,45 @@ export const saveArtifacts = async (failed?: { readonly lane: string; readonly t
         .close()
         .catch(() => {});
   }
+  const lanes = failed === undefined ? [...new Set(pages.flatMap((opened) => (opened.lane === undefined ? [] : [opened.lane])))] : [failed.lane];
+  for (const lane of lanes) {
+    for (const [index, host] of hostsOf(lane).entries())
+      writeFileSync(join(directory, `${failed === undefined ? `${lane}-` : prefix}host-${index + 1}.log`), host.output());
+  }
   console.error(
     failed === undefined
-      ? `UI check failed: traces and screenshots are in ${directory}`
-      : `UI check: ${failed.lane} failed on try ${failed.try}: its traces and screenshots are in ${directory}`,
+      ? `UI check failed: traces, screenshots, and host logs are in ${directory}`
+      : `UI check: ${failed.lane} failed on try ${failed.try}: its traces, screenshots, and host logs are in ${directory}`,
   );
 };
-/** A page of its own, on a mock host of its own (a new page is a new browser context), booted without errors. */
-export const boot = async () => {
+/** Closes the pages `lane` opened: its try is over, and its hosts go. */
+export const closePages = async (lane: string) => {
+  for (const opened of pages) if (opened.lane === lane && !opened.page.isClosed()) await opened.page.context().close();
+};
+/** A page of its own on `host`, booted without errors. */
+export const boot = async (host: Host) => {
   const { errors, warnings, expectNoErrors } = log();
-  const page = await open();
+  const page = await open(host);
   page.on("pageerror", (error) => errors.push(error.message));
   page.on("console", (message) => {
     if (message.type() === "error") errors.push(message.text());
     if (message.type() === "warning") warnings.push(message.text());
   });
-  await page.goto(`${url}/?mock`);
+  await page.goto(`${url}/`);
   await settled(page);
   await page.waitForFunction(() => "lemma" in window && (window as any).lemma.plugins.list().length > 0);
   expectNoErrors("while booting");
   return { page, errors, warnings, expectNoErrors };
 };
 /**
- * Loads the `check` web half, a plugin like a user's, and puts its own slots on `window.checkSlots`: what the checks
- * add, they add through it, since the page's own slots belong to no plugin and refuse to add. Each item is the check
- * plugin's, and leaves with it. A reload drops it, as it drops the mock host's files.
+ * Loads the `check` web half, a plugin like a user's, from a file in its host's plugin directory, and puts its own slots
+ * on `window.checkSlots`: what the checks add, they add through it, since the page's own slots belong to no plugin and
+ * refuse to add. Each item is the check plugin's, and leaves with it. The file stays, so a reload loads it again.
  */
 export const checkPlugin = async (page: Page) => {
-  await page.waitForFunction(() => "lemmaMock" in window && "lemma" in window);
-  await page.evaluate(() => {
-    const source = `export default ({ defineWebPlugin, contracts: { Slots } }) =>
-      defineWebPlugin({ id: "check", requires: { slots: Slots }, setup: ({ slots }) => { window.checkSlots = slots; } });`;
-    const url = URL.createObjectURL(new Blob([source], { type: "text/javascript" }));
-    (window as any).lemmaMock.setWebFiles([{ name: "check.js", source: "user", kind: "script", path: "/check/check.js", url }]);
+  await hostOf(page).plugins({
+    "check.web.js": `export default ({ defineWebPlugin, contracts: { Slots } }) =>
+      defineWebPlugin({ id: "check", requires: { slots: Slots }, setup: ({ slots }) => { window.checkSlots = slots; } });`,
   });
   await page.waitForFunction(() => "checkSlots" in window, undefined, { timeout: 10_000 });
 };
@@ -157,3 +189,26 @@ export const switchTo = (page: Page, id: string, enabled: boolean) =>
     },
     { id, enabled },
   );
+
+/** Shows a view of the open thread by its id in its pane, as its palette command does, once the thread has loaded. */
+export async function showView(page: Page, id: string): Promise<void> {
+  // The pane is the open thread's, so a view is shown in it once the thread (a blank one too) has loaded.
+  await page.waitForFunction(
+    async () => {
+      const { Threads } = (await import("/src/ui/api.ts" as string)).api.contracts;
+      return (await (window as any).lemma.service(Threads)).active() !== undefined;
+    },
+    undefined,
+    { timeout: 10_000 },
+  );
+  await page.waitForFunction(
+    async (view) => {
+      const { Actions } = (await import("/src/ui/api.ts" as string)).api.contracts;
+      const action = (window as any).lemma.slots().get(Actions, `thread.view.${view}`);
+      action?.run();
+      return action !== undefined;
+    },
+    id,
+    { timeout: 10_000 },
+  );
+}

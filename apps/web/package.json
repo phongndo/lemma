@@ -8,7 +8,7 @@
     "build": "vite build",
     "check": "tsrs --noEmit",
     "test": "vitest run",
-    "ui:check": "node scripts/check-ui.ts"
+    "ui:check": "node --conditions=lemma-source scripts/check-ui.ts"
   },
   "dependencies": {
     "@lemma/actions": "workspace:*",

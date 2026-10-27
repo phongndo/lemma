@@ -51,19 +51,26 @@ export default defineWebPlugin({
     const listings = new Set<() => void>();
     /** The latest listing asked for: an older one answering after it must not undo it. */
     let asked = 0;
-    const refresh = async () => {
+    /** That listing, until it applies: one it superseded ends when it does, so whoever awaits a listing sees one. */
+    let latest: Promise<void> = Promise.resolve();
+    const refresh = (): Promise<void> => {
       const listing = ++asked;
-      const [nextProviders, nextModels] = await Promise.all([
-        client.channel.call(LlmChannels.providers, undefined),
-        client.channel.call(LlmChannels.models, { available: true }),
-      ]);
-      if (listing !== asked) return;
-      batch(() => {
-        setProviders(nextProviders);
-        setModels(nextModels);
-        setLoadedAt(true);
-      });
-      for (const heard of listings) heard();
+      const listed = (async () => {
+        const [nextProviders, nextModels] = await Promise.all([
+          client.channel.call(LlmChannels.providers, undefined),
+          client.channel.call(LlmChannels.models, { available: true }),
+        ]);
+        // Asked again meanwhile (`llm.changes` reporting the login this listing follows, say): the later one shows.
+        if (listing !== asked) return latest;
+        batch(() => {
+          setProviders(nextProviders);
+          setModels(nextModels);
+          setLoadedAt(true);
+        });
+        for (const heard of listings) heard();
+      })();
+      latest = listed;
+      return listed;
     };
 
     // Listed when subscribed, and again after each change it reports: a login wherever it ran, a provider's catalog

@@ -135,7 +135,7 @@ Done means these pass:
 
 ```sh
 nix develop -c node scripts/check-boundaries.ts             # imports, page-wide DOM and keys, stacking (also in `pnpm check`)
-nix develop .#browser -c pnpm --filter @lemma/web-app ui:check  # the real composition in Chromium, against the mock host
+nix develop .#browser -c pnpm --filter @lemma/web-app ui:check  # the real composition in Chromium, against real hosts
 ```
 
 `ui:check` boots the app and fails when a part has no provider, a plugin cannot
@@ -144,17 +144,27 @@ pinned plugins and what they need stay on, the runtime stops answering with
 every plugin off, a web half providing part of the runtime is not left out, a
 replaced part does not show, or an extension slot does not render what a
 plugin adds. What it adds to slots it adds through a web half
-(`check`), as a user's code does.
+(`check`), as a user's code does: a file in the host's plugin directory.
+
+It runs its checks in lanes, each a file in `scripts/check-ui/`. Each lane runs
+on real hosts of its own, started from the checkout. A host's model is the
+scripted provider (`scripts/mock-openai.ts`). Its home is seeded with projects
+and threads (`scripts/check-ui/seed.ts`), the threads written by the sessions
+store the host runs. A change to a channel or a host plugin is checked as the
+host serves it, with nothing to mirror. `--lane=<name>` runs one lane.
 
 For a change to how things look, compare screenshots of the main screens:
 
 ```sh
-nix develop .#browser -c node apps/web/scripts/shots.ts /tmp/shots/before   # before the change
-nix develop .#browser -c node apps/web/scripts/shots.ts /tmp/shots/after    # after it
+nix develop .#browser -c node --conditions=lemma-source apps/web/scripts/shots.ts /tmp/shots/before   # before the change
+nix develop .#browser -c node --conditions=lemma-source apps/web/scripts/shots.ts /tmp/shots/after    # after it
 nix develop .#browser -c node apps/web/scripts/compare-shots.ts /tmp/shots/before /tmp/shots/after
 ```
 
-A few screens show what changes from run to run: the Plugins page the dev
-server's port, the devtools' Navigation and Host events panels their times and
-keys, and the trajectory a turn's timings. Those differ between runs by up to
-about a quarter of a percent; every other screen matches exactly.
+The screens are of a real host with the UI check's scripted provider and
+seeded threads. A few show what changes from run to run. The answer shows the
+host's temporary home. The Plugins page shows the dev server's port. The
+devtools' Routes, Navigation, and Host events panels show a new thread's id,
+and times and keys. The trace and the trajectory show a turn's timings. Those
+differ between runs by up to about one percent, Navigation the most, as its
+columns widen with the id. Every other screen matches exactly.

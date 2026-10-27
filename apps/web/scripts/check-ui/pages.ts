@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { startHost } from "./hosts.ts";
 import { boot, switchTo } from "./shared.ts";
 
 /** The frames pages are drawn in, top to bottom: title, sandbox, height, and where each sits. */
@@ -13,15 +14,16 @@ const framesOf = (page: import("playwright").Page) =>
 // 12: what tools draw. A script's calls show as they settle, and the pages tools draw show outside the fold, after the
 // work and above the answer, once each, sandboxed, sized to their content, and following the app's look.
 export const pages = async (): Promise<string> => {
-  const { page, expectNoErrors } = await boot();
+  const host = await startHost();
+  const { page, expectNoErrors } = await boot(host);
   await page.evaluate(() => {
     (window as any).pageReports = [];
     addEventListener("message", (event) => {
       if (event.data?.type === "check-page") (window as any).pageReports.push(event.data);
     });
   });
-  // Held after its first call until the check has seen it, however long the page takes to show it.
-  await page.evaluate(() => (window as any).lemmaMock.holdScript());
+  // The scripted model's script waits at the gate `script` after its first call, until the check has seen it, however
+  // long the page takes to show it.
   await page.fill("textarea", "Draw a page");
   await page.keyboard.press("Enter");
 
@@ -36,10 +38,10 @@ export const pages = async (): Promise<string> => {
     .catch(() => assert.fail("a running script's calls do not show as they settle"));
   assert.match(
     (await page.locator(".codemode-call").first().textContent()) ?? "",
-    /✓bash\{"command":"git log --oneline -n 5"\}12ms/,
+    /✓bash\{"command":"git log --oneline -n 5"\}\d+ms/,
     "a running script's call does not show its name, arguments, and time",
   );
-  await page.evaluate(() => (window as any).lemmaMock.releaseScript());
+  host.mock.open("script");
 
   await page.waitForFunction(() => document.querySelectorAll(".turn-footer").length === 1, undefined, { timeout: 30_000 });
   await page

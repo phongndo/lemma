@@ -3,7 +3,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { domainPlugins } from "../../../scripts/plugins.ts";
-import { contractModules } from "../src/ui/contracts.ts";
+import { contractModules, contracts } from "../src/ui/contracts.ts";
 
 const domains = fileURLToPath(new URL("../../../domains", import.meta.url));
 
@@ -52,5 +52,25 @@ describe("the api a web half receives", () => {
     expect([...imported]).toEqual(expect.arrayContaining(["@lemma/frame", "@lemma/settings", "@lemma/llm/web", "@lemma/threads"]));
     const offered = Object.keys(contractModules);
     expect([...imported].filter((module) => !offered.includes(module)).sort(), "contracts the bundled plugins import that a web half is not given").toEqual([]);
+  });
+
+  it("merges the contracts with no name exported by two of them, which would hide one, and with the thread routes", () => {
+    const owners: Record<string, string[]> = {};
+    for (const [module, exports] of Object.entries(contractModules as Record<string, object>)) {
+      for (const name of Object.keys(exports)) (owners[name] ??= []).push(module);
+    }
+    expect(
+      Object.entries(owners).filter(([, modules]) => modules.length > 1),
+      "two contracts export one name, so api.contracts hides one",
+    ).toEqual([]);
+    const all = contracts as Record<string, unknown>;
+    expect(
+      ["definePart", "createSlots"].filter((name) => all[name] !== undefined),
+      "api.contracts hands out a maker of slots or parts",
+    ).toEqual([]);
+    expect(
+      ["ThreadRoute", "NewThreadRoute"].filter((name) => all[name] !== undefined),
+      "api.contracts lacks the thread routes",
+    ).toEqual(["ThreadRoute", "NewThreadRoute"]);
   });
 });

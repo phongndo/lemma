@@ -1,5 +1,4 @@
 import { connect, describeError } from "@lemma/client";
-import type { Host } from "@lemma/client";
 import { preloadPaint } from "@lemma/web/paint";
 import { takeToken } from "./lib/token.ts";
 import { bundled } from "./bundled.ts";
@@ -15,16 +14,9 @@ const start = async () => {
   // from the system's, whatever the last look was.
   preloadPaint(!params.has("safe"));
   const token = takeToken();
-  let host: Host;
-  // `?mock` in dev runs against an in-browser fake host (no backend needed).
-  if (import.meta.env.DEV && params.has("mock")) {
-    const { createMockHost } = await import("./mock.ts");
-    host = createMockHost();
-  } else {
-    // The host lists its clients by what they say they are: this page in the desktop app's window, or in a browser.
-    const client = "lemmaDesktop" in window ? "desktop" : "web";
-    host = await connect({ url: location.href, token, client });
-  }
+  // The host lists its clients by what they say they are: this page in the desktop app's window, or in a browser.
+  const client = "lemmaDesktop" in window ? "desktop" : "web";
+  const host = await connect({ url: location.href, token, client });
   // `?safe` runs the app as shipped, ignoring the rows and the plugin directories: the way back from a broken customization.
   // The api for web halves loads only when one needs it, keeping it out of the app's own bundle.
   const api = () => import("./ui/api.ts").then((module) => module.api);

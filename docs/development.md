@@ -165,7 +165,8 @@ run only under `Verify`, which a simulation turns on. [`@lemma/testing`](../pack
 simulated disk and the contract conformance suites.
 
 `scripts/mock-openai.ts` is a scripted provider for end-to-end runs without an
-API key; `scripts/e2e.ts` starts it and a host for tests.
+API key; `scripts/e2e.ts` starts it and a host for tests. The web app's
+`ui:check` runs on such hosts too ([its AGENTS.md](../apps/web/AGENTS.md)).
 
 `pnpm torture` tests the harness from the outside, under process faults
 (`scripts/torture.ts`, in the Soak workflow):

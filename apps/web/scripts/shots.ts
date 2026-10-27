@@ -4,22 +4,29 @@ import { fileURLToPath } from "node:url";
 import { chromium } from "playwright";
 import type { Page } from "playwright";
 import { createServer } from "vite";
+import { closeRouter, HOST_COOKIE, routerUrl, startHost, stopHosts } from "./check-ui/hosts.ts";
 
 /**
- * Screenshots of the app's main screens against the mock host, for comparing
- * a change's look before and after (`scripts/compare-shots.ts`). Writes PNGs
+ * Screenshots of the app's main screens, for comparing a change's look before
+ * and after (`scripts/compare-shots.ts`), on a real host with the scripted
+ * provider and the UI check's seeded threads (`check-ui/hosts.ts`). Writes PNGs
  * to the directory given as the first argument.
  *
- *   nix develop .#browser -c node scripts/shots.ts /tmp/lemma-shots/before
+ *   nix develop .#browser -c node --conditions=lemma-source scripts/shots.ts /tmp/lemma-shots/before
  */
 
 const out = resolve(process.argv[2] ?? "shots");
 mkdirSync(out, { recursive: true });
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+const host = await startHost();
+// The dev server's `/rpc` and `/api` go to the host, by the cookie each page is given.
+process.env.LEMMA_HOST_URL = routerUrl;
+delete process.env.LEMMA_HOST_TOKEN;
 const server = await createServer({ root, configFile: resolve(root, "vite.config.ts"), logLevel: "error", server: { port: 0, host: "127.0.0.1" } });
 await server.listen();
 const address = server.httpServer?.address();
 if (address === null || typeof address !== "object") throw new Error("the dev server has no address");
+const url = `http://127.0.0.1:${address.port}`;
 const executablePath = process.env.LEMMA_CHROMIUM;
 const browser = await chromium.launch({ headless: true, ...(executablePath ? { executablePath } : {}) });
 
@@ -34,10 +41,11 @@ const shot = async (page: Page, name: string) => {
 try {
   for (const theme of ["light", "dark"] as const) {
     const page = await browser.newPage({ viewport: { width: 1280, height: 860 }, colorScheme: theme });
-    await page.goto(`http://127.0.0.1:${address.port}/?mock`);
+    await page.context().addCookies([{ name: HOST_COOKIE, value: host.key, url }]);
+    await page.goto(`${url}/`);
     await page.waitForSelector("textarea");
     await shot(page, `${theme}-01-new-chat`);
-    await page.fill("textarea", "Show me the packages");
+    await page.fill("textarea", "Show me the packages at length");
     await page.keyboard.press("Enter");
     await page.waitForSelector(".turn-footer", { timeout: 30_000 });
     await page.waitForSelector(".code-preview img", { timeout: 30_000 });
@@ -88,4 +96,6 @@ try {
 } finally {
   await browser.close();
   await server.close();
+  await stopHosts();
+  await closeRouter();
 }
