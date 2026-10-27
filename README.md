@@ -1,13 +1,15 @@
 # Lemma
 
-Lemma is an agent harness in which every part, including the agent loop and
-the web app's views, is a plugin that can be turned off or replaced by id.
-What a thread's agent is for is its mode: coding by default, or writing,
-research, or anything a mode of yours describes.
-The plugins are written against a runtime the host and the web app provide, so
-a plugin of yours stands where a bundled one does.
+Lemma is an agent harness. Every part of it is a plugin, including the agent
+loop and the web app's views. You can turn any plugin off, or replace it by id.
 
-Lemma is under active development: [versioning](docs/versioning.md) says what
+A thread's mode says what its agent is for. The default mode is coding. Others
+are writing, research, or anything a mode of yours describes.
+
+The plugins are written against a runtime that the host and the web app
+provide. So a plugin of yours stands where a bundled one does.
+
+Lemma is under active development. [Versioning](docs/versioning.md) says what
 a release may change.
 
 ## Install
@@ -20,28 +22,37 @@ cd your-project
 lemma serve
 ```
 
-`lemma serve` starts the host and opens the web app, where you log in to a
-provider. That installs the stable release, as Homebrew
-(`brew install phongndo/tap/lemma`, or `--cask` for the desktop app), mise,
-npm (`lemma-harness`), and Nix do too; [Installation](docs/installation.md)
-covers each, the nightly channel (the newest build of `main`), updating, and
-removing a release; [Development](docs/development.md) running Lemma from a
+`lemma serve` starts the host and opens the web app. Log in to a provider
+there.
+
+The script installs the stable release. These install it too:
+
+- Homebrew: `brew install phongndo/tap/lemma`, or `--cask` for the desktop app;
+- mise;
+- npm: `lemma-harness`;
+- Nix.
+
+[Installation](docs/installation.md) covers each method. It also covers the
+nightly channel (the newest build of `main`), updating, and removing a
+release. [Development](docs/development.md) covers running Lemma from a
 checkout.
 
 ## Principles
 
 - **Every part is a plugin.** The agent loop, the tools, the session store,
-  and the web app's views are plugins on the same footing as yours, met
-  only through contracts, so any of them can be turned off or replaced by id.
-- **The runtime stays small.** What no plugin can replace (the kernel, the
-  runtime's contracts, the host and web runtimes) is held to a size budget
-  (`scripts/size.ts`), raised only on purpose.
+  and the web app's views are plugins on the same footing as yours. Plugins
+  meet only through contracts. So any of them can be turned off or replaced by
+  id.
+- **The runtime stays small.** The runtime is what no plugin can replace: the
+  kernel, the runtime's contracts, and the host and web runtimes. It is held to
+  a size budget (`scripts/size.ts`). The budget is raised only on purpose.
 - **The session log is the truth.** Every model request can be rebuilt from
-  it, with the plugin that contributed each part, so what the model saw is
+  it, with the plugin that contributed each part. So what the model saw is
   never a guess.
-- **Legible over clever.** A useful plugin is one short file; each extension
-  point says how it composes where it is declared; a plugin's failure is
-  named for it.
+- **Legible over clever.**
+  - A useful plugin is one short file.
+  - Each extension point says how it composes, where it is declared.
+  - A plugin's failure is named for it.
 
 ## Documentation
 

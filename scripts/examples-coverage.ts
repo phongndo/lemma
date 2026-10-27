@@ -1,52 +1,56 @@
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { extensionPoints, walk } from "./sources.ts";
 
-// The examples are the reference a plugin author reads: each extension point a domain's contract declares should have
-// one that uses it, or failing that a bundled plugin, which is written the same way. This lists how far they reach,
-// and the points neither uses, which nothing shows how to meet. It reports, and fails nothing: `pnpm check` runs it.
-// `--list` names, for each point, the examples that use it, and the points no example does.
+// Every registry, hook, event, slot, and part a domain's contract declares needs a user. A user adds an item to it,
+// handles it, or observes it. Reading a registry or slot, running a hook, publishing an event, and drawing a part are
+// its owner's work, so they do not count. Users are bundled plugins, examples, and contracts' own code (a contract that
+// streams an event to clients observes it), outside tests. A capability is left out: its provider is its user.
+// This fails on a point with no user: use it in a plugin or an example, or remove it.
+// It also reports how many points the examples show, as they are the reference a plugin author reads. `--list` names
+// the examples that import each point, and the points none does. `pnpm check` runs it.
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
-/** A contract's extension points: as `scripts/size.ts` counts them. */
-const extensionPoint =
-  /^export (?:const|class) ([A-Z]\w*)\b[^\n]*?(?:Registry\.make|Hook\.make|Event\.make|defineSlot|definePart|extends Context\.Service)\b/gm;
+/** The calls that take a point first and are its owner's: any other call that does (`add`, `on`, `observe`, `stream`) uses it. */
+const OWNER_CALLS = new Set(["list", "first", "get", "owner", "fail", "items", "changes", "invoke", "publish", "partView"]);
 
-const sources = (dir: string): string[] =>
-  existsSync(dir)
-    ? readdirSync(dir).flatMap((name) => {
-        if (name === "node_modules" || name === "tests" || name === "dist" || name.startsWith(".")) return [];
-        const path = join(dir, name);
-        return statSync(path).isDirectory() ? sources(path) : /\.(ts|tsx|js|mjs)$/.test(name) && !/\.test\./.test(name) ? [path] : [];
-      })
-    : [];
+/** Whether a file is a plugin's or a contract's own code: not a test, nor in a `tests` or hidden folder. */
+const isSource = (path: string) => /\.(ts|tsx|js|mjs)$/.test(path) && !/\.test\./.test(path) && !/(^|\/)(tests|\.[^/]*)\//.test(relative(root, path));
+/** A file's code: its strings kept, its comments gone. */
+const code = (file: string) =>
+  readFileSync(file, "utf8").replace(
+    /("(?:\\.|[^"\\\n])*"|'(?:\\.|[^'\\\n])*'|`(?:\\[\s\S]|[^`\\])*`)|\/\/[^\n]*|\/\*[\s\S]*?\*\//g,
+    (_, string) => string ?? "",
+  );
 const packageName = (dir: string): string => (JSON.parse(readFileSync(join(dir, "package.json"), "utf8")) as { readonly name: string }).name;
 const folders = (dir: string): string[] =>
   readdirSync(dir)
     .map((name) => join(dir, name))
     .filter((path) => statSync(path).isDirectory() && existsSync(join(path, "package.json")));
 
-/** Every point, by the package that declares it: `@lemma/agent` and `AgentRequestHook`. */
-const points: { readonly name: string; readonly pkg: string; readonly domain: string }[] = [];
-for (const domain of readdirSync(join(root, "domains"))) {
-  const contract = join(root, "domains", domain, "contract");
-  if (!existsSync(join(contract, "package.json"))) continue;
-  const pkg = packageName(contract);
-  for (const file of sources(join(contract, "src"))) {
-    for (const [, name] of readFileSync(file, "utf8").matchAll(extensionPoint)) {
-      // A service declared as a class and its tag share a name: one point.
-      if (!points.some((point) => point.pkg === pkg && point.name === name)) points.push({ name: name!, pkg, domain });
-    }
-  }
+const points = extensionPoints(root).map((point) => ({
+  ...point,
+  id: `${point.domain}.${point.name}`,
+  pkg: packageName(join(root, "domains", point.domain, "contract")),
+}));
+
+// Users: every call in a domain's or an example's code that hands a point to anything but its owner's calls.
+const used = new Set<string>();
+for (const file of [join(root, "domains"), join(root, "examples")].flatMap(walk).filter(isSource)) {
+  for (const [, call, name] of code(file).matchAll(/([\w$]+)\(\s*([A-Z]\w*)\b/g)) if (!OWNER_CALLS.has(call!)) used.add(name!);
 }
+const plugged = points.filter((point) => point.kind !== "capability");
+const withUser = plugged.filter((point) => used.has(point.name));
+const unused = plugged.filter((point) => !used.has(point.name));
 
 /**
- * The names a plugin's code imports from each `@lemma/` package (a subpath counts as its package), and under `*` those
- * a web half written without a build takes from its `contracts` argument, which names no package.
+ * The names an example imports from each `@lemma/` package (a subpath counts as its package), and under `*` those a
+ * web half written without a build takes from its `contracts` argument, which names no package.
  */
 const importsOf = (dir: string): Map<string, Set<string>> => {
   const found = new Map<string, Set<string>>();
-  for (const file of sources(dir)) {
+  for (const file of walk(dir).filter(isSource)) {
     const text = readFileSync(file, "utf8");
     const imported = [...text.matchAll(/import\s+(?:type\s+)?\{([^}]*)\}\s+from\s+"(@lemma\/[\w-]+)(?:\/[^"]*)?"/g)].map(
       ([, names, from]) => [names!, from!] as const,
@@ -66,29 +70,29 @@ const importsOf = (dir: string): Map<string, Set<string>> => {
   }
   return found;
 };
-
 const examples = folders(join(root, "examples")).map((dir) => ({ name: relative(root, dir), imports: importsOf(dir) }));
-const bundled = readdirSync(join(root, "domains")).flatMap((domain) =>
-  folders(join(root, "domains", domain))
-    .filter((dir) => !dir.endsWith("/contract"))
-    .map((dir) => ({ name: relative(root, dir), imports: importsOf(dir) })),
-);
-const users = (plugins: typeof examples, point: (typeof points)[number]) =>
-  plugins.filter((plugin) => plugin.imports.get(point.pkg)?.has(point.name) || plugin.imports.get("*")?.has(point.name)).map((plugin) => plugin.name);
+const rows = points.map((point) => ({
+  ...point,
+  examples: examples
+    .filter((example) => example.imports.get(point.pkg)?.has(point.name) || example.imports.get("*")?.has(point.name))
+    .map((example) => example.name),
+}));
+const shown = rows.filter((row) => row.examples.length > 0);
 
-const rows = points.map((point) => ({ ...point, examples: users(examples, point), bundled: users(bundled, point) }));
-const byExample = rows.filter((row) => row.examples.length > 0);
-const byNeither = rows.filter((row) => row.examples.length === 0 && row.bundled.length === 0);
 console.log(
-  `examples cover ${byExample.length} of ${rows.length} extension points; bundled plugins ${rows.filter((row) => row.bundled.length > 0).length}; neither ${byNeither.length}`,
+  `extension points with a user: ${withUser.length} of ${plugged.length} (registries, hooks, events, slots, parts); examples show ${shown.length} of ${rows.length}`,
 );
-if (byNeither.length > 0) console.log(`  used by no example or bundled plugin: ${byNeither.map((row) => `${row.domain}.${row.name}`).join(", ")}`);
 if (process.argv.includes("--list")) {
-  for (const row of byExample) console.log(`  ${row.domain}.${row.name}: ${row.examples.join(", ")}`);
+  for (const row of shown) console.log(`  ${row.id}: ${row.examples.join(", ")}`);
   console.log(
     `  no example yet: ${rows
       .filter((row) => row.examples.length === 0)
-      .map((row) => `${row.domain}.${row.name}`)
+      .map((row) => row.id)
       .join(", ")}`,
   );
+}
+if (unused.length > 0) {
+  const script = relative(root, fileURLToPath(import.meta.url));
+  console.error(`Extension points with no user (${script}): ${unused.map((point) => point.id).join(", ")}. Use each in a plugin or an example, or remove it.`);
+  process.exit(1);
 }

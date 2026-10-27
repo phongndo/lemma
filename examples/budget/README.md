@@ -3,13 +3,13 @@
 A token budget for each turn, and a meter. The [plugin](budget.ts) stops a
 turn that has used `maxTokens` before it asks the model again, and when a
 turn ends it posts a notice: how long the turn took, how often it asked the
-model and for how long, how much text the model wrote, and the tokens it
-used, as a `Notice` (`@lemma/contracts`), which the web app shows as a toast.
+model and for how long, how many tools it ran and for how long, how much text
+the model wrote, and the tokens it used, as a `Notice` (`@lemma/contracts`), which the web app shows as a toast.
 
 | Shape     | What it uses                                                                                                                                      |
 | --------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Intercept | `AgentContinueHook` (after the agent's decision, stopping a turn over budget), `LlmRequestHook` (timing each call's stream and counting its text) |
-| Observe   | `TurnStarted`, `TurnEnded` (`@lemma/agent`)                                                                                                       |
+| Observe   | `TurnStarted`, `TurnEnded` (`@lemma/agent`), `ToolExecuted` (`@lemma/tools`: each result, with its duration)                                      |
 
 Observers run on their own, apart from the turn: a model call can come
 before the plugin has observed its turn's start, so its meter is made by

@@ -39,22 +39,6 @@ jobs:
       - run: nix develop -c pnpm check
       - run: nix develop -c pnpm package:check
       - run: nix develop .#browser -c pnpm browser:check
-        env:
-          LEMMA_BENCH_OUTPUT_DIR: ${{ runner.temp }}/metrics
-      # Each commit on main leaves its numbers (bundle size, microbenchmarks, the session log's appends), so a
-      # trend can be read back: `gh run download --name metrics-<sha>`. Timings on shared runners are noisy; compare
-      # two builds with the bench workflow instead.
-      - if: github.event_name == 'push'
-        run: nix develop -c pnpm perf:check
-        env:
-          LEMMA_BENCH_OUTPUT_DIR: ${{ runner.temp }}/metrics
-          LEMMA_PERF_ENFORCE: "0"
-      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        if: github.event_name == 'push'
-        with:
-          name: metrics-${{ github.sha }}
-          path: ${{ runner.temp }}/metrics
-          retention-days: 90
 
   # The tests keep a runner's cores busy, so they run in shards on a runner each, split by how long each file takes
   # (scripts/test-shards.ts).

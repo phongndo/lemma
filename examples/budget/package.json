@@ -2,7 +2,7 @@
   "name": "@lemma/example-budget",
   "version": "0.1.0",
   "private": true,
-  "description": "A token budget for each turn, and a meter: observes the agent's turns, wraps each model call, and has a say in whether a turn goes on",
+  "description": "A token budget for each turn, and a meter: observes the agent's turns and its tools' results, wraps each model call, and has a say in whether a turn goes on",
   "type": "module",
   "scripts": {
     "check": "tsrs --noEmit",
@@ -13,13 +13,13 @@
     "@lemma/contracts": "workspace:*",
     "@lemma/core": "workspace:*",
     "@lemma/llm": "workspace:*",
+    "@lemma/tools": "workspace:*",
     "effect": "4.0.5"
   },
   "devDependencies": {
     "@lemma/agent-loop": "workspace:*",
     "@lemma/sessions": "workspace:*",
     "@lemma/sessions-files": "workspace:*",
-    "@lemma/tools": "workspace:*",
     "@lemma/tools-registry": "workspace:*",
     "@types/node": "24.19.2",
     "tsrs": "0.20.0-ts7.1.0-beta",
