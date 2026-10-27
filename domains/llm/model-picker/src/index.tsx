@@ -10,9 +10,9 @@ import type { PaletteItem } from "@lemma/actions";
 import { SectionIds, SettingsGroups } from "@lemma/settings";
 import { ComposerControls, PromptCommands, ThreadsActionIds } from "@lemma/threads";
 import { Slots, defineWebPlugin } from "@lemma/web";
-import { formatKeys, matchesKeys, withKeys } from "@lemma/web/keys";
+import { matchesKeys, withKeys } from "@lemma/web/keys";
 import type { ModelsService } from "@lemma/llm/web";
-import { BrainIcon, CheckIcon, ChevronDownIcon, ImageIcon, PlusIcon, Popover, SearchIcon, SettingRow, StarIcon } from "@lemma/look";
+import { BrainIcon, CheckIcon, ChevronDownIcon, PlusIcon, Popover, SearchIcon, SettingRow, StarIcon } from "@lemma/look";
 import type { Placement } from "@lemma/look";
 import styles from "./model-picker.css?inline";
 
@@ -177,7 +177,7 @@ function ModelPicker(props: {
   createEffect(() => {
     if (rail() === "favorites" && favoriteModels().length === 0) setRail("all");
   });
-  /** The list mixes providers' models: each row shows its provider's logo, as one model may come from several. */
+  /** Mixed lists name the provider, as one model may come from several. */
   const mixed = () => providers().length > 1 && (query().trim() !== "" || rail() === "all" || rail() === "favorites");
   const shown = createMemo((): readonly ModelInfo[] => {
     // Searching always covers every model.
@@ -341,37 +341,29 @@ function ModelPicker(props: {
                 {(model) => {
                   const selected = () => selectedModel()?.ref === model.ref;
                   const favorite = () => favoriteModels().includes(model.ref);
+                  const details = () =>
+                    [
+                      providerName(model.provider),
+                      `${contextSize(model.contextWindow)} context`,
+                      ...(model.reasoning ? ["Reasoning"] : []),
+                      ...(model.input.includes("image") ? ["Image input"] : []),
+                      ...(onPlan().has(model.provider) ? ["Included in your plan"] : []),
+                    ].join(" · ");
                   return (
-                    <div class="model-row menu-item" role="option" aria-selected={selected()} data-ref={model.ref} onClick={() => pick(model.ref, close)}>
-                      <Show when={mixed()}>
-                        <span class="model-logo" data-tip={providerName(model.provider)}>
-                          <ProviderLogo
-                            id={model.provider}
-                            name={providerName(model.provider)}
-                            custom={props.models.providers().find((candidate) => candidate.id === model.provider)?.logo}
-                          />
-                        </span>
-                      </Show>
-                      <span class="model-name">{model.name}</span>
-                      <span class="model-meta">
-                        <Show when={onPlan().has(model.provider)}>
-                          <span class="model-plan" data-tip="Included in your plan">
-                            Plan
-                          </span>
-                        </Show>
-                        <span>{contextSize(model.contextWindow)}</span>
-                        <Show when={model.reasoning}>
-                          <span class="meta-icon" data-tip="Reasoning">
-                            <BrainIcon />
-                          </span>
-                        </Show>
-                        <Show when={model.input.includes("image")}>
-                          <span class="meta-icon" data-tip="Images">
-                            <ImageIcon />
-                          </span>
-                        </Show>
+                    <div
+                      class="model-row menu-item"
+                      role="option"
+                      aria-selected={selected()}
+                      aria-description={details()}
+                      data-ref={model.ref}
+                      onClick={() => pick(model.ref, close)}
+                    >
+                      <span class="model-name" data-tip={details()}>
+                        {model.name}
                       </span>
-                      {/* Its place kept on every row, so what models offer lines up. */}
+                      <Show when={mixed()}>
+                        <span class="model-provider">{providerName(model.provider)}</span>
+                      </Show>
                       <span class="model-current">
                         <Show when={selected()}>
                           <CheckIcon />
@@ -448,20 +440,6 @@ function ModelPicker(props: {
               </Show>
             </div>
           </div>
-          {/* The keys the list takes beyond a menu's, where they can be read. */}
-          <Show when={shown().length > 0}>
-            <footer class="model-foot">
-              <span>
-                <kbd>{formatKeys(FAVORITE_KEYS)}</kbd> favorite
-              </span>
-              <Show when={railShown() && query() === ""}>
-                <span>
-                  <kbd>←</kbd>
-                  <kbd>→</kbd> providers
-                </span>
-              </Show>
-            </footer>
-          </Show>
         </>
       )}
     </Popover>
