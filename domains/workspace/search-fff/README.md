@@ -21,7 +21,9 @@ Searches files with [fff](https://github.com/dmtrKovalenko/fff), a fuzzy file fi
   skipped. fff refuses the home directory and `/`.
 - **Indexes** are one per directory, opened on the first search, a file search
   or a tool's, and kept current by fff's watcher until `idleMinutes` after the
-  last. A file search uses its work tree's. They index contents and map files
+  last. fff starts the watcher only once a new index is built, contents
+  included, so a change made while it builds shows when the index reopens. A
+  file search uses its work tree's. They index contents and map files
   (fff's defaults for agents), as the `grep` tool needs, though a file search
   reads only paths: on llvm-project (185k files) one took about 950MB, against
   500MB without contents (2026-10-11, [tools.search-fff](../../tools/search-fff/README.md#rationale)).

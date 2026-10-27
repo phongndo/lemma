@@ -9,7 +9,7 @@ import { Inspectors, snapshotOf } from "@lemma/contracts";
 import { FileSearchError, searchFiles } from "@lemma/workspace";
 import type { FileSearchOptions } from "@lemma/workspace";
 import { FffIndexes } from "@lemma/workspace/fff";
-import fileSearch, { insideGlob, makeFileSearch, makeIndexes } from "../src/index.ts";
+import fileSearch, { insideGlob, makeFileSearch, makeIndexes, openFff } from "../src/index.ts";
 import type { Finder, OpenFinder } from "../src/index.ts";
 
 beforeAll(() => {
@@ -50,14 +50,15 @@ const searchOver = (init: { readonly idleMs: number; readonly open?: OpenFinder 
     return { service: yield* makeFileSearch(indexes), snapshot: Effect.promise(indexes.snapshot) };
   });
 
-/** Runs `body` with a search over real fff, closed afterwards. */
+/** Runs `body` with a search over real fff, or what `open` opens, closed afterwards. */
 const withSearch = <A>(
   body: (search: (cwd: string, query: string, options?: FileSearchOptions) => Promise<Result.Result<unknown, FileSearchError>>) => Promise<A>,
+  open: OpenFinder = openFff,
 ) =>
   Effect.runPromise(
     Effect.scoped(
       Effect.gen(function* () {
-        const { service } = yield* searchOver({ idleMs: 60_000 });
+        const { service } = yield* searchOver({ idleMs: 60_000, open });
         return yield* Effect.promise(() => body((cwd, query, options) => Effect.runPromise(Effect.result(service.search(cwd, query, options)))));
       }),
     ),
@@ -138,7 +139,6 @@ describe("search with fff", () => {
     await Effect.runPromise(
       Effect.scoped(
         Effect.gen(function* () {
-          const { openFff } = yield* Effect.promise(() => import("../src/index.ts"));
           const { service } = yield* searchOver({ idleMs: 60_000, open: (root) => (opened.push(root), openFff(root)) });
           const result = yield* service.search(path.join(dir, "pkg"), "", { limit: 200 });
           expect(result.root).toBe(path.join(dir, "pkg"));
@@ -150,14 +150,23 @@ describe("search with fff", () => {
     expect(opened).toEqual([dir]);
   });
 
-  it("sees files created after the first search", async () => {
+  it("sees files created once fff's watcher runs", async () => {
     await project();
-    await withSearch(async (search) => {
-      expect(paths(await search(dir, "later"))).not.toContain("file:src/later.ts");
-      await write("src/later.ts");
-      await vi.waitFor(async () => expect(paths(await search(dir, "later"))).toContain("file:src/later.ts"), { timeout: 5_000, interval: 100 });
-    });
-  });
+    let finder: Finder | undefined;
+    await withSearch(
+      async (search) => {
+        expect(paths(await search(dir, "later"))).not.toContain("file:src/later.ts");
+        // fff starts its watcher after the first search can answer, and misses a file made before (README, Behavior).
+        await vi.waitFor(() => expect(finder?.getScanProgress()).toMatchObject({ ok: true, value: { isWatcherReady: true } }), {
+          timeout: 4_000,
+          interval: 20,
+        });
+        await write("src/later.ts");
+        await vi.waitFor(async () => expect(paths(await search(dir, "later"))).toContain("file:src/later.ts"), { timeout: 4_000, interval: 100 });
+      },
+      async (root) => (finder = await openFff(root)),
+    );
+  }, 10_000);
 
   it("refuses what is not a directory", async () => {
     await project();
