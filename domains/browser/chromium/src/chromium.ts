@@ -45,6 +45,8 @@ export interface ChromiumOptions {
   readonly env?: Readonly<Record<string, string | undefined>>;
   /** How long `render` waits for a page to load: 20 seconds by default. */
   readonly renderTimeoutMs?: number;
+  /** How long an action waits for a popup's document: 30 seconds by default. */
+  readonly popupLoadTimeoutMs?: number;
 }
 
 /** How long an action waits for its target, and a navigation for its page. */
@@ -182,6 +184,7 @@ const tabInfo = async (session: Session, tab: Tab, status?: number): Promise<Bro
 export const makeChromium = (options: ChromiumOptions) => {
   const env = options.env ?? process.env;
   const renderTimeout = options.renderTimeoutMs ?? RENDER_TIMEOUT_MS;
+  const popupLoadTimeout = options.popupLoadTimeoutMs ?? NAVIGATION_TIMEOUT_MS;
   let launched: Promise<PlaywrightBrowser> | undefined;
   /** Each session's profile, made on its first call. */
   const sessions = new Map<string, Promise<Session>>();
@@ -459,7 +462,8 @@ export const makeChromium = (options: ChromiumOptions) => {
           });
         }
         const current = session.tabs.get(session.current ?? tab.id) ?? tab;
-        if (current !== tab) await settle(current.page);
+        // A popup's document may still be parsing: do not report its temporary title as a completed action.
+        if (current !== tab) await current.page.waitForLoadState("domcontentloaded", { timeout: popupLoadTimeout });
         return tabInfo(session, current);
       },
       options,

@@ -169,6 +169,8 @@ describe.skipIf(missing)("Chromium over HTTP", () => {
   const pages: Record<string, [number, string]> = {
     "/opener": [200, html("Opener", `<a href="/two" target="_blank">Blank</a><button onclick="window.open('/two')">Pop</button>`)],
     "/two": [200, html("Two", "<h1>Two</h1>")],
+    "/pending-popup-opener": [200, html("Opener", `<button onclick="window.open('/pending-popup')">Pop</button>`)],
+    "/pending-popup": [200, html("Loading", `<script src="/pending-popup.js"></script><title>Two</title>`)],
     "/missing": [404, html("Missing", "<h1>Not here</h1>")],
     "/long": [
       200,
@@ -182,6 +184,8 @@ describe.skipIf(missing)("Chromium over HTTP", () => {
   const requested: string[] = [];
   const server = createServer((request, response) => {
     requested.push(request.url ?? "");
+    // The popup commits its document but cannot finish parsing until this script loads.
+    if (request.url === "/pending-popup.js") return;
     const [status, body] = pages[request.url ?? ""] ?? [404, "nope"];
     response.writeHead(status, { "content-type": "text/html" });
     response.end(body);
@@ -234,6 +238,20 @@ describe.skipIf(missing)("Chromium over HTTP", () => {
     },
     // Two navigations and clicks can outlast the test's default five seconds under contention; the browser's own waits still apply.
     30_000,
+  );
+
+  it(
+    "fails a popup whose document never finishes loading instead of reporting its unfinished title",
+    async () => {
+      const limited = makeChromium({ idleMs: 0, headless: true, popupLoadTimeoutMs: 100 });
+      try {
+        await run(limited.service.open("pending", { url: `${origin}/pending-popup-opener` }));
+        await expect(run(limited.service.click("pending", { locator: "text=Pop" }))).rejects.toMatchObject({ reason: "Timeout" });
+      } finally {
+        await limited.close();
+      }
+    },
+    LAUNCH_MS,
   );
 
   it(
