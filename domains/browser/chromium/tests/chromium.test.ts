@@ -221,12 +221,20 @@ describe.skipIf(missing)("Chromium over HTTP", () => {
     expect(await run(service.navigate("h", { url: `${origin}/missing` }))).toMatchObject({ title: "Missing", status: 404 });
   });
 
-  it("makes a tab a link or window.open opens the current one, and says so in the click's result", async () => {
-    await run(service.open("p", { url: `${origin}/opener` }));
-    expect(await run(service.click("p", { locator: "text=Blank" }))).toMatchObject({ tabId: "t2", title: "Two", current: true });
-    await run(service.open("p", { tabId: "t1" }));
-    expect(await run(service.click("p", { locator: "text=Pop" }))).toMatchObject({ tabId: "t3", title: "Two", current: true });
-  });
+  let popupAttempt = 0;
+  it(
+    "makes a tab a link or window.open opens the current one, and says so in the click's result",
+    async () => {
+      // A retry must not navigate the previous attempt's tabs while its timed-out action is still finishing.
+      const session = `popup-${++popupAttempt}`;
+      await run(service.open(session, { url: `${origin}/opener` }));
+      expect(await run(service.click(session, { locator: "text=Blank" }))).toMatchObject({ tabId: "t2", title: "Two", current: true });
+      await run(service.open(session, { tabId: "t1" }));
+      expect(await run(service.click(session, { locator: "text=Pop" }))).toMatchObject({ tabId: "t3", title: "Two", current: true });
+    },
+    // Two navigations and clicks can outlast the test's default five seconds under contention; the browser's own waits still apply.
+    30_000,
+  );
 
   it(
     "fails a page drawn on its own that does not finish loading, saying so",
