@@ -3,7 +3,7 @@ import type { Context } from "effect";
 import type { Registries } from "@lemma/core";
 import { elementsOf, HostError, InteractionError, resultOf, wireCodec, withChannel, withdrawnFrom } from "@lemma/contracts";
 import type { Channel, ChannelCall, ChannelStream, Interaction } from "@lemma/contracts";
-import { ToolResult } from "@lemma/tools";
+import { outputBudget, ToolResult } from "@lemma/tools";
 import type { Tool, ToolContext } from "@lemma/tools";
 import { boundOutput } from "@lemma/tools/files";
 import { toolName } from "./policy.ts";
@@ -195,10 +195,10 @@ export const permission = (interaction: Asker, title: string, json: unknown): Ef
   );
 
 /** A result for the model and for scripts: the JSON as bounded text, and whole as `structured`. */
-export const jsonResult = (json: unknown, context: ToolContext, budget: number, details: Record<string, unknown>): Effect.Effect<ToolResult> =>
+export const jsonResult = (json: unknown, context: ToolContext, details: Record<string, unknown>): Effect.Effect<ToolResult> =>
   Effect.promise(async () => {
     const text = JSON.stringify(json, null, 2) ?? "null";
-    const { content, fullOutputPath } = await boundOutput([{ type: "text", text }], { budget, maxResultChars: context.maxResultChars, name: "lemma" });
+    const { content, fullOutputPath } = await boundOutput([{ type: "text", text }], { budget: outputBudget(context.maxResultChars), name: "lemma" });
     return new ToolResult({ content: [...content], structured: json, details: { ...details, ...(fullOutputPath === undefined ? {} : { fullOutputPath }) } });
   });
 
@@ -207,8 +207,6 @@ export interface ChannelToolOptions {
   readonly interaction: Asker;
   /** Ask the person before each call. */
   readonly confirm: boolean;
-  /** Text characters of a result the model reads. */
-  readonly budget: number;
 }
 
 const summaryOf = (channel: Channel) => {
@@ -243,7 +241,7 @@ const callTool = (channel: ChannelCall, options: ChannelToolOptions): Tool => {
           if (refused !== undefined) return errorResult(`"${id}" was not called: ${refused}`);
         }
         const result = yield* callJson(options.registries, id, json);
-        return yield* jsonResult(result, context, options.budget, { channel: id });
+        return yield* jsonResult(result, context, { channel: id });
       }).pipe(Effect.catch((error) => Effect.succeed(errorResult(failure(id, error))))),
   };
 };
@@ -306,7 +304,7 @@ const streamTool = (channel: ChannelStream, options: ChannelToolOptions): Tool =
           if (refused !== undefined) return errorResult(`"${id}" was not opened: ${refused}`);
         }
         const collected = yield* collectJson(options.registries, id, json, given.take ?? DEFAULT_TAKE, given.timeoutMs ?? DEFAULT_STREAM_MS);
-        return yield* jsonResult(collected, context, options.budget, { channel: id });
+        return yield* jsonResult(collected, context, { channel: id });
       }).pipe(Effect.catch((error) => Effect.succeed(errorResult(failure(id, error))))),
   };
 };

@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { Cause, Context, Effect, Exit, Fiber, Layer, Schema, Stream } from "effect";
 import { describe, expect, it } from "vitest";
 import { CoreClosed, definePlugin, Events, makeCore, PluginContext, Registries } from "@lemma/core";
@@ -427,19 +428,26 @@ describe("execute", () => {
     );
   });
 
-  it("truncates long text and publishes ToolExecuted", async () => {
-    const long: Tool<unknown> = { name: "long", description: "", input: Schema.Unknown, execute: async () => ok("x".repeat(50)) };
+  it("keeps the start and the end of long text, the whole in a file, and publishes ToolExecuted", async () => {
+    const whole = Array.from({ length: 100 }, (_, i) => `line ${i + 1}`).join("\n");
+    const long: Tool<unknown> = { name: "long", description: "", input: Schema.Unknown, execute: async () => ok(whole) };
     await Effect.runPromise(
       Effect.scoped(
         Effect.gen(function* () {
-          const core = yield* makeCore([tools, contributor("p", [long])], { configs: { "tools.registry": { maxResultChars: 10 } } });
+          const core = yield* makeCore([tools, contributor("p", [long])], { configs: { "tools.registry": { maxResultChars: 400 } } });
           yield* core.run(
             Effect.gen(function* () {
               const events = yield* Events;
               const executed = yield* Effect.forkChild(Stream.runCollect(Stream.take(events.stream(ToolExecuted), 1)));
               yield* Effect.yieldNow;
               const result = yield* call("long", {});
-              expect(textOf(result)).toBe(`${"x".repeat(10)}\n\n[Output truncated: showing 10 of 50 characters]`);
+              const text = textOf(result);
+              const file = /Full output: (\S+)\]/.exec(text)?.[1];
+              expect(text.length).toBeLessThanOrEqual(400);
+              expect(text).toMatch(
+                /^line 1\nline 2\n[\s\S]*\n\n\[… \d+ lines left out: showing lines 1-\d+ and \d+-100 of 100\. Full output: \S+\]\n\n[\s\S]*\nline 100$/,
+              );
+              expect(readFileSync(file!, "utf8")).toBe(whole);
               const [payload] = Array.from(yield* Fiber.join(executed));
               expect(payload!.invocation.name).toBe("long");
               expect(payload!.result).toEqual(result);
@@ -497,7 +505,7 @@ describe("execute", () => {
         const refused = yield* Effect.flip(invoke(["read"]));
         expect(refused.reason).toBe("NotFound");
         expect(refused.message).toContain("Available tools: read");
-        expect(JSON.parse(textOf(yield* invoke(["context", "read"])))).toEqual({ offered: ["context", "read"], maxResultChars: 100_000 });
+        expect(JSON.parse(textOf(yield* invoke(["context", "read"])))).toEqual({ offered: ["context", "read"], maxResultChars: 50_000 });
         // The model's own call of a tool its prompt still declares, which the request no longer offers.
         const kept = yield* Effect.flip(
           registry.execute(

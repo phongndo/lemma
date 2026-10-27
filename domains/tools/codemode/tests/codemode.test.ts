@@ -21,7 +21,7 @@ import read from "@lemma/tools-read";
 import write from "@lemma/tools-write";
 import codemode, { codemodeTool } from "../src/index.ts";
 import { Journals } from "../src/journal.ts";
-import type { CodemodeDetails } from "../src/index.ts";
+import type { CodemodeDeps, CodemodeDetails } from "../src/index.ts";
 
 /** What the fake classifier was asked, by ref. */
 const asked: { ref: string; context: ClassifierContext }[] = [];
@@ -495,13 +495,12 @@ describe("pi codemode", () => {
     expect(textOf(result)).toContain("session:s");
   });
 
-  it("cuts its output to fit the registry's cap, so the note naming the full output survives", async () => {
+  it("keeps its output within the call's budget, so the note naming the full output survives the registry's cut", async () => {
     const result = await call(`text("x".repeat(20_000));`, { maxResultChars: 3_000 });
     const text = textOf(result);
     expect(text.length).toBeLessThanOrEqual(3_000);
-    expect(text).not.toContain("[Output truncated:");
     const saved = (result.details as { fullOutputPath?: string }).fullOutputPath!;
-    expect(text).toContain(`[Full output: ${saved}`);
+    expect(text).toContain(`characters left out: showing the start and the end of its one line. Full output: ${saved}]`);
     expect(await fs.readFile(saved, "utf8")).toBe("x".repeat(20_000));
     await fs.rm(saved, { force: true });
   });
@@ -531,6 +530,12 @@ describe("classifier models", () => {
     instructions: "How does the user feel?",
     criteria: { positive: "Happy", negative: "Unhappy" },
   };
+
+  it("are described on demand, in the models namespace, rather than in the tool's description", async () => {
+    const result = await run(`const space = await describeNamespace("models"); return [space.tools, space.instructions.includes("models.classify(model")];`);
+    expect(textOf(result)).toContain("[[],true]");
+    expect(codemodeTool({} as CodemodeDeps).description).not.toContain("models.classify");
+  });
 
   it("are listed, and asked through Llm, with what each call used in the details", async () => {
     asked.length = 0;

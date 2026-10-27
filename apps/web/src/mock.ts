@@ -510,8 +510,8 @@ export const createMockHost = (): Host => {
       }),
     }),
     "tools.registry": Schema.Struct({
-      maxResultChars: Schema.Int.pipe(Schema.check(Schema.isGreaterThan(0)), Schema.withDecodingDefaultType(Effect.sync(() => 100_000))).annotate({
-        description: "Total text characters one result may carry to the model.",
+      maxResultChars: Schema.Int.pipe(Schema.check(Schema.isGreaterThan(0)), Schema.withDecodingDefaultType(Effect.sync(() => 50_000))).annotate({
+        description: "Text characters one result carries to the model, every tool's output bounded by it.",
       }),
     }),
     "workspace.tidy": Schema.Struct({
@@ -523,7 +523,8 @@ export const createMockHost = (): Host => {
     "workspace.search-fff": Schema.Struct({
       idleMinutes: Schema.Number.pipe(Schema.check(Schema.isGreaterThan(0)), Schema.withDecodingDefaultType(Effect.sync(() => 15))).annotate({
         title: "Keep an index for",
-        description: "Minutes a directory's index stays in memory after its last search; the next search opens it again.",
+        description:
+          "Minutes a directory's index stays in memory after its last search, by file search or the grep and find tools; the next search opens it again.",
       }),
     }),
     "transport.server": Schema.Struct({
@@ -578,7 +579,7 @@ export const createMockHost = (): Host => {
     "profiles.switcher": { requires: ["lemma/Paths"] },
     "context.project": { requires: ["lemma/Paths"], contributes: [{ name: "lemma/agent.sections", items: 1, keys: ["project-context"] }] },
     "workspace.local": { provides: ["lemma/Workspace"], requires: ["lemma/Paths"] },
-    "workspace.search-fff": { contributes: [{ name: "lemma/file-searchers", items: 1, keys: ["workspace.search-fff"] }] },
+    "workspace.search-fff": { provides: ["lemma/FffIndexes"], contributes: [{ name: "lemma/file-searchers", items: 1, keys: ["workspace.search-fff"] }] },
     "workspace.commands": {
       requires: ["lemma/Interaction", "lemma/Workspace"],
       contributes: [{ name: "lemma/commands", items: 2, keys: ["workspace.checkout", "workspace.new-branch"] }],
@@ -591,7 +592,7 @@ export const createMockHost = (): Host => {
     },
     "devtools.trace": { requires: ["lemma/Trace"] },
     "tools.ask": { requires: ["lemma/Interaction"], contributes: [{ name: "lemma/tools", items: 1, keys: ["ask_user"] }] },
-    "tools.search-fff": { contributes: [{ name: "lemma/tools", items: 2, keys: ["grep", "find"] }] },
+    "tools.search-fff": { requires: ["lemma/FffIndexes"], contributes: [{ name: "lemma/tools", items: 2, keys: ["grep", "find"] }] },
     // The `lemma` command's: the commands each domain adds reach it through its channels, so they require nothing.
     "cli.registry": { provides: ["lemma/CliRunner"] },
     "agent.cli": { contributes: [{ name: "lemma/cli-commands", items: 4 }] },

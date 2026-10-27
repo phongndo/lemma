@@ -1,16 +1,17 @@
 import type { FileFinderApi } from "@ff-labs/fff-node";
+import type { FffIndexesService } from "@lemma/workspace/fff";
 
-/** The part of fff's `FileFinder` the tools use. */
-export type Finder = Pick<FileFinderApi, "grep" | "fileSearch" | "isScanning" | "waitForScan" | "getScanProgress" | "destroy">;
+/** fff's `FileFinder`: a test, or another engine of the same shape, stands in for it. */
+export type Finder = FileFinderApi;
 
 /** Opens an index of `root`, an existing directory with symlinks resolved; rejects when it cannot. */
 export type OpenFinder = (root: string) => Promise<Finder>;
 
 /**
  * fff, loaded on first use: a platform without its native library fails the
- * tools' calls, not the plugin. Its defaults for agents: contents indexed and
- * files mapped once scanned, so a grep reads memory rather than the disk, and
- * fff's watcher keeps both current.
+ * searches, not the plugin. Its defaults for agents, since the `grep` tool
+ * searches the same index: contents indexed and files mapped once scanned, so
+ * a grep reads memory rather than the disk, and fff's watcher keeps both current.
  */
 export const openFff: OpenFinder = async (root) => {
   const { FileFinder } = await import("@ff-labs/fff-node");
@@ -38,7 +39,7 @@ export interface IndexSnapshot {
   readonly idleSeconds: number;
 }
 
-export interface Indexes {
+export interface Indexes extends FffIndexesService {
   /** Runs `body` with the index of `root`, opening it on first use; it is closed `idleMs` after the last call using it ends. */
   readonly use: <A>(root: string, body: (finder: Finder) => Promise<A>) => Promise<A>;
   /** The open indexes, for the inspector. */
@@ -49,7 +50,10 @@ export interface Indexes {
 
 const message = (cause: unknown) => (cause instanceof Error ? cause.message : String(cause));
 
-/** One index per directory searched, shared by the calls that arrive while it opens; a failed open is retried by the next call. */
+/**
+ * One index per directory searched, shared by every call using it, those that arrive while it opens too; a failed open
+ * is retried by the next call.
+ */
 export const makeIndexes = (options: { readonly idleMs: number; readonly open?: OpenFinder }): Indexes => {
   const open = options.open ?? openFff;
   const idleMs = Math.min(options.idleMs, MAX_TIMEOUT_MS);

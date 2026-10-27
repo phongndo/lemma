@@ -95,7 +95,7 @@ export const question = (call: ToolInvocation, config: typeof Config.Type): Ques
 export default definePlugin({
   id: "approvals",
   version: "0.1.0",
-  uses: ["lemma/tools@1"],
+  uses: ["lemma/tools@2"],
   config: Config,
   requires: { interaction: Interaction },
   setup: ({ interaction }, { config, add }) => {

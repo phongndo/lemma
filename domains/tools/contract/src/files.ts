@@ -3,13 +3,15 @@
  * do: paths resolved against the session's directory (`~` expanded, a leading `@` dropped), messages for failed file
  * operations, one write at a time per file (`withFileLock`, and `withFileLocks` for several), and writes that replace
  * a file whole or not at all (`replaceFile`); and for a tool with output too long to return whole, a private temp file
- * holding it (`outputFile`, `boundOutput`).
+ * holding it (`outputFile`), and its start and end for the model (`boundOutput`).
  */
 import { randomBytes } from "node:crypto";
 import { closeSync, lstatSync, mkdirSync, mkdtempSync, openSync, readdirSync, rmSync } from "node:fs";
 import { lstat, mkdir, readFile, readlink, realpath, stat, writeFile } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import * as path from "node:path";
+import { keepEnds, lineCount } from "./bound.ts";
+import type { Cut } from "./bound.ts";
 import { ToolResult } from "./tools.ts";
 import { errorCode, expandHome, isAlive, kindOf, writeFileAtomic } from "@lemma/contracts/fs";
 
@@ -242,45 +244,34 @@ export function outputFile(name: string, extension: string): OutputFile {
 
 type Content = ToolResult["content"][number];
 
-/** Room `boundOutput` keeps under the registry's cap for its notes and a header of the tool's own. */
-const NOTES_CHARS = 1_000;
-const CHARS_PER_TOKEN = 4;
-
 /**
- * Bounds a tool's output for the model. Past `budget` characters of text, or past the registry's cap
- * (`ToolContext.maxResultChars`) less room for the notes, the text items become one that keeps the start and the end
- * of the text, with the images after it, and the whole text goes to a temp file the model can read (`fullOutputPath`,
- * an `outputFile`, `lemma-<name>-….txt`). Cut under the cap, the result is not cut again by the registry, which would lose its end and
- * the note naming the file.
+ * Bounds a tool's output for the model to `budget` characters of text: a tool passes `outputBudget` of its call's
+ * `maxResultChars`, the registry the budget itself. Past it, the text items become one that keeps the start and the end
+ * of their text (`keepEnds`), with the images after it, and the whole text goes to a temp file the model can read
+ * (`fullOutputPath`, an `outputFile`, `lemma-<name>-….txt`).
  */
 export async function boundOutput(
   content: readonly Content[],
-  options: { readonly budget: number; readonly maxResultChars?: number | undefined; readonly name: string },
-): Promise<{ readonly content: readonly Content[]; readonly fullOutputPath?: string }> {
-  const budget = Math.min(options.budget, Math.max(0, (options.maxResultChars ?? Number.POSITIVE_INFINITY) - NOTES_CHARS));
+  options: { readonly budget: number; readonly name: string },
+): Promise<{ readonly content: readonly Content[]; readonly fullOutputPath?: string; readonly cut?: Cut }> {
   const combined = content.flatMap((item) => (item.type === "text" ? [item.text] : [])).join("\n");
-  if (combined.length <= budget) return { content };
-  const headChars = Math.floor(budget / 2);
-  const tailChars = budget - headChars;
-  const removed = combined.length - budget;
-  const tail = tailChars > 0 ? combined.slice(-tailChars) : "";
-  let text = `Warning: truncated output (original token count: ${Math.ceil(combined.length / CHARS_PER_TOKEN)})\nTotal output lines: ${combined.split("\n").length}\n\n${combined.slice(0, headChars)}…${Math.ceil(removed / CHARS_PER_TOKEN)} tokens truncated…${tail}`;
-  let file = "";
-  let saved = true;
+  if (combined.length <= options.budget) return { content };
+  let rest: string;
+  let file: string | undefined;
   let made: OutputFile | undefined;
   try {
-    made = outputFile(`lemma-${options.name}`, "txt");
+    made = outputFile(`lemma-${options.name.replace(/[^\w-]/g, "_")}`, "txt");
+    await writeFile(made.path, combined);
     file = made.path;
-    await writeFile(file, combined);
-    text += `\n\n[Full output: ${file} (read with offset/limit)]`;
+    rest = `Full output: ${file}`;
   } catch (cause) {
-    saved = false;
-    text += `\n\n[Could not save the full output: ${cause instanceof Error ? cause.message : String(cause)}]`;
+    rest = `The full output could not be saved: ${cause instanceof Error ? cause.message : String(cause)}`;
   } finally {
     made?.release();
   }
-  const bounded = [{ type: "text" as const, text }, ...content.filter((item) => item.type === "image")];
-  return saved ? { content: bounded, fullOutputPath: file } : { content: bounded };
+  const kept = keepEnds({ head: combined, tail: combined, chars: combined.length, lines: lineCount(combined) }, options.budget, rest);
+  const bounded = [{ type: "text" as const, text: kept.text }, ...content.filter((item) => item.type === "image")];
+  return { content: bounded, ...(file === undefined ? {} : { fullOutputPath: file }), ...(kept.cut === undefined ? {} : { cut: kept.cut }) };
 }
 
 /** PNG, JPEG, GIF, or WebP by its first bytes, as pi tells them; a file's extension is not trusted. */

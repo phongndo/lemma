@@ -131,7 +131,6 @@ in each.
 | Add a view of a thread                                                 | Add to `Views` ([todo](../examples/todo/README.md))                                                                   | [threads](../domains/threads/README.md)                                    |
 | Add a page at an address                                               | Add to `Pages`, with a `defineRoute` route                                                                            | the runtime's `Pages`                                                      |
 | Add a settings section                                                 | Add to `SettingsSections`                                                                                             | [settings](../domains/settings/README.md)                                  |
-| List a kind of thing in Settings › Integrations                        | Add to `IntegrationKinds`                                                                                             | [integrations](../domains/integrations/README.md)                          |
 | Add a theme, an accent, or a font                                      | Add to `Themes`, `Accents`, `Fonts`                                                                                   | [look](../domains/look/README.md)                                          |
 | Add a key or a palette list                                            | Add to `Actions`, `PaletteSources`                                                                                    | [actions](../domains/actions/README.md)                                    |
 | Draw a shared piece differently everywhere                             | Intercept its part (`IconPart`, `ChatToolPart`, …)                                                                    | [look](../domains/look/README.md), [threads](../domains/threads/README.md) |
@@ -190,11 +189,11 @@ Effect. The [kernel's README](../packages/core/README.md) covers the rest:
 ## Contract versions
 
 Each domain's contract has a version, which its package exports
-(`TOOLS_CONTRACT` is `"lemma/tools@1"`) and the plugin serving the domain
+(`TOOLS_CONTRACT` is `"lemma/tools@2"`) and the plugin serving the domain
 implements. Say which versions yours is written against, as literals:
 
 ```ts
-export default definePlugin({ id: "greet", uses: ["lemma/tools@1"], setup: … });
+export default definePlugin({ id: "greet", uses: ["lemma/tools@2"], setup: … });
 ```
 
 After an incompatible change to a contract (something removed or renamed, or a

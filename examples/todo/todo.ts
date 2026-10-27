@@ -65,7 +65,7 @@ export default definePlugin({
   id: "todo",
   version: "0.1.0",
   // The contracts it is written against: after an incompatible change to one, it is left out, saying which.
-  uses: ["lemma/agent@2", "lemma/sessions@1", "lemma/tools@1"],
+  uses: ["lemma/agent@2", "lemma/sessions@1", "lemma/tools@2"],
   requires: { sessions: Sessions },
   setup: ({ sessions }, { add }) => {
     add(Tools, {

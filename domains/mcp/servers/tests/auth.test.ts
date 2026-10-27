@@ -609,7 +609,7 @@ describe("a remote server that drops its connection", () => {
         },
         warn: () => {},
       },
-      { file: join(home, "mcp.json"), authFile: join(home, "mcp-auth.json"), maxOutputChars: 1000, version: "0", env: {}, retryDelaysMs: [20, 60_000] },
+      { file: join(home, "mcp.json"), authFile: join(home, "mcp-auth.json"), version: "0", env: {}, retryDelaysMs: [20, 60_000] },
     );
     const reached = (check: (server: McpServerStatus) => boolean) =>
       new Promise<McpServerStatus>((resolve) => {

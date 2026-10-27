@@ -32,7 +32,7 @@ export const makeIsolated = (module = new URL("./tools.mjs", import.meta.url), i
   definePlugin({
     id,
     version: "0.1.0",
-    uses: ["lemma/tools@1"],
+    uses: ["lemma/tools@2"],
     config: Config,
     setup: async (_deps, { add, config, onCleanup }) => {
       const isolate = startIsolate(module, config);

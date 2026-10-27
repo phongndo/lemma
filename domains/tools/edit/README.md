@@ -2,7 +2,8 @@
 
 The `edit` tool: targeted replacements in a file. Adds it to `Tools`. No config.
 Paths resolve as `read`'s do. Its web half (`./web`) shows a call as the file
-changed, with its diff.
+changed, with its diff. While `tools.patch` is on, a request on a GPT or Codex
+model gets `apply_patch` instead ([which models get it](../patch/README.md#which-models-get-it)).
 
 | Input                                   | Behavior                                                                                                                                                                                                                                                                                                                 |
 | --------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |

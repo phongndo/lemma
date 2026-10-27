@@ -31,7 +31,7 @@ export interface JobExit {
 }
 
 /** What a background command's exit notice keeps of its output: much less than a result, as it arrives unasked. */
-const NOTICE_LIMITS = { maxLines: 200, maxBytes: 16 * 1024 } as const;
+const NOTICE_LIMITS = { maxChars: 16_000 } as const;
 
 /** The background commands of every session, with what to do when one exits. */
 export interface Jobs {

@@ -6,7 +6,7 @@ import { MAX_IMAGE_BYTES } from "@lemma/llm";
 import { ImageBlock, ToolResult } from "@lemma/tools";
 import type { Tool, ToolNamespace } from "@lemma/tools";
 import { inlineLocalImages } from "@lemma/tools/files";
-import { HTML_MAX_CHARS, HTML_TALL_PAGE, HTML_THEME_VARIABLES, htmlBootstrap, htmlTheme, htmlThemeCss, withHtmlBootstrap } from "@lemma/tools/html";
+import { HTML_MAX_CHARS, HTML_TALL_PAGE, htmlBootstrap, htmlTheme, htmlThemeCss, withHtmlBootstrap } from "@lemma/tools/html";
 
 type Service = Context.Service.Shape<typeof Browser>;
 
@@ -266,7 +266,7 @@ const DEFAULT_WIDTH = 728;
 /** `html_preview`: a page drawn as the chat draws it, to check before `html_render` shows it. */
 export const htmlPreviewTool = (browser: Service): Tool<HtmlPreviewInput> => ({
   name: "html_preview",
-  description: `Draw an HTML page in a headless browser, as the chat would show it, and get back a PNG screenshot, contentHeight (the height the page needs at this width), and its console output (log, info, warning, error, and uncaught exceptions with their stacks); console.log is a fine way to report checks of your own. Use it to check and fix a page before showing it with html_render. Write one self-contained document with inline <style> and <script>; absolute paths to local images (src="/abs/shot.png", CSS url(/abs/bg.webp), or a string in a script) are inlined, and remote http(s) URLs, such as a chart library from a CDN, load as they are; addresses on this machine or its network (localhost, 192.168.x.x) do not load here. The page sits on the chat's background: leave html, body, and the outermost element without a background, use a fluid width with no horizontal padding on the outermost element and no outer card, border, or banner title, give charts fixed pixel heights, and avoid viewport heights (100vh, height: 100% on html or body). The page reads the app's theme from CSS variables on :root, which follow light and dark: ${HTML_THEME_VARIABLES.join(", ")}.`,
+  description: `Draw an HTML page in a headless browser as html_render would show it in the chat, and get back a PNG screenshot, contentHeight (the height the page needs at this width), and its console output (log, info, warning, error, and uncaught exceptions with their stacks); console.log is a fine way to report checks of your own. Use it to check and fix a page before showing it with html_render, written as html_render's description says. Addresses on this machine or its network (localhost, 192.168.x.x) do not load here.`,
   input: HtmlPreviewInput,
   output: HtmlPreviewOutput,
   replay: "safe",

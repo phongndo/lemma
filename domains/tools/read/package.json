@@ -18,10 +18,13 @@
     "@lemma/threads": "workspace:*",
     "@lemma/tools": "workspace:*",
     "@lemma/web": "workspace:*",
-    "effect": "4.0.5"
+    "effect": "4.0.5",
+    "jpeg-js": "0.4.4",
+    "pngjs": "7.0.0"
   },
   "devDependencies": {
     "@types/node": "24.19.2",
+    "@types/pngjs": "6.0.5",
     "tsrs": "0.20.0-ts7.1.0-beta",
     "vitest": "5.0.5"
   },

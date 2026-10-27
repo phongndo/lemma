@@ -19,10 +19,12 @@
     "@lemma/threads": "workspace:*",
     "@lemma/tools": "workspace:*",
     "@lemma/web": "workspace:*",
+    "@lemma/workspace": "workspace:*",
     "effect": "4.0.5"
   },
   "devDependencies": {
     "@lemma/tools-registry": "workspace:*",
+    "@lemma/workspace-search-fff": "workspace:*",
     "@types/node": "24.19.2",
     "tsrs": "0.20.0-ts7.1.0-beta",
     "vitest": "5.0.5"

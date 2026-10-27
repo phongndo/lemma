@@ -6,8 +6,8 @@ import type { Tool } from "@lemma/tools";
 import type { Jobs } from "./jobs.ts";
 import { OutputAccumulator, ScriptOutput } from "./output.ts";
 import { exitCodeOf, killTree, spawnShell, waitForExit } from "./process.ts";
-import { DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES } from "@lemma/tools";
-import type { Truncation } from "@lemma/tools";
+import { outputBudget } from "@lemma/tools";
+import type { Cut } from "@lemma/tools";
 
 const foreground = {
   command: Schema.String.annotate({ description: "Bash command to execute" }),
@@ -48,14 +48,12 @@ export interface BashDetails {
   readonly timedOut?: boolean;
   readonly aborted?: boolean;
   /** How the output was cut, when it was: the counts, its text being the result's own, which the log keeps once. */
-  readonly truncation?: Omit<Truncation, "content">;
+  readonly truncation?: Cut;
   /** The complete output, when it was truncated, or for a background command, as it is written. */
   readonly fullOutputPath?: string;
   /** A background command: it runs on, as job `id` (`Job.id`) with `pid`, and its exit is told to the model. */
   readonly background?: { readonly id: string; readonly pid: number };
 }
-
-const withoutContent = ({ content: _, ...counts }: Truncation): Omit<Truncation, "content"> => counts;
 
 /** setTimeout's ceiling. */
 const MAX_TIMEOUT_MS = 2_147_483_647;
@@ -69,7 +67,7 @@ export const DEFAULT_BASH_TIMEOUT = 600;
  */
 export const makeBashTool = (defaultTimeout: number = DEFAULT_BASH_TIMEOUT, jobs?: Jobs): Tool<BashInput> => ({
   name: "bash",
-  description: `Execute a bash command in the current working directory. Returns stdout and stderr. Prefer the dedicated tools for reading, searching, and editing files when they are offered. Long output keeps its first and last ${DEFAULT_MAX_LINES / 2} lines or ${DEFAULT_MAX_BYTES / 2048}KB (whichever is hit first), and the full output is saved to a temp file. Optionally provide a timeout in seconds${
+  description: `Execute a bash command in the current working directory. Returns stdout and stderr. Prefer the dedicated tools for reading, searching, and editing files when they are offered. Long output keeps its start and its end, and the full output is saved to a temp file. Optionally provide a timeout in seconds${
     defaultTimeout > 0 ? `; without one, the command is stopped after ${defaultTimeout} seconds` : ""
   }.${
     jobs === undefined
@@ -79,7 +77,7 @@ export const makeBashTool = (defaultTimeout: number = DEFAULT_BASH_TIMEOUT, jobs
   // Its decoded input is a `BashInput` with no `background`.
   input: jobs === undefined ? (ForegroundInput as unknown as typeof BashInput) : BashInput,
   output: BashOutput,
-  execute: async ({ command, timeout: requested, background }, { sessionId, toolCallId, cwd, signal, update }) => {
+  execute: async ({ command, timeout: requested, background }, { sessionId, toolCallId, cwd, signal, update, maxResultChars }) => {
     const started = performance.now();
     const timeout = requested ?? (defaultTimeout > 0 && background !== true ? defaultTimeout : undefined);
     if (timeout !== undefined && (!Number.isFinite(timeout) || timeout <= 0)) throw new Error("Invalid timeout: must be a finite number of seconds");
@@ -122,7 +120,7 @@ export const makeBashTool = (defaultTimeout: number = DEFAULT_BASH_TIMEOUT, jobs
     // Recheck after the lookup; from here to installing the abort listener runs synchronously.
     if (signal.aborted) throw new Error("Command aborted");
 
-    const output = new OutputAccumulator("lemma-bash");
+    const output = new OutputAccumulator("lemma-bash", { maxChars: outputBudget(maxResultChars) });
     const script = new ScriptOutput();
     const child = spawnShell(command, cwd);
     // Decoded once, as it streams: a character split across chunks is held until its last byte arrives.
@@ -159,8 +157,8 @@ export const makeBashTool = (defaultTimeout: number = DEFAULT_BASH_TIMEOUT, jobs
     const snapshot = output.snapshot();
     await output.close();
 
-    const { truncation, fullOutputPath } = snapshot;
-    const body = output.shown(snapshot, fullOutputPath === undefined ? "Full output could not be saved" : `Full output: ${fullOutputPath}`);
+    const { fullOutputPath } = snapshot;
+    const { text: body, cut } = output.kept(snapshot, fullOutputPath === undefined ? "The full output could not be saved" : `Full output: ${fullOutputPath}`);
     const status = aborted
       ? "Command aborted"
       : timedOut
@@ -174,7 +172,7 @@ export const makeBashTool = (defaultTimeout: number = DEFAULT_BASH_TIMEOUT, jobs
       exitCode: aborted || timedOut ? null : exitCode,
       ...(timedOut ? { timedOut } : {}),
       ...(aborted ? { aborted } : {}),
-      ...(truncation.truncated ? { truncation: withoutContent(truncation) } : {}),
+      ...(cut === undefined ? {} : { truncation: cut }),
       ...(fullOutputPath === undefined ? {} : { fullOutputPath }),
     };
     const textBody = status === undefined ? body || "(no output)" : `${body ? `${body}\n\n` : ""}${status}`;

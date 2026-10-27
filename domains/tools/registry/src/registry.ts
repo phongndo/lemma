@@ -7,13 +7,13 @@ import { creditOf, inChainOrder, Inspectors } from "@lemma/contracts";
 import type { CheckCredit, ResultCredit } from "@lemma/contracts";
 import { Guards, ToolError, ToolExecuteHook, ToolExecuted, ToolOutput, ToolResult, Tools } from "@lemma/tools";
 import type { ExecuteOptions, Tool, ToolContext, ToolContribution, ToolInvocation, ToolRunner } from "@lemma/tools";
-import { capResult, textLength } from "./content.ts";
+import { boundOutput } from "@lemma/tools/files";
 import { toolOutput, toolParameters } from "./schema.ts";
 
 type Service = Context.Service.Shape<typeof ToolRunner>;
 
 interface RegistryOptions {
-  /** Total text characters a result may carry to the model before it is truncated. */
+  /** Text characters a result carries to the model; past them it keeps its start and its end. */
   readonly maxResultChars: number;
 }
 
@@ -316,11 +316,17 @@ export const makeRegistry = (options: RegistryOptions): Effect.Effect<Service, n
             Effect.flatMap((decoded) =>
               hooks.invoke(ToolExecuteHook, invocation, terminal(invocation, decoded, signal, executeOptions?.update, checks), credited),
             ),
-            Effect.map((result) => {
-              const capped = capResult(result, options.maxResultChars);
-              if (capped !== result) cut = { from: textLength(result), to: options.maxResultChars };
-              return capped;
-            }),
+            // Past the budget, the text keeps its start and its end, and the whole goes to a file the model can read.
+            Effect.flatMap((result) =>
+              Effect.map(
+                Effect.promise(() => boundOutput(result.content, { budget: options.maxResultChars, name: invocation.name })),
+                (bounded) => {
+                  if (bounded.cut === undefined) return result;
+                  cut = { from: bounded.cut.chars, to: bounded.cut.kept };
+                  return new ToolResult({ ...result, content: [...bounded.content] });
+                },
+              ),
+            ),
             // Handler failures, invalid input, and denials are results the model reads and can act on. A core shutting
             // down is not one: a defect, which the caller (the agent leaves its turn to resume) can tell apart.
             Effect.catch((error) => (error._tag === "CoreClosed" ? Effect.die(error) : Effect.succeed(errorResult(error.message)))),

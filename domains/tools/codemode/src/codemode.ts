@@ -9,7 +9,7 @@ import type { Context } from "effect";
 import { CoreClosed } from "@lemma/core";
 import { addUsage, ClassifierContext, contentText, ImagesContext } from "@lemma/llm";
 import type { Llm, Usage } from "@lemma/llm";
-import { ToolInvocation, ToolResult } from "@lemma/tools";
+import { outputBudget, ToolInvocation, ToolResult } from "@lemma/tools";
 import type { ImageBlock, Tool, ToolContribution, ToolNamespace, ToolRunner } from "@lemma/tools";
 import { boundOutput, outputFile } from "@lemma/tools/files";
 import type { CodemodeCallRecord, CodemodeDetails, CodemodeDisplay } from "./details.ts";
@@ -73,9 +73,6 @@ interface Settled {
 const MEMORY_LIMIT_BYTES = 256 * 1024 * 1024;
 /** A script without a `timeout_ms` stops after this. */
 const DEFAULT_TIMEOUT_MS = 300_000;
-/** Output budget without a `max_output_tokens` option. */
-const DEFAULT_MAX_OUTPUT_TOKENS = 10_000;
-const CHARS_PER_TOKEN = 4;
 /** What a call of a tool that declares no output resolves to: its text (or `{ text, images }`, which the description names). */
 const TEXT_OUTPUT = { type: "string" };
 /** Results of `searchTools` without a `limit`. */
@@ -104,16 +101,26 @@ const ARGS_CHARS = 160;
 const DESCRIPTION = `Run JavaScript that calls other tools. The code is raw JavaScript (no code fence), run as an async function body in a QuickJS sandbox: top-level \`await\` and \`return\` work. No Node, file system, network, or timers.
 - \`await tools.<name>({ ...args })\` calls any of your other tools with the same arguments (characters not valid in identifiers become \`_\`). It resolves to what the tool's declaration says (\`bash\` to \`{ output, exitCode, truncated, fullOutputPath?, wallTimeSeconds }\` with up to 1 MiB of output, \`read\` to text or an image block; one declared \`Promise<string>\` to \`{ text, images }\` instead when its result has images), and rejects with an Error on failure; a tool declaring an object resolves on failure too, so check its fields. Calls still running when the script ends are cancelled.
 - Some tools are not in your tool list: only scripts call them, in namespaces the system prompt names. Find them with \`await searchTools(query, { limit?, namespace? })\`, \`await describeTool(name)\` (its declaration), and \`await describeNamespace(name)\` (how its tools work together), or \`ALL_TOOLS\`.
-- Optional first line: \`// @options: {"max_output_tokens": 10000, "timeout_ms": 60000}\`. Without \`timeout_ms\`, a script stops after 300 seconds; image generation can take minutes.
+- Optional first line: \`// @options: {"timeout_ms": 60000}\`. Without it, a script stops after 300 seconds; image generation can take minutes.
 
 Globals:
 - \`text(value)\`, \`image(imageBlockOrDataUrl)\`, \`console.log(...)\`, and top-level \`return\` add output; \`exit()\` ends the script. \`image()\` also saves the image to a temp file whose path the output names.
 - \`store(key, value)\` and \`load(key)\` keep small JSON values (ids, cursors, results to reuse) across codemode calls on this branch of the session; a script's writes are kept when it succeeds.
-- \`models\` runs models that are not chat models with the session's credentials, four calls at a time:
-  - Classifiers answer typed questions about JSON state (and images, where \`input\` includes "image") with calibrated probabilities, fast and cheaply, such as TypeSafe's Jev. List them with \`await models.getAvailableOfType("classifier")\` (\`{ ref, provider, id, name, input }\`; \`getModelsOfType\` lists all, \`getModelOfType(type, provider, id)\` finds one). \`await models.classify(model, { state, images?, questions })\`, \`model\` an entry or a ref such as "typesafe/jev-latest", \`questions\` mapping ids to \`{ type: "choice", instructions, criteria: { <label>: <meaning> } }\`, \`{ type: "score", instructions, criteria: [<lowest level>, ..., <highest level>] }\`, or \`{ type: "bool", instructions, criteria: { true: <meaning>, false: <meaning> } }\`, resolves to \`{ answers, stopReason, errorMessage? }\`, answers by id: \`{ choice, probabilities, confidence }\`, \`{ score, confidence }\` (the expected level index), or \`{ probability }\` (of true). It does not throw on a provider's failure: check \`stopReason === "stop"\`. Ask about many items or steps with one call each, ask each factor of a judgment as its own question and combine the answers in code, and act only on confident answers.
-  - Image models: \`await models.getAvailableOfType("image")\`, then \`await models.generateImages(model, { input: [{ type: "text", text }, ...imageBlocks] })\` resolves to \`{ output, stopReason, errorMessage? }\`; show \`output\` images with \`image(block)\`, never print their data.
+- \`models\` runs classifier and image models with the session's credentials: read how with \`await describeNamespace("models")\` before using it.
 
 Use codemode to batch independent tool calls (Promise.allSettled), chain them, filter large output, or loop a classifier over many items or steps, instead of many separate calls.`;
+
+/**
+ * The `models` global, as a namespace a script reads with `describeNamespace("models")`: how to run classifier and image
+ * models, which the description only names, so a request that never runs one does not carry it.
+ */
+export const MODELS_NAMESPACE: ToolNamespace = {
+  name: "models",
+  description: "The models global: classifier and image models, run with the session's credentials",
+  instructions: `\`models\` runs models that are not chat models with the session's credentials, four calls at a time:
+- Classifiers answer typed questions about JSON state (and images, where \`input\` includes "image") with calibrated probabilities, fast and cheaply, such as TypeSafe's Jev. List them with \`await models.getAvailableOfType("classifier")\` (\`{ ref, provider, id, name, input }\`; \`getModelsOfType\` lists all, \`getModelOfType(type, provider, id)\` finds one). \`await models.classify(model, { state, images?, questions })\`, \`model\` an entry or a ref such as "typesafe/jev-latest", \`questions\` mapping ids to \`{ type: "choice", instructions, criteria: { <label>: <meaning> } }\`, \`{ type: "score", instructions, criteria: [<lowest level>, ..., <highest level>] }\`, or \`{ type: "bool", instructions, criteria: { true: <meaning>, false: <meaning> } }\`, resolves to \`{ answers, stopReason, errorMessage? }\`, answers by id: \`{ choice, probabilities, confidence }\`, \`{ score, confidence }\` (the expected level index), or \`{ probability }\` (of true). It does not throw on a provider's failure: check \`stopReason === "stop"\`. Ask about many items or steps with one call each, ask each factor of a judgment as its own question and combine the answers in code, and act only on confident answers.
+- Image models: \`await models.getAvailableOfType("image")\`, then \`await models.generateImages(model, { input: [{ type: "text", text }, ...imageBlocks] })\` resolves to \`{ output, stopReason, errorMessage? }\`; show \`output\` images with \`image(block)\`, never print their data.`,
+};
 
 /** Like the script's `text()`: strings as is, other values as compact JSON. */
 const valueText = (value: unknown): string => (typeof value === "string" ? value : (JSON.stringify(value) ?? String(value)));
@@ -647,9 +654,8 @@ export const codemodeTool = (deps: CodemodeDeps): Tool<CodemodeInput> => ({
           text: `[Not shown to the person, though they ran: ${names.join(", ")} (${limit}). Show what matters from another script.]`,
         });
       }
-      const budget = (options.maxOutputTokens ?? DEFAULT_MAX_OUTPUT_TOKENS) * CHARS_PER_TOKEN;
-      // Under the registry's cap with room for the header, so the note naming the full output survives it.
-      const { content, fullOutputPath } = yield* Effect.promise(() => boundOutput(items, { budget, maxResultChars, name: "codemode" }));
+      // Under the call's budget with room for the header, so the note naming the full output survives the registry's cut.
+      const { content, fullOutputPath } = yield* Effect.promise(() => boundOutput(items, { budget: outputBudget(maxResultChars), name: "codemode" }));
       const wallTime = ((performance.now() - started) / 1000).toFixed(1);
       const head = `${result.ok ? "Script completed" : "Script failed"}${resumed === undefined ? "" : " (resumed after a host restart)"}\nWall time ${wallTime} seconds\nOutput:\n`;
       const writes = result.ok && (Object.keys(result.storeWrites.set).length > 0 || result.storeWrites.delete.length > 0) ? result.storeWrites : undefined;

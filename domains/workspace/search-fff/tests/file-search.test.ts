@@ -5,9 +5,11 @@ import * as path from "node:path";
 import { Effect, Result } from "effect";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { makeLoader, Registries } from "@lemma/core";
+import { Inspectors, snapshotOf } from "@lemma/contracts";
 import { FileSearchError, searchFiles } from "@lemma/workspace";
 import type { FileSearchOptions } from "@lemma/workspace";
-import fileSearch, { insideGlob, makeFileSearch } from "../src/index.ts";
+import { FffIndexes } from "@lemma/workspace/fff";
+import fileSearch, { insideGlob, makeFileSearch, makeIndexes } from "../src/index.ts";
 import type { Finder, OpenFinder } from "../src/index.ts";
 
 beforeAll(() => {
@@ -38,6 +40,16 @@ const project = async () => {
   await write("ignored/secret.ts", "export {};\n");
 };
 
+/** A search over indexes of its own, closed with the scope; `snapshot` lists the open ones. */
+const searchOver = (init: { readonly idleMs: number; readonly open?: OpenFinder }) =>
+  Effect.gen(function* () {
+    const indexes = yield* Effect.acquireRelease(
+      Effect.sync(() => makeIndexes(init)),
+      (made) => Effect.sync(made.close),
+    );
+    return { service: yield* makeFileSearch(indexes), snapshot: Effect.promise(indexes.snapshot) };
+  });
+
 /** Runs `body` with a search over real fff, closed afterwards. */
 const withSearch = <A>(
   body: (search: (cwd: string, query: string, options?: FileSearchOptions) => Promise<Result.Result<unknown, FileSearchError>>) => Promise<A>,
@@ -45,7 +57,7 @@ const withSearch = <A>(
   Effect.runPromise(
     Effect.scoped(
       Effect.gen(function* () {
-        const { service } = yield* makeFileSearch({ idleMs: 60_000 });
+        const { service } = yield* searchOver({ idleMs: 60_000 });
         return yield* Effect.promise(() => body((cwd, query, options) => Effect.runPromise(Effect.result(service.search(cwd, query, options)))));
       }),
     ),
@@ -127,7 +139,7 @@ describe("search with fff", () => {
       Effect.scoped(
         Effect.gen(function* () {
           const { openFff } = yield* Effect.promise(() => import("../src/index.ts"));
-          const { service } = yield* makeFileSearch({ idleMs: 60_000, open: (root) => (opened.push(root), openFff(root)) });
+          const { service } = yield* searchOver({ idleMs: 60_000, open: (root) => (opened.push(root), openFff(root)) });
           const result = yield* service.search(path.join(dir, "pkg"), "", { limit: 200 });
           expect(result.root).toBe(path.join(dir, "pkg"));
           expect(result.entries.map((entry) => `${entry.kind}:${entry.path}`).sort()).toEqual(["directory:src", "file:src/index.ts"]);
@@ -167,7 +179,7 @@ const fakeEngine = (options: { fail?: boolean; delay?: number } = {}) => {
     if (options.delay !== undefined) await new Promise((resolve) => setTimeout(resolve, options.delay));
     if (options.fail === true) throw new Error("native library not found");
     const page = { items: [{ relativePath: "a.ts" }], totalMatched: 1 };
-    const finder: Finder = {
+    const finder = {
       fileSearch: () => ({ ok: true, value: page }),
       directorySearch: () => ({ ok: true, value: { items: [], totalMatched: 0 } }),
       mixedSearch: () => ({ ok: true, value: { items: [{ type: "file", item: { relativePath: "a.ts" } }], totalMatched: 1 } }),
@@ -176,7 +188,7 @@ const fakeEngine = (options: { fail?: boolean; delay?: number } = {}) => {
       getScanProgress: () => ({ ok: true, value: { scannedFilesCount: 1 } }),
       destroy: () => destroyed.push(root),
     };
-    return finder;
+    return finder as unknown as Finder;
   };
   return { open, opened, destroyed };
 };
@@ -187,7 +199,7 @@ describe("indexes", () => {
     await Effect.runPromise(
       Effect.scoped(
         Effect.gen(function* () {
-          const { service } = yield* makeFileSearch({ idleMs: 60_000, open: engine.open });
+          const { service } = yield* searchOver({ idleMs: 60_000, open: engine.open });
           yield* Effect.all([service.search(dir, "a"), service.search(dir, "b"), service.search(`${dir}/`, "c")], { concurrency: "unbounded" });
         }),
       ),
@@ -201,7 +213,7 @@ describe("indexes", () => {
     const failures = await Effect.runPromise(
       Effect.scoped(
         Effect.gen(function* () {
-          const { service } = yield* makeFileSearch({ idleMs: 60_000, open: engine.open });
+          const { service } = yield* searchOver({ idleMs: 60_000, open: engine.open });
           return yield* Effect.all([Effect.flip(service.search(dir, "a")), Effect.flip(service.search(dir, "a"))]);
         }),
       ),
@@ -216,7 +228,7 @@ describe("indexes", () => {
     await Effect.runPromise(
       Effect.scoped(
         Effect.gen(function* () {
-          const { service } = yield* makeFileSearch({ idleMs: 5, open: engine.open });
+          const { service } = yield* searchOver({ idleMs: 5, open: engine.open });
           expect((yield* service.search(dir, "a")).entries).toEqual([{ path: "a.ts", kind: "file" }]);
           yield* Effect.promise(() => vi.waitFor(() => expect(engine.destroyed).toEqual([dir]), { timeout: 2_000, interval: 5 }));
         }),
@@ -229,7 +241,7 @@ describe("indexes", () => {
     await Effect.runPromise(
       Effect.scoped(
         Effect.gen(function* () {
-          const { service, snapshot } = yield* makeFileSearch({ idleMs: 30, open: engine.open });
+          const { service, snapshot } = yield* searchOver({ idleMs: 30, open: engine.open });
           yield* service.search(dir, "a");
           expect((yield* snapshot).map((index) => index.root)).toEqual([dir]);
           yield* Effect.promise(() => vi.waitFor(() => expect(engine.destroyed).toEqual([dir]), { timeout: 2_000, interval: 10 }));
@@ -258,5 +270,28 @@ describe("plugin", () => {
     );
     expect(found.entries[0]).toEqual({ path: "src/app.ts", kind: "file" });
     expect(after.reason).toBe("Unavailable");
+  });
+
+  it("serves its indexes to other plugins, so a directory both search is indexed once", async () => {
+    await project();
+    const [found, indexes] = await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const loader = yield* makeLoader({ source: { resolve: () => Effect.succeed(fileSearch) }, composition: { plugins: { "workspace.search-fff": {} } } });
+          return yield* loader.core.run(
+            Effect.gen(function* () {
+              const registries = yield* Registries;
+              yield* searchFiles(registries, dir, "app");
+              const shared = yield* FffIndexes;
+              const found = yield* Effect.promise(() => shared.use(dir, async (index) => index.grep("app", { pageSize: 5 })));
+              const inspector = (yield* registries.items(Inspectors)).find(({ item }) => item.id === "workspace.search-fff.indexes")!.item;
+              return [found, yield* snapshotOf(inspector)] as const;
+            }),
+          );
+        }),
+      ),
+    );
+    expect(found.ok).toBe(true);
+    expect((indexes as readonly { root: string }[]).map((index) => index.root)).toEqual([dir]);
   });
 });

@@ -18,7 +18,6 @@ import trace from "@lemma/devtools-trace/web";
 import fileIcons from "@lemma/look-file-icons";
 import fileMentions from "@lemma/workspace-file-mentions";
 import highlight from "@lemma/look-highlight";
-import integrations from "@lemma/integrations-page";
 import interactionDialog from "@lemma/frame-questions";
 import keymap from "@lemma/actions-keymap";
 import keysPage from "@lemma/actions-keys-page";
@@ -118,7 +117,6 @@ export const bundled: readonly Plugin[] = [
   palette,
   settings,
   providers,
-  integrations,
   mcp,
   pluginsPage,
   keysPage,

@@ -84,9 +84,3 @@ export const forkPoint = (branch: readonly SessionEvent[]): string | undefined =
   for (let at = branch.length - 1; at >= 0; at--) if (branch[at]!.data.type === "turn-end") return branch[at]!.id;
   return undefined;
 };
-
-/** An answer cut to `budget` characters, for a notice the model reads: the rest stays in the agent's thread. */
-export const bounded = (answer: string, budget: number, sessionId: string): string =>
-  answer.length <= budget
-    ? answer
-    : `${answer.slice(0, budget)}\n\n[${answer.length - budget} characters more: read the rest in the agent's thread, session ${sessionId}]`;

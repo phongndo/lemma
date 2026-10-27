@@ -10,7 +10,7 @@ import { AgentChannels, ModeChannels, MODES_PLUGIN, offeredFor } from "@lemma/ag
 import type { ModeInfo, PromptOutcome, TurnOptions, WhenBusy } from "@lemma/agent";
 import { branchOf, SessionChannels } from "@lemma/sessions";
 import type { SessionEvent, SessionInfo } from "@lemma/sessions";
-import { ToolResult } from "@lemma/tools";
+import { outputBudget, ToolResult } from "@lemma/tools";
 import type { Tool, ToolContext } from "@lemma/tools";
 import { boundOutput, resolveToCwd } from "@lemma/tools/files";
 import type { Job } from "./jobs.ts";
@@ -133,8 +133,6 @@ export interface DelegateOptions {
   readonly maxDepth: number;
   /** Ask the person before each new agent. */
   readonly confirm: boolean;
-  /** Text characters of an answer the model reads. */
-  readonly budget: number;
   readonly background: Background;
   /** The slots at each depth, shared with the background agents' waiting. */
   readonly slotsAt: (depth: number) => Semaphore.Semaphore;
@@ -287,7 +285,7 @@ export const delegateTool = (options: DelegateOptions): Tool<DelegateInput> => {
             ]
               .filter((part) => part !== "")
               .join("\n\n");
-      const { content } = await boundOutput([{ type: "text", text }], { budget: options.budget, maxResultChars: context.maxResultChars, name: "delegate" });
+      const { content } = await boundOutput([{ type: "text", text }], { budget: outputBudget(context.maxResultChars), name: "delegate" });
       return new ToolResult({ content: [...content], structured: result, details, ...(isError ? { isError: true } : {}) });
     });
 

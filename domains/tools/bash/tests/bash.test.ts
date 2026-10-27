@@ -99,46 +99,52 @@ describe("bash", () => {
   });
 
   it("keeps both ends of long output and saves all of it to a file", async () => {
-    const result = await call(bashTool, { command: "seq 1 3000" }, context(dir));
+    const result = await call(bashTool, { command: "seq 1 30000" }, context(dir));
     const text = textOf(result);
     const details = result.details as BashDetails;
+    expect(text.length).toBeLessThanOrEqual(50_000);
     expect(text.startsWith("1\n2\n")).toBe(true);
-    expect(text).toContain(`1000\n\n[… 1000 lines left out: showing lines 1-1000 and 2001-3000 of 3000. Full output: ${details.fullOutputPath}]\n\n2001\n`);
-    expect(text.endsWith("\n3000")).toBe(true);
-    expect(details.truncation).toMatchObject({ truncated: true, truncatedBy: "lines", totalLines: 3000, outputLines: 2000 });
+    const [, left, headTo, tailFrom] = /\n\n\[… (\d+) lines left out: showing lines 1-(\d+) and (\d+)-30000 of 30000\. Full output: [^\]]+\]\n\n/
+      .exec(text)!
+      .map(Number);
+    expect(left).toBe(tailFrom! - headTo! - 1);
+    expect(text).toContain(
+      `\n${headTo}\n\n[… ${left} lines left out: showing lines 1-${headTo} and ${tailFrom}-30000 of 30000. Full output: ${details.fullOutputPath}]\n\n${tailFrom}\n`,
+    );
+    expect(text.endsWith("\n30000\n")).toBe(true);
+    expect(details.truncation).toMatchObject({ chars: 168_894, lines: 30_000 });
     const full = await fs.readFile(details.fullOutputPath!, "utf8");
-    expect(full.split("\n").length).toBe(3001);
+    expect(full.split("\n").length).toBe(30_001);
     await fs.rm(details.fullOutputPath!);
   });
 
   it("saves the full output where only this user can read it", async () => {
-    const result = await call(bashTool, { command: "seq 1 3000" }, context(dir));
+    const result = await call(bashTool, { command: "seq 1 30000" }, context(dir));
     const file = (result.details as BashDetails).fullOutputPath!;
     expect((await fs.stat(file)).mode & 0o777).toBe(0o600);
     expect((await fs.stat(path.dirname(file))).mode & 0o777).toBe(0o700);
     expect(path.basename(file)).toMatch(/^lemma-bash-[0-9a-f]{16}\.log$/);
   });
 
-  it("cuts output past 50KB by bytes, keeping 25KB of each end, and one long line to its start and end", async () => {
-    // 1000 lines of 100 bytes: under the line limit, over the byte limit.
-    const lines = await call(bashTool, { command: "for i in $(seq 1 1000); do printf '%099d\\n' $i; done" }, context(dir));
+  it("keeps its result within the call's budget, whole lines of each end, and one long line to its start and end", async () => {
+    const budget = { ...context(dir), maxResultChars: 11_000 };
+    const lines = await call(bashTool, { command: "for i in $(seq 1 1000); do printf '%099d\\n' $i; done" }, budget);
     const linesDetails = lines.details as BashDetails;
-    expect(linesDetails.truncation).toMatchObject({ truncated: true, truncatedBy: "bytes", totalLines: 1000 });
-    expect(linesDetails.truncation!.outputBytes).toBeLessThanOrEqual(50 * 1024);
+    expect(linesDetails.truncation).toMatchObject({ chars: 100_000, lines: 1000 });
+    expect(textOf(lines).length).toBeLessThanOrEqual(10_000);
     const shown = textOf(lines).split("\n");
     expect(shown[0]).toBe("1".padStart(99, "0"));
-    expect(shown.at(-1)).toBe("1000".padStart(99, "0"));
+    expect(shown.at(-2)).toBe("1000".padStart(99, "0"));
     expect(textOf(lines)).toMatch(/\[… \d+ lines left out: showing lines 1-\d+ and \d+-1000 of 1000\. Full output: /);
     expect((await fs.readFile(linesDetails.fullOutputPath!, "utf8")).length).toBe(100_000);
 
-    const line = await call(bashTool, { command: "head -c 60000 /dev/zero | tr '\\0' a; echo b" }, context(dir));
-    const lineDetails = line.details as BashDetails;
-    expect(lineDetails.truncation).toMatchObject({ truncated: true, lastLinePartial: true, totalLines: 1 });
-    expect(textOf(line)).toMatch(/^a+\n\n\[… [\d.]+KB of line 1 \(58\.6KB\) left out\. Full output: [^\]]+\]\n\na+b$/);
+    const line = await call(bashTool, { command: "head -c 60000 /dev/zero | tr '\\0' a; echo b" }, budget);
+    expect((line.details as BashDetails).truncation).toMatchObject({ chars: 60_002, lines: 1 });
+    expect(textOf(line)).toMatch(/^a+\n\n\[… \d+ characters left out: showing the start and the end of its one line\. Full output: [^\]]+\]\n\na+b\n$/);
 
     // Two long lines: no line left out whole, but the end of one, the line break, and the start of the next.
-    const two = await call(bashTool, { command: "head -c 30000 /dev/zero | tr '\\0' a; echo; head -c 30000 /dev/zero | tr '\\0' b" }, context(dir));
-    expect(textOf(two)).toMatch(/^a+\n\n\[… [\d.]+KB left out: the end of line 1 and the start of line 2\. Full output: [^\]]+\]\n\nb+$/);
+    const two = await call(bashTool, { command: "head -c 30000 /dev/zero | tr '\\0' a; echo; head -c 30000 /dev/zero | tr '\\0' b" }, budget);
+    expect(textOf(two)).toMatch(/^a+\n\n\[… \d+ characters left out: showing the start of line 1 and the end of line 2 of 2\. Full output: [^\]]+\]\n\nb+$/);
   });
 
   it("gives a script up to a megabyte of output, then its first and last half megabyte, with the exit code", async () => {
@@ -160,10 +166,10 @@ describe("bash", () => {
   });
 
   it("reports a failed command's exit code after truncated output", async () => {
-    const result = await call(bashTool, { command: "seq 1 3000; exit 7" }, context(dir));
+    const result = await call(bashTool, { command: "seq 1 30000; exit 7" }, context(dir));
     expect(result.isError).toBe(true);
-    expect(textOf(result)).toMatch(/Full output: [^\]]+\]\n\n2001\n[\s\S]*\n3000\n\nCommand exited with code 7$/);
-    expect(result.details).toMatchObject({ exitCode: 7, truncation: { truncated: true } });
+    expect(textOf(result)).toMatch(/Full output: [^\]]+\]\n\n\d+\n[\s\S]*\n30000\n\n\nCommand exited with code 7$/);
+    expect(result.details).toMatchObject({ exitCode: 7, truncation: { lines: 30_000 } });
   });
 
   it("rejects an invalid timeout and a missing cwd", async () => {

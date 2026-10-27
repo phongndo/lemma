@@ -20,9 +20,9 @@ const greet = definePlugin({
 
 ## Config
 
-| Key              | Default  | Meaning                                                                                                                                                                          |
-| ---------------- | -------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `maxResultChars` | `100000` | Text characters one result may carry to the model. Longer text is cut with a marker; images are kept. A safety net for third-party tools; builtin tools truncate far below this. |
+| Key              | Default | Meaning                                                                                                                                                                                                                                                                                                                                                                                  |
+| ---------------- | ------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `maxResultChars` | `50000` | Text characters one result carries to the model: the one budget every tool's output is bounded by (`ToolContext.maxResultChars`). Longer text keeps its start and its end around a marker, the whole in a temp file the model can read (`boundOutput`); images are kept. A tool bounding its own output keeps under it (`outputBudget`), so the registry cuts only a tool that does not. |
 
 ## Behavior
 

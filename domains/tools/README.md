@@ -7,9 +7,16 @@ confining them is a policy, and `Guards` is where a plugin sets one
 ([approvals](../../examples/approvals/README.md)). Writes replace a file whole
 or not at all, keeping its mode and writing through symlinks (`replaceFile`);
 a file another user owns, or in a directory the user cannot add to, is written
-in place. Output too long for a result goes to a temp file only the user can
-read, which the host keeps while it is written and then among its newest 100
-while it runs (`outputFile`).
+in place.
+
+Every tool's output is bounded by one budget, the text characters a result
+keeps: `tools.registry`'s `maxResultChars`, which a call reads as
+`ToolContext.maxResultChars`. Past it, a text keeps its start and its end around
+one marker saying what was left out and where the whole is (`keepEnds`,
+`boundOutput`), and the whole goes to a temp file only the user can read, which
+the host keeps while it is written and then among its newest 100 while it runs
+(`outputFile`). A tool that pages or ranks what it returns (`read`, `grep`)
+keeps the start instead, its marker saying how to go on (`keepHead`).
 
 | Plugin                                     | Halves     | What it does                                                                                                                                                   |
 | ------------------------------------------ | ---------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -17,7 +24,7 @@ while it runs (`outputFile`).
 | [`tools.read`](read/README.md)             | host + web | The `read` tool, and how its calls show                                                                                                                        |
 | [`tools.write`](write/README.md)           | host + web | The `write` tool, and how its calls show                                                                                                                       |
 | [`tools.edit`](edit/README.md)             | host + web | The `edit` tool, and how its calls show                                                                                                                        |
-| [`tools.patch`](patch/README.md)           | host + web | The `apply_patch` tool: Codex's patches, and how its calls show                                                                                                |
+| [`tools.patch`](patch/README.md)           | host + web | The `apply_patch` tool: Codex's patches, and how its calls show; offered instead of `edit` to the GPT and Codex models trained on it                           |
 | [`tools.bash`](bash/README.md)             | host + web | The `bash` tool, and how its calls show                                                                                                                        |
 | [`tools.codemode`](codemode/README.md)     | host + web | The `codemode` tool: JavaScript in a sandbox that calls the other tools and classifier and image models, resumed after a restart; its calls live in the chat   |
 | [`tools.search-fff`](search-fff/README.md) | host + web | The `grep` and `find` tools, searching with fff, and how their calls show                                                                                      |

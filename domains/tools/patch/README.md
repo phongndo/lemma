@@ -2,9 +2,10 @@
 
 The `apply_patch` tool: adds, deletes, updates, and moves files with a patch in
 [Codex's format](https://github.com/openai/codex/blob/89461ea/codex-rs/core/assets/tools/apply_patch.lark),
-several files in one call. Adds it to `Tools`, beside `edit` and `write`, for
-every model. No config. Paths resolve as `read`'s do, relative or absolute. Its
-web half (`./web`) shows a call as the files its patch names, with their diffs.
+several files in one call. Adds it to `Tools`, beside `edit` and `write`, and
+offers one of it and `edit` to each request by its model (below). Paths resolve
+as `read`'s do, relative or absolute. Its web half (`./web`) shows a call as the
+files its patch names, with their diffs.
 
 | Input   | Behavior                                                                                                                                                                                                                                                                                                             |
 | ------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -13,6 +14,24 @@ web half (`./web`) shows a call as the files its patch names, with their diffs.
 `details.files` has each file's change (`add`, `update`, `move`, `delete`),
 absolute paths, unified diff, and first changed line, in the patch's order;
 `details.patch` is their diffs together.
+
+## Which models get it
+
+A request offering both `apply_patch` and `edit` keeps one of them, by its
+model, in `AgentRequestHook`'s `select` phase: `apply_patch` for OpenAI's GPT
+and Codex models (an id with `gpt` or `codex` in it, whoever serves it:
+`trainedOnPatches`), and `edit` for every other model. It chooses from what
+the request offers once the other handlers chose, so a mode that keeps only
+one of the two keeps it whatever the model, and so does a host with one of the
+plugins off.
+
+```jsonc
+{ "plugins": { "tools.patch": { "config": { "everyModel": true } } } }
+```
+
+| Config       | Default | Meaning                                          |
+| ------------ | ------- | ------------------------------------------------ |
+| `everyModel` | `false` | Offer `apply_patch` beside `edit` to every model |
 
 ## Rationale
 
@@ -31,8 +50,13 @@ absolute paths, unified diff, and first changed line, in the patch's order;
   the first match after the last one (and after its `@@` line), found
   exactly, then ignoring trailing whitespace, then leading too, then Unicode
   punctuation as ASCII; lines only added go at the file's end; every line ends
-  with a line break; a file named twice is refused. Offering it with `edit` to
-  every model keeps the tool list the same whatever the model.
+  with a line break; a file named twice is refused.
+- **One editing tool a model.** Its description is about 2,900 characters,
+  which every request offering it pays for, and a model offered two ways to
+  edit a file has to choose between them. Models trained on it get it, and
+  the others get `edit`. A request on
+  another model declares its tools afresh anyway (the agent's append-only
+  requests), so the tool list changing with the model costs no cache.
 - **Lemma's writing.** What Codex does not settle, Lemma's file writing does:
   a file's BOM is kept out of matching and put back, and the patch applies
   whole or not at all. Files are read, checked (writable, removable, not a

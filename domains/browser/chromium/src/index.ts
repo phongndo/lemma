@@ -31,7 +31,7 @@ const ChromiumConfig = Schema.Struct({
 export default definePlugin({
   id: "browser.chromium",
   implements: [BROWSER_CONTRACT],
-  uses: ["lemma/tools@1"],
+  uses: ["lemma/tools@2"],
   version: "0.1.0",
   config: ChromiumConfig,
   provides: { browser: Browser },
