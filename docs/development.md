@@ -53,8 +53,11 @@ The git hooks do this:
 - Set `HK=0` to skip them once.
 
 Browser checks run in the `browser` shell, which supplies pinned Chromium on
-Linux. They are the web app's `ui:check` and the core's `browser:check`. On
-macOS, do one of these:
+Linux. They are the web app's `ui:check` and the core's `browser:check`. The
+Chromium plugin's tests in `pnpm test` need a Chromium too, and skip without
+one. CI's Linux test jobs run `pnpm test` in the `browser` shell. In the
+default shell, those tests would drive the runner image's Chromium, a snapshot
+that changes with each image. On macOS, do one of these:
 
 - install Chromium with `nix develop .#browser -c pnpm exec playwright install chromium`;
 - set `LEMMA_CHROMIUM` to an existing executable.
