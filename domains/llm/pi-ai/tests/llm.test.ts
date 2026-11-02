@@ -14,7 +14,9 @@ import { Events, PluginContext, definePlugin, makeCore } from "@lemma/core";
 import { Llm, LlmError, LlmRequest, LlmRequestHook, ModelsChanged, Providers, StreamEvent } from "@lemma/llm";
 import type { Credential } from "@lemma/credentials";
 import { deviceId } from "../src/device.ts";
-import { credentialStore, makeEventMapper, makeLlmPlugin, runner } from "../src/index.ts";
+import { credentialStore, runner } from "../src/auth.ts";
+import { makeEventMapper } from "../src/convert.ts";
+import { makeLlmPlugin } from "../src/index.ts";
 import { envContext, fakeCredentials, fakeHost, noticeRecorder, offline, runWith, signInAnswers } from "./helpers.ts";
 import { llmConformance } from "@lemma/testing";
 

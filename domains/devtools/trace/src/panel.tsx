@@ -1,7 +1,7 @@
 import { For, Match, Show, Switch, createMemo, createSignal, onMount, untrack } from "solid-js";
 import type { Accessor, JSX } from "solid-js";
 import type { PluginStatus, SpanRecord } from "@lemma/contracts";
-import { PLUGIN_PANEL, clearsOnEscape, rowKeys } from "@lemma/devtools/web";
+import { Chips, FilterField, PLUGIN_PANEL, rowKeys, SelectableTable } from "@lemma/devtools/web";
 import { XIcon } from "@lemma/look";
 import { ThreadRoute } from "@lemma/sessions";
 import { usePlugin } from "@lemma/web";
@@ -18,6 +18,11 @@ import type { Deps, Mode, Which } from "./web.tsx";
 
 /** How many traces (root spans) the list draws: the newest that match. */
 const ROOTS = 200;
+
+const WHICH: readonly { readonly id: Which; readonly label: string }[] = [
+  { id: "host", label: "Host" },
+  { id: "page", label: "Page" },
+];
 
 const MODES: readonly { readonly id: Mode; readonly label: string }[] = [
   { id: "spans", label: "Spans" },
@@ -98,7 +103,7 @@ function SpanDetails(props: { shown: Shown; span: SpanRecord }) {
       }}
     >
       <div class="dt-details-title">
-        <strong class="dt-code trc-title">{span().name}</strong>
+        <strong class="dt-code trc-title tw:truncate">{span().name}</strong>
         <button class="dt-close trc-end" aria-label="Close details" data-tip="Close (Esc)" onClick={close}>
           <XIcon />
         </button>
@@ -344,56 +349,43 @@ function PluginsView(props: { shown: Shown }) {
   };
   return (
     <div class="dt-main" tabindex="-1">
-      <table class="dt-table" aria-label="Plugins by time" role="grid" tabindex="0" onKeyDown={rowKeys(choose, () => choose(undefined), narrowTo)}>
-        <thead>
-          <tr>
-            <th>Plugin</th>
-            <th class="dt-num">Spans</th>
-            <th class="dt-num">Own</th>
-            <th class="dt-num">Total</th>
-            <th class="dt-num">p95</th>
-            <th class="dt-num">Max</th>
-            <th>Slowest</th>
-            <th class="dt-num">Failed</th>
-          </tr>
-        </thead>
-        <tbody>
-          <For
-            each={rows()}
-            fallback={
-              <tr>
-                <td colSpan={8} class="dt-muted">
-                  No plugin's spans match
-                </td>
-              </tr>
-            }
-          >
-            {(row) => (
-              <tr
-                data-row
-                data-key={row.plugin}
-                data-selected={chosen() === row.plugin}
-                aria-selected={chosen() === row.plugin}
-                tabindex="-1"
-                onClick={() => narrowTo(row.plugin)}
-              >
-                <td>
-                  <PluginLink shown={props.shown} id={row.plugin} />
-                </td>
-                <td class="dt-num">{row.spans}</td>
-                <td class="dt-num">{ms(row.self)}</td>
-                <td class="dt-num">{ms(row.total)}</td>
-                <td class="dt-num">{ms(row.p95)}</td>
-                <td class="dt-num">{ms(row.max)}</td>
-                <td class="dt-code">{row.slowest}</td>
-                <td class="dt-num" classList={{ "dt-err": row.errors > 0 }}>
-                  {row.errors}
-                </td>
-              </tr>
-            )}
-          </For>
-        </tbody>
-      </table>
+      <SelectableTable
+        label="Plugins by time"
+        columns={[
+          { title: "Plugin" },
+          { title: "Spans", class: "dt-num" },
+          { title: "Own", class: "dt-num" },
+          { title: "Total", class: "dt-num" },
+          { title: "p95", class: "dt-num" },
+          { title: "Max", class: "dt-num" },
+          { title: "Slowest" },
+          { title: "Failed", class: "dt-num" },
+        ]}
+        rows={rows()}
+        key={(row) => row.plugin}
+        selected={chosen()}
+        onSelect={choose}
+        onClear={() => choose(undefined)}
+        onOpen={narrowTo}
+        empty="No plugin's spans match"
+      >
+        {(row) => (
+          <>
+            <td>
+              <PluginLink shown={props.shown} id={row.plugin} />
+            </td>
+            <td class="dt-num">{row.spans}</td>
+            <td class="dt-num">{ms(row.self)}</td>
+            <td class="dt-num">{ms(row.total)}</td>
+            <td class="dt-num">{ms(row.p95)}</td>
+            <td class="dt-num">{ms(row.max)}</td>
+            <td class="dt-code">{row.slowest}</td>
+            <td class="dt-num" classList={{ "dt-err": row.errors > 0 }}>
+              {row.errors}
+            </td>
+          </>
+        )}
+      </SelectableTable>
     </div>
   );
 }
@@ -511,59 +503,31 @@ function FaultsView(props: { shown: Shown; plugins: Accessor<readonly PluginStat
           </For>
         </tbody>
       </table>
-      <table
-        class="dt-table"
-        aria-label="Failed spans"
-        role="grid"
-        tabindex="0"
-        onKeyDown={rowKeys(
-          choose,
-          () => choose(undefined),
-          (id) => {
-            const span = failed().find((candidate) => candidate.id === id);
-            if (span !== undefined) showSpan(span);
-          },
-        )}
+      <SelectableTable
+        label="Failed spans"
+        columns={[{ title: "When", width: "96px" }, { title: "Plugin", width: "180px" }, { title: "Span", width: "140px" }, { title: "Error" }]}
+        rows={failed()}
+        key={(span) => span.id}
+        selected={chosen()}
+        onSelect={choose}
+        onClear={() => choose(undefined)}
+        onOpen={(id) => {
+          const span = failed().find((candidate) => candidate.id === id);
+          if (span !== undefined) showSpan(span);
+        }}
+        empty="No span the trace kept failed"
       >
-        <thead>
-          <tr>
-            <th style={{ width: "96px" }}>When</th>
-            <th style={{ width: "180px" }}>Plugin</th>
-            <th style={{ width: "140px" }}>Span</th>
-            <th>Error</th>
-          </tr>
-        </thead>
-        <tbody>
-          <For
-            each={failed()}
-            fallback={
-              <tr>
-                <td colSpan={4} class="dt-muted">
-                  No span the trace kept failed
-                </td>
-              </tr>
-            }
-          >
-            {(span) => (
-              <tr
-                data-row
-                data-key={span.id}
-                data-selected={chosen() === span.id}
-                aria-selected={chosen() === span.id}
-                tabindex="-1"
-                onClick={() => showSpan(span)}
-              >
-                <td class="dt-muted">{clockTime(span.start)}</td>
-                <td>
-                  <PluginLink shown={props.shown} id={pluginOf(span)} />
-                </td>
-                <td class="dt-code">{span.name}</td>
-                <td class="dt-err">{span.error ?? "failed"}</td>
-              </tr>
-            )}
-          </For>
-        </tbody>
-      </table>
+        {(span) => (
+          <>
+            <td class="dt-muted">{clockTime(span.start)}</td>
+            <td>
+              <PluginLink shown={props.shown} id={pluginOf(span)} />
+            </td>
+            <td class="dt-code">{span.name}</td>
+            <td class="dt-err">{span.error ?? "failed"}</td>
+          </>
+        )}
+      </SelectableTable>
     </div>
   );
 }
@@ -597,17 +561,7 @@ function TraceView(props: {
   return (
     <>
       <div class="dt-toolbar" role="toolbar" aria-label="Trace toolbar">
-        <label class="dt-filter">
-          <input
-            placeholder="Filter: plugin:tools turn:2 slow:>5ms status:error …"
-            aria-label="Filter spans"
-            autocomplete="off"
-            spellcheck={false}
-            value={props.query()}
-            onInput={(event) => props.setQuery(event.currentTarget.value)}
-            onKeyDown={clearsOnEscape(props.query, () => props.setQuery(""))}
-          />
-        </label>
+        <FilterField label="Filter spans" placeholder="Filter: plugin:tools turn:2 slow:>5ms status:error …" value={props.query()} onInput={props.setQuery} />
         <button class="dt-chip" onClick={plugin.action("read the trace", () => trace.refresh())}>
           Refresh
         </button>
@@ -646,21 +600,9 @@ export function TracePanel(props: { deps: Deps }) {
   return (
     <div class="dt-scope trc" aria-label="Trace panel" ref={panel}>
       <div class="dt-toolbar" role="toolbar" aria-label="Which trace">
-        <For each={["host", "page"] as const}>
-          {(name) => (
-            <button class="dt-chip" aria-pressed={which() === name} onClick={() => setWhich(name)}>
-              {name === "host" ? "Host" : "Page"}
-            </button>
-          )}
-        </For>
+        <Chips options={WHICH} value={which()} onChange={setWhich} />
         <span class="dt-sep" />
-        <For each={MODES}>
-          {(entry) => (
-            <button class="dt-chip" aria-pressed={mode() === entry.id} onClick={() => setMode(entry.id)}>
-              {entry.label}
-            </button>
-          )}
-        </For>
+        <Chips options={MODES} value={mode()} onChange={setMode} />
       </div>
       <Show when={which()} keyed>
         {(name) => (

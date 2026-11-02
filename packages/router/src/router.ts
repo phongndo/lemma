@@ -285,7 +285,7 @@ const byPreference = (a: Candidate, b: Candidate) =>
  * Different Schemas are a fallback (`/n/:id` as a number, else as a name).
  */
 const sameShape = (a: AnyRoute, b: AnyRoute) =>
-  (a.params === b.params || (describe(a.params) ?? a) === (describe(b.params) ?? b)) &&
+  (a.params === b.params || (schemaText(a.params) ?? a) === (schemaText(b.params) ?? b)) &&
   a.pattern.segments.length === b.pattern.segments.length &&
   a.pattern.segments.every((segment, index) => {
     const other = b.pattern.segments[index]!;
@@ -294,7 +294,7 @@ const sameShape = (a: AnyRoute, b: AnyRoute) =>
 
 const descriptions = new WeakMap<Schema.Top, string | undefined>();
 /** A Schema's structure as text, once per Schema; undefined (never equal) for one that cannot be described. */
-const describe = (schema: Schema.Top): string | undefined => {
+const schemaText = (schema: Schema.Top): string | undefined => {
   if (descriptions.has(schema)) return descriptions.get(schema);
   let description: string | undefined;
   try {
@@ -395,15 +395,16 @@ const findIssues = (entries: readonly RouteEntry[], known: readonly AnyRoute[]):
     if (group === undefined) byShape.set(shape, [route]);
     else group.push(route);
   }
-  for (const a of routes) {
-    const group = byShape.get(a.pattern.segments.map((segment) => (segment.kind === "static" ? `=${segment.value}` : segment.kind)).join("/"))!;
-    for (const b of group.slice(group.indexOf(a) + 1)) {
-      if (sameShape(a, b))
-        issues.push({
-          kind: "same-addresses",
-          routes: [a, b],
-          message: `Routes "${a.id}" (${a.path}) and "${b.id}" (${b.path}) match the same addresses; "${a.id}" is shown`,
-        });
+  for (const group of byShape.values()) {
+    for (const [index, a] of group.entries()) {
+      for (const b of group.slice(index + 1)) {
+        if (sameShape(a, b))
+          issues.push({
+            kind: "same-addresses",
+            routes: [a, b],
+            message: `Routes "${a.id}" (${a.path}) and "${b.id}" (${b.path}) match the same addresses; "${a.id}" is shown`,
+          });
+      }
     }
   }
   return issues;
@@ -479,7 +480,7 @@ export const createRouter = <E extends RouteEntry = RouteEntry>(options: RouterO
       }
     }
   };
-  const describe = (match: Match<E>): MatchInfo => ({
+  const matchInfo = (match: Match<E>): MatchInfo => ({
     status: match.status,
     href: match.location.href,
     ...(match.status === "unmatched" ? {} : { route: match.route.id, params: match.params, search: match.search }),
@@ -498,7 +499,7 @@ export const createRouter = <E extends RouteEntry = RouteEntry>(options: RouterO
     const next = resolve(history.location(), compiled, controller.signal);
     if (same(current, next)) return;
     current = next;
-    record({ kind: "matched", match: describe(current) });
+    record({ kind: "matched", match: matchInfo(current) });
     // A copy: a listener may unsubscribe while being called. One that throws does not keep the others from hearing.
     for (const listener of Array.from(listeners)) {
       try {
@@ -682,10 +683,7 @@ export const createRouter = <E extends RouteEntry = RouteEntry>(options: RouterO
     return true;
   };
 
-  const matchOf = <R extends AnyRoute>(route: R) =>
-    current.status !== "unmatched" && current.route.id === route.id
-      ? { params: current.params as ParamsOf<R>, search: current.search as SearchOf<R> }
-      : undefined;
+  const matchOf = <R extends AnyRoute>(route: R) => (isRoute(current, route) ? { params: current.params, search: current.search } : undefined);
 
   return {
     // Destroyed, it keeps the routes it last had.
@@ -726,7 +724,7 @@ export const createRouter = <E extends RouteEntry = RouteEntry>(options: RouterO
     },
     inspect: () => ({
       location: history.location(),
-      match: describe(current),
+      match: matchInfo(current),
       routes: routes(),
       issues: issues.map((issue) => ({ kind: issue.kind, message: issue.message, routes: issue.routes.map((route) => route.id) })),
       blockers: [...blockers.values()],

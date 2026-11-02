@@ -3,6 +3,7 @@ import { batch, createSignal, onCleanup } from "solid-js";
 import type { CompositionChange, SpanRecord } from "@lemma/contracts";
 import { TraceChannels } from "@lemma/devtools";
 import type { ClientService, PageTraceService } from "@lemma/web";
+import { errorMessage } from "@lemma/contracts";
 
 /**
  * A time with its unit: from 100ms, as the trajectory writes one (`formatDuration`: `614ms`, `1.8s`, `1m 15s`); below,
@@ -77,7 +78,7 @@ export function createTrace(source: TraceSource) {
         setError(undefined);
       });
     } catch (failure) {
-      setError(failure instanceof Error ? failure.message : String(failure));
+      setError(errorMessage(failure));
     } finally {
       arriving.delete(during);
     }

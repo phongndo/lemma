@@ -3,8 +3,18 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { Effect, Option, Schema } from "effect";
 import { SessionError } from "@lemma/sessions";
-import { errorCode, isAlive, nodeFileSystem, syncAncestors, writeFileAtomic } from "@lemma/contracts/fs";
-import type { FileSystem } from "@lemma/contracts/fs";
+import {
+  BOOT_SLACK_MS,
+  bootTime,
+  claimPidLock,
+  errorCode,
+  isAlive,
+  nodeFileSystem,
+  syncAncestors,
+  UNREADABLE_GRACE_MS,
+  writeFileAtomic,
+} from "@lemma/contracts/fs";
+import type { FileSystem, FoundLock, PidLockFiles } from "@lemma/contracts/fs";
 import { io } from "./file.ts";
 
 /**
@@ -14,17 +24,11 @@ import { io } from "./file.ts";
  * processes, not protection against other programs.
  */
 export const lockFile = (root: string): string => path.join(root, ".lock");
-/** Created by the one process taking a stale lock over, while it does. */
-const guardFile = (root: string): string => `${lockFile(root)}.takeover`;
 
 /** How often the holder refreshes the lock's modification time, so a process that cannot check it otherwise sees it live. */
 export const REFRESH_MS = 10_000;
 /** How long a lock may go unrefreshed before a process that cannot check its holder otherwise takes it over. */
 const LEASE_MS = 30_000;
-/** Slack for `bootedAt`, which uptime gives to the second, and for a clock set at boot. */
-const BOOT_SLACK_MS = 10_000;
-/** How old a lock that names nobody, or a takeover guard, must be before it is taken over: writing one takes far less. */
-const UNREADABLE_GRACE_MS = 10_000;
 
 /** The lock's contents. `token` is per store, so a store releases only a lock it still holds. */
 const Holder = Schema.Struct({ pid: Schema.Number, hostname: Schema.String, token: Schema.String, startedAt: Schema.Number });
@@ -49,7 +53,7 @@ export interface Claimant {
 export const thisProcess: Claimant = {
   pid: process.pid,
   hostname: os.hostname(),
-  bootedAt: Date.now() - os.uptime() * 1000,
+  bootedAt: bootTime(),
   isAlive,
 };
 
@@ -58,11 +62,7 @@ const writeNew = (fs: FileSystem, file: string, text: string) =>
   Effect.tryPromise({ try: () => writeFileAtomic(file, text, { exclusive: true, sync: true, fs }), catch: io(undefined, `Cannot create ${file}`) });
 
 /** The file's text and how long ago it was last modified; `undefined` when there is none. */
-const inspect = (
-  fs: FileSystem,
-  file: string,
-  now: () => number = Date.now,
-): Effect.Effect<{ readonly text: string; readonly age: number } | undefined, SessionError> =>
+const inspect = (fs: FileSystem, file: string, now: () => number = Date.now): Effect.Effect<FoundLock | undefined, SessionError> =>
   Effect.tryPromise({
     try: async () => {
       try {
@@ -77,6 +77,16 @@ const inspect = (
   });
 
 const remove = (fs: FileSystem, file: string) => Effect.tryPromise({ try: () => fs.rm(file, { force: true }), catch: io(undefined, `Cannot remove ${file}`) });
+
+/** The lock's files on `fs`, for `claimPidLock`: every write synced. */
+const lockFiles = (fs: FileSystem, now: () => number): PidLockFiles<SessionError> => ({
+  create: (file, text) => writeNew(fs, file, text),
+  inspect: (file) => inspect(fs, file, now),
+  replace: (file, text) =>
+    Effect.tryPromise({ try: () => writeFileAtomic(file, text, { sync: true, fs }), catch: io(undefined, `Cannot replace ${file}`) }).pipe(Effect.asVoid),
+  remove: (file) => remove(fs, file),
+  pause: Effect.sleep(50),
+});
 
 const inUse = (file: string, holder: Option.Option<Holder>) => {
   const who = Option.match(holder, {
@@ -101,20 +111,16 @@ const inUse = (file: string, holder: Option.Option<Holder>) => {
  * the directory, or this one under an old name) cannot be checked: it holds
  * while its holder refreshes it (every `REFRESH_MS`), and is taken over once
  * it has gone `LEASE_MS` without. One that names nobody is taken over once it
- * is too old to be still being written. A process takes a stale lock over
- * only while it holds the guard file beside it, so two cannot both take one
- * over; a guard left by a crash is cleared once it is old, and two processes
- * clearing one at the same instant could both go on, a window this
- * convention accepts.
+ * is too old to be still being written, or was written before the host last
+ * booted. Taking a stale lock over is `claimPidLock`'s, so two processes
+ * cannot both take one over.
  */
 export function acquireLock(root: string, claimant: Claimant = thisProcess, fs: FileSystem = nodeFileSystem): Effect.Effect<Holder, SessionError> {
   const file = lockFile(root);
-  const guard = guardFile(root);
   const now = claimant.now ?? Date.now;
   const self: Holder = { pid: claimant.pid, hostname: claimant.hostname, token: (claimant.token ?? randomUUID)(), startedAt: now() };
-  const text = JSON.stringify(self);
-  const replace = Effect.tryPromise({ try: () => writeFileAtomic(file, text, { sync: true, fs }), catch: io(undefined, `Cannot replace ${file}`) });
-  const stale = (holder: Option.Option<Holder>, age: number) => {
+  const stale = ({ text, age }: FoundLock) => {
+    const holder = decodeHolder(text);
     if (Option.isNone(holder)) return age > UNREADABLE_GRACE_MS || now() - age < claimant.bootedAt - BOOT_SLACK_MS;
     const { pid, hostname, startedAt } = holder.value;
     if (hostname !== claimant.hostname) return age > LEASE_MS;
@@ -130,29 +136,9 @@ export function acquireLock(root: string, claimant: Claimant = thisProcess, fs: 
       },
       catch: io(undefined, `Cannot create ${root}`),
     });
-    for (;;) {
-      if (yield* writeNew(fs, file, text)) return self;
-      const found = yield* inspect(fs, file, now);
-      // Released meanwhile.
-      if (found === undefined) continue;
-      const holder = decodeHolder(found.text);
-      if (!stale(holder, found.age)) return yield* inUse(file, holder);
-      if (!(yield* writeNew(fs, guard, text))) {
-        // Another process is taking it over; or one crashed doing so, and its guard is old.
-        const other = yield* inspect(fs, guard, now);
-        if (other !== undefined && other.age > UNREADABLE_GRACE_MS) yield* remove(fs, guard);
-        else yield* Effect.sleep(50);
-        continue;
-      }
-      // Replaced only if it is still the lock found stale: another process may have taken it over meanwhile.
-      const taken = yield* Effect.gen(function* () {
-        const current = yield* inspect(fs, file, now);
-        if (current?.text !== found.text) return false;
-        yield* replace;
-        return true;
-      }).pipe(Effect.ensuring(Effect.ignore(remove(fs, guard))));
-      if (taken) return self;
-    }
+    const claim = yield* claimPidLock(lockFiles(fs, now), { file, text: JSON.stringify(self), stale });
+    if (!claim.taken) return yield* inUse(file, decodeHolder(claim.holder.text));
+    return self;
   });
 }
 

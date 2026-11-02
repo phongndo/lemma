@@ -1,3 +1,4 @@
+import { errorMessage } from "@lemma/contracts";
 import { recordFlake, summarizeFlakes } from "../../../scripts/flaky.ts";
 import type { Flake } from "../../../scripts/flaky.ts";
 import { closeRouter, inLane, stopHosts } from "./check-ui/hosts.ts";
@@ -154,7 +155,7 @@ const attempt = async (lane: () => Promise<string>): Promise<string> => {
       await stopHosts(lane.name);
     }
   }
-  if (tries > 1) flakes.push(recordFlake({ name: `ui:check ${lane.name}`, tries, error: first instanceof Error ? first.message : String(first) }));
+  if (tries > 1) flakes.push(recordFlake({ name: `ui:check ${lane.name}`, tries, error: errorMessage(first) }));
   return done;
 };
 

@@ -1,4 +1,5 @@
 import type { SessionEvent, SessionInfo } from "@lemma/sessions";
+import { plural } from "@lemma/web/format";
 
 /**
  * The agents a thread started, as its web half shows them, pure so it is tested alone: what each is doing (from the
@@ -132,17 +133,8 @@ export const childrenOf = (sessions: readonly SessionInfo[], parentId: string | 
 export const agentOfCall = (sessions: readonly SessionInfo[], parentId: string | undefined, toolCallId: string): SessionInfo | undefined =>
   parentId === undefined ? undefined : sessions.find((session) => session.parent?.sessionId === parentId && session.parent.toolCallId === toolCallId);
 
-/** How long since `since`, shortly: `12s`, `3m`, `1h 18m`. */
-export const elapsed = (since: number, now: number): string => {
-  const seconds = Math.max(0, Math.floor((now - since) / 1000));
-  if (seconds < 60) return `${seconds}s`;
-  const minutes = Math.floor(seconds / 60);
-  if (minutes < 60) return `${minutes}m`;
-  return `${Math.floor(minutes / 60)}h ${minutes % 60}m`;
-};
-
 /** A count of agents, as a group's label says it: `1 agent`, `3 agents`. */
-export const agentsLabel = (count: number): string => `${count} ${count === 1 ? "agent" : "agents"}`;
+export const agentsLabel = (count: number): string => plural(count, "agent");
 
 /** What a group of agents is doing, in a few words: the active first (`2 working`), else how they finished. */
 export const groupStatus = (states: readonly AgentState[]): { readonly label: string; readonly active: boolean } => {

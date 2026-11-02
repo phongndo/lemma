@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { startHost } from "./hosts.ts";
 import { boot, checkPlugin, settled } from "./shared.ts";
+import type { Contracts } from "./shared.ts";
 
 // 4: a part replaced, everywhere, and one that fails left out for the default.
 export const parts = async (): Promise<string> => {
@@ -10,7 +11,7 @@ export const parts = async (): Promise<string> => {
   await page.evaluate(() => localStorage.setItem("lemma.sidebar.collapsed", "1"));
   await page.reload();
   await settled(page);
-  await page.waitForFunction(() => "lemma" in window && (window as any).lemma.plugins.list().length > 0);
+  await page.waitForFunction(() => "lemma" in window && window.lemma.plugins.list().length > 0);
   await page.keyboard.press("ControlOrMeta+b");
   await page
     .waitForSelector(".sidebar .sidebar-head", { timeout: 5_000 })
@@ -21,15 +22,15 @@ export const parts = async (): Promise<string> => {
   // 4. A replaced part renders instead of the default, everywhere, and the default returns.
   await page.fill("textarea", "hello");
   // The new thread's page becomes the thread's mid-send, keeping its composer (a refused prompt's text returns to it).
-  await page.evaluate(() => ((document.querySelector("textarea") as any).checkMark = true));
+  await page.evaluate(() => (document.querySelector("textarea")!.checkMark = true));
   await page.keyboard.press("Enter");
   await page.waitForSelector(".turn-footer", { timeout: 20_000 });
   assert(page.url().includes("/threads/"), "the first prompt did not move to the thread's address");
-  assert.equal(await page.evaluate(() => (document.querySelector("textarea") as any).checkMark), true, "the first prompt remounted the composer");
+  assert.equal(await page.evaluate(() => document.querySelector("textarea")!.checkMark), true, "the first prompt remounted the composer");
   assert((await page.locator(".turn .md").count()) > 0, "the default markdown part renders");
   // Model HTML in markdown is made safe to show: no script, image, control, or styling of its own, and links open outside.
   const sanitized = await page.evaluate(async () => {
-    const { markdownBlocks } = (await import("/src/ui/api.ts" as string)).api.contracts;
+    const { markdownBlocks } = (await import("/src/ui/api.ts" as string)).api.contracts as Contracts;
     const source = `<p class="toast" style="position: fixed" id="over" onclick="alert(1)">hi <a href="https://example.com">a link</a></p>\n\n<img src="https://example.com/x.png"><script>alert(1)</script><button>go</button>`;
     return markdownBlocks(source)
       .map((block: { kind: string; html?: () => string }) => (block.kind === "html" ? block.html!() : ""))
@@ -42,8 +43,8 @@ export const parts = async (): Promise<string> => {
   );
   assert.doesNotMatch(sanitized, /<img|<script|<button|class=|style=|id=|onclick/, `model HTML in markdown is not sanitized: ${sanitized}`);
   await page.evaluate(async () => {
-    const { MarkdownPart } = (await import("/src/ui/api.ts" as string)).api.contracts;
-    const remove = (window as any).checkSlots.add(MarkdownPart, {
+    const { MarkdownPart } = (await import("/src/ui/api.ts" as string)).api.contracts as Contracts;
+    const remove = window.checkSlots.add(MarkdownPart, {
       id: "check.markdown",
       component: (props: { text: string }) => {
         const element = document.createElement("div");
@@ -52,11 +53,11 @@ export const parts = async (): Promise<string> => {
         return element;
       },
     });
-    (window as any).removeReplacement = remove;
+    window.removeReplacement = remove;
   });
   await page.waitForSelector(".replaced-markdown");
   assert.equal(await page.locator(".turn .md").count(), 0, "the default markdown part still renders beside its replacement");
-  await page.evaluate(() => (window as any).removeReplacement());
+  await page.evaluate(() => window.removeReplacement!());
   await page.waitForSelector(".turn .md");
   assert.equal(await page.locator(".replaced-markdown").count(), 0, "the replacement outlives its removal");
   expectNoErrors("replacing a part");
@@ -64,11 +65,11 @@ export const parts = async (): Promise<string> => {
   // above, naming no phase, comes before.
   assert.deepEqual(
     await page.evaluate(async () => {
-      const { FileIconPart } = (await import("/src/ui/api.ts" as string)).api.contracts;
-      return (window as any).lemma
+      const { FileIconPart } = (await import("/src/ui/api.ts" as string)).api.contracts as Contracts;
+      return window.lemma
         .slots()
         .contributions(FileIconPart)
-        .map((contribution: any) => [contribution.item.id, contribution.phase]);
+        .map((contribution) => [contribution.item.id, contribution.phase]);
     }),
     [
       ["file-icons", "default"],
@@ -79,8 +80,8 @@ export const parts = async (): Promise<string> => {
   // A replacement that throws while drawing is left out for the default, its failure named for its plugin, and the
   // app keeps updating: a later turn still draws.
   await page.evaluate(async () => {
-    const { MarkdownPart } = (await import("/src/ui/api.ts" as string)).api.contracts;
-    (window as any).removeBroken = (window as any).checkSlots.add(MarkdownPart, {
+    const { MarkdownPart } = (await import("/src/ui/api.ts" as string)).api.contracts as Contracts;
+    window.removeBroken = window.checkSlots.add(MarkdownPart, {
       id: "check.broken-markdown",
       component: () => {
         throw new Error("check markdown boom");
@@ -88,16 +89,16 @@ export const parts = async (): Promise<string> => {
     });
   });
   await page.waitForFunction(async () => {
-    const { MarkdownPart } = (await import("/src/ui/api.ts" as string)).api.contracts;
-    return (window as any).lemma.slots().failures(MarkdownPart).length === 1;
+    const { MarkdownPart } = (await import("/src/ui/api.ts" as string)).api.contracts as Contracts;
+    return window.lemma.slots().failures(MarkdownPart).length === 1;
   });
   assert.deepEqual(
     await page.evaluate(async () => {
-      const { MarkdownPart } = (await import("/src/ui/api.ts" as string)).api.contracts;
-      return (window as any).lemma
+      const { MarkdownPart } = (await import("/src/ui/api.ts" as string)).api.contracts as Contracts;
+      return window.lemma
         .slots()
         .failures(MarkdownPart)
-        .map((failure: any) => [failure.item.id, failure.pluginId, failure.error.message]);
+        .map((failure) => [failure.item.id, failure.pluginId, (failure.error as Error).message]);
     }),
     [["check.broken-markdown", "check", "check markdown boom"]],
     "the failing part is not named for its plugin",
@@ -108,7 +109,7 @@ export const parts = async (): Promise<string> => {
   await page.keyboard.press("Enter");
   await page.waitForFunction((before) => document.querySelectorAll(".turn .md").length > before, turns, { timeout: 20_000 });
   assert(await page.locator(".toast >> text=check markdown boom").count(), "the failing part's fault is not reported");
-  await page.evaluate(() => (window as any).removeBroken());
+  await page.evaluate(() => window.removeBroken!());
   assert(
     errors.some((error) => error.includes("check markdown boom")),
     "the failing part is not logged",

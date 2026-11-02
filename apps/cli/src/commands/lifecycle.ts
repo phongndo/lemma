@@ -1,17 +1,17 @@
-import { spawn, spawnSync } from "node:child_process";
+import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
-import { mkdir, open, readFile, rm, stat, writeFile } from "node:fs/promises";
-import { homedir, userInfo } from "node:os";
+import { mkdir, open, readFile, stat, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { Duration, Effect } from "effect";
 import { readDiscovery } from "@lemma/contracts/discovery";
 import type { Discovery } from "@lemma/contracts/discovery";
+import { isAlive } from "@lemma/contracts/fs";
 import { profileOf } from "@lemma/contracts/profiles";
 import { CliChannels } from "@lemma/cli";
 import { callChannel } from "@lemma/client";
 import { missingHostFlags } from "@lemma/host/launch";
-import { SHUTDOWN_TIMEOUT_MS } from "@lemma/host/limits";
-import { buildKind, hostFiles, otherHomeProblem } from "@lemma/host/paths";
+import { STOP_WAIT_MS } from "@lemma/host/limits";
+import { hostFiles, otherHomeProblem } from "@lemma/host/paths";
 import { CliError, defineBuiltin, ExitCode, usage } from "../command.ts";
 import type { Builtin, Globals, Io } from "../command.ts";
 import { confirm } from "../confirm.ts";
@@ -19,6 +19,8 @@ import { connect, homeOf, otherProtocol, rootOf, toCliError } from "../connect.t
 import { startedByText } from "../format.ts";
 import { webIndex } from "../open.ts";
 import { readBuild } from "../release.ts";
+import { serviceManager } from "../service.ts";
+import type { ServiceManager } from "../service.ts";
 
 /*
  * Starting, stopping, and keeping a host on this machine: the commands that
@@ -43,15 +45,6 @@ const localOnly = (globals: Globals, what: string): CliError | undefined =>
 const otherHome = (io: Io): CliError | undefined => {
   const problem = otherHomeProblem(rootOf(io), io.env);
   return problem === undefined ? undefined : new CliError({ code: "OtherHome", message: problem, exit: ExitCode.failed });
-};
-
-const isAlive = (pid: number): boolean => {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (error) {
-    return (error as NodeJS.ErrnoException).code === "EPERM";
-  }
 };
 
 /** The last `count` lines of `path`, or none without it. */
@@ -187,8 +180,7 @@ const serve = defineBuiltin({
     }),
 });
 
-/** How long a host may take to stop: its own shutdown deadline, and a margin. */
-const STOPPING = Duration.millis(SHUTDOWN_TIMEOUT_MS + 5_000);
+const STOPPING = Duration.millis(STOP_WAIT_MS);
 
 /** What is known of the running host: what started it, the project it serves, whether in safe mode, and what stopping it would cut off. */
 interface Running {
@@ -417,145 +409,6 @@ const logs = defineBuiltin({
 
 // ------------------------------------------------------------------ services
 
-/** The OS's service manager for the user: systemd on Linux, launchd on macOS. */
-interface ServiceManager {
-  readonly name: string;
-  /** Where its definition goes. */
-  readonly file: string;
-  readonly render: (command: readonly string[], env: Readonly<Record<string, string>>, log: string) => string;
-  readonly install: (start: boolean) => readonly string[];
-  readonly uninstall: () => void;
-  readonly stop: () => void;
-  /** Stops the host it runs and starts it again, from its definition; what went wrong, if anything. */
-  readonly restart: () => readonly string[];
-  readonly status: () => { readonly installed: boolean; readonly enabled: boolean; readonly active: boolean };
-}
-
-/**
- * The service's names, one per profile and kind, so an installed Lemma's and a checkout's never replace or stop each
- * other: a release's default is `lemma` (launchd's `dev.lemma.host`), another profile's `lemma-<profile>`
- * (`dev.lemma.host.<profile>`); a checkout's `dev-lemma` (`dev.lemma.dev-host`) and `dev-lemma-<profile>`, which no
- * release's name can be.
- */
-const NAMES = { release: { unit: "lemma", label: "dev.lemma.host" }, checkout: { unit: "dev-lemma", label: "dev.lemma.dev-host" } }[buildKind];
-const unitOf = (profile: string | undefined) => `${profile === undefined ? NAMES.unit : `${NAMES.unit}-${profile}`}.service`;
-const labelOf = (profile: string | undefined) => (profile === undefined ? NAMES.label : `${NAMES.label}.${profile}`);
-
-const run = (command: string, args: readonly string[]) => spawnSync(command, args, { encoding: "utf8" });
-
-/** A word for systemd's command line: quoted when it has to be. */
-const systemdWord = (word: string) => (/^[\w@%+=:,./-]+$/.test(word) ? word : `"${word.replace(/(["\\])/g, "\\$1")}"`);
-
-const xml = (text: string) => text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-
-/** The service manager's view of the service for `profile` (the default's when undefined). */
-const serviceManager = (profile?: string): ServiceManager | undefined => {
-  if (process.platform === "linux") {
-    const unit = unitOf(profile);
-    const file = join(process.env.XDG_CONFIG_HOME || join(homedir(), ".config"), "systemd", "user", unit);
-    const systemctl = (...args: string[]) => run("systemctl", ["--user", ...args]);
-    return {
-      name: "systemd",
-      file,
-      render: (command, env) =>
-        [
-          "[Unit]",
-          `Description=Lemma host${buildKind === "checkout" ? " from a checkout" : ""}${profile === undefined ? "" : ` (profile ${profile})`}`,
-          "",
-          "[Service]",
-          "WorkingDirectory=%h",
-          ...Object.entries(env).map(([key, value]) => `Environment=${systemdWord(`${key}=${value}`)}`),
-          `ExecStart=${command.map(systemdWord).join(" ")}`,
-          "Restart=on-failure",
-          "RestartSec=2",
-          "",
-          "[Install]",
-          "WantedBy=default.target",
-          "",
-        ].join("\n"),
-      install: (start) => {
-        const said: string[] = [];
-        for (const args of [["daemon-reload"], start ? ["enable", "--now", unit] : ["enable", unit]]) {
-          const result = systemctl(...args);
-          if (result.status !== 0) said.push(`systemctl --user ${args.join(" ")}: ${(result.stderr || result.error?.message || "failed").trim()}`);
-        }
-        return said;
-      },
-      uninstall: () => {
-        systemctl("disable", "--now", unit);
-      },
-      stop: () => {
-        systemctl("stop", unit);
-      },
-      restart: () => {
-        const result = systemctl("restart", unit);
-        return result.status === 0 ? [] : [`systemctl --user restart ${unit}: ${(result.stderr || result.error?.message || "failed").trim()}`];
-      },
-      status: () => ({
-        installed: existsSync(file),
-        enabled: systemctl("is-enabled", unit).stdout.trim() === "enabled",
-        active: systemctl("is-active", unit).stdout.trim() === "active",
-      }),
-    };
-  }
-  if (process.platform === "darwin") {
-    const label = labelOf(profile);
-    const file = join(homedir(), "Library", "LaunchAgents", `${label}.plist`);
-    const domain = `gui/${userInfo().uid}`;
-    return {
-      name: "launchd",
-      file,
-      render: (command, env, log) =>
-        [
-          '<?xml version="1.0" encoding="UTF-8"?>',
-          '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">',
-          '<plist version="1.0">',
-          "<dict>",
-          `  <key>Label</key><string>${label}</string>`,
-          `  <key>WorkingDirectory</key><string>${xml(homedir())}</string>`,
-          "  <key>ProgramArguments</key>",
-          "  <array>",
-          ...command.map((word) => `    <string>${xml(word)}</string>`),
-          "  </array>",
-          "  <key>EnvironmentVariables</key>",
-          "  <dict>",
-          ...Object.entries(env).map(([key, value]) => `    <key>${xml(key)}</key><string>${xml(value)}</string>`),
-          "  </dict>",
-          "  <key>RunAtLoad</key><true/>",
-          "  <key>KeepAlive</key><dict><key>SuccessfulExit</key><false/></dict>",
-          // What it prints before its own log is open, a failure to start among it.
-          `  <key>StandardOutPath</key><string>${xml(log)}</string>`,
-          `  <key>StandardErrorPath</key><string>${xml(log)}</string>`,
-          "</dict>",
-          "</plist>",
-          "",
-        ].join("\n"),
-      install: (start) => {
-        if (!start) return [];
-        run("launchctl", ["bootout", `${domain}/${label}`]);
-        const result = run("launchctl", ["bootstrap", domain, file]);
-        return result.status === 0 ? [] : [`launchctl bootstrap ${domain} ${file}: ${(result.stderr || "failed").trim()}`];
-      },
-      uninstall: () => {
-        run("launchctl", ["bootout", `${domain}/${label}`]);
-      },
-      stop: () => {
-        // KeepAlive restarts only an unsuccessful exit: a host stopped by SIGTERM exits cleanly and stays down.
-        run("launchctl", ["kill", "SIGTERM", `${domain}/${label}`]);
-      },
-      restart: () => {
-        const result = run("launchctl", ["kickstart", "-k", `${domain}/${label}`]);
-        return result.status === 0 ? [] : [`launchctl kickstart -k ${domain}/${label}: ${(result.stderr || "failed").trim()}`];
-      },
-      status: () => {
-        const loaded = run("launchctl", ["print", `${domain}/${label}`]);
-        return { installed: existsSync(file), enabled: loaded.status === 0, active: loaded.status === 0 && /state = running/.test(loaded.stdout) };
-      },
-    };
-  }
-  return undefined;
-};
-
 /**
  * What a service runs: `serve`, for the home and profile this command uses, of the `lemma` command the installer
  * links, so that once restarted it runs the release installed last (`lemma update`); else this lemma's own, as a
@@ -580,11 +433,9 @@ const serviceDefinition = (command: readonly string[], io: Io, manager: ServiceM
 const noManager = () =>
   new CliError({ code: "Unsupported", message: `lemma service knows systemd (Linux) and launchd (macOS), not ${process.platform}`, exit: ExitCode.failed });
 
-const SERVICE = "Run a host";
-
 const serviceInstall = defineBuiltin({
   path: ["service", "install"],
-  group: SERVICE,
+  group: RUN,
   summary: "Keep a host running as a user service (systemd or launchd): started at login, restarted after a crash",
   description:
     "It runs lemma serve, for the profile --profile names (one service each): an installed release's lemma command, so once restarted (lemma restart) it runs the release lemma update installed; a checkout's node and sources, which under Nix may be garbage-collected or moved: declare that service in your system configuration instead, from what --print shows (systemd.user.services, launchd.user.agents). On Linux, `loginctl enable-linger $USER` keeps it running without a login session.",
@@ -634,7 +485,7 @@ const serviceInstall = defineBuiltin({
 
 const serviceUninstall = defineBuiltin({
   path: ["service", "uninstall"],
-  group: SERVICE,
+  group: RUN,
   summary: "Stop the user service and remove it",
   run: ({ io }) =>
     Effect.gen(function* () {
@@ -642,15 +493,13 @@ const serviceUninstall = defineBuiltin({
       if (manager === undefined) return yield* noManager();
       if (!existsSync(manager.file)) return { json: { removed: false, file: manager.file }, text: `No service at ${manager.file}` };
       manager.uninstall();
-      yield* Effect.promise(() => rm(manager.file, { force: true }));
-      if (manager.name === "systemd") run("systemctl", ["--user", "daemon-reload"]);
       return { json: { removed: true, file: manager.file }, text: `Stopped and removed ${manager.file}` };
     }),
 });
 
 const serviceStatus = defineBuiltin({
   path: ["service"],
-  group: SERVICE,
+  group: RUN,
   summary: "Whether a user service keeps a host running here: installed, enabled, running",
   run: ({ io }) =>
     Effect.gen(function* () {

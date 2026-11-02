@@ -6,7 +6,8 @@
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
-    "./artifacts": "./src/artifacts.ts"
+    "./artifacts": "./src/artifacts.ts",
+    "./disk": "./src/disk.ts"
   },
   "scripts": {
     "check": "tsrs --noEmit",

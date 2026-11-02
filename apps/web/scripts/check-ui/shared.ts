@@ -4,9 +4,14 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
+import type { Context } from "effect";
 import { chromium, firefox, webkit } from "playwright";
 import type { Page } from "playwright";
 import { createLogger, createServer } from "vite";
+import type { ThreadsService } from "@lemma/threads";
+import type { SlotsService } from "@lemma/web";
+import type { api } from "../../src/ui/api.ts";
+import type { DevApi } from "../../src/ui/boot.tsx";
 import { HOST_COOKIE, hostsOf, laneNow, routerUrl } from "./hosts.ts";
 import type { Host } from "./hosts.ts";
 
@@ -14,6 +19,119 @@ import type { Host } from "./hosts.ts";
  * What every lane of the UI check (check-ui.ts) shares: the options, the dev server, the browser, and the helpers that
  * open, boot, and drive its pages, each on a real host of its lane's (hosts.ts).
  */
+
+/**
+ * The object web halves receive (`src/ui/api.ts`). A function run on the page imports it by its address on the dev
+ * server, which TypeScript cannot follow, and types what it gets as this, or its contracts as `Contracts`.
+ */
+export type Api = typeof api;
+/** Every contract by its name (`api.contracts`). */
+export type Contracts = Api["contracts"];
+/** A client's channel as a check wraps it, to see what goes through it: called by id or declaration, with JSON. */
+export interface Channel {
+  call(target: string | { readonly id: string }, payload?: unknown): Promise<unknown>;
+  open(target: string | { readonly id: string }, payload: unknown, ...rest: unknown[]): () => void;
+}
+/** The service of each contract that is a capability, by the contract's name. */
+type Services = {
+  readonly [K in keyof Contracts as Context.Service.Shape<Contracts[K]> extends never ? never : K]: Context.Service.Shape<Contracts[K]>;
+};
+/** What a script drawn in the chat posts to the page it is drawn in (`probe` in scripts/mock-openai.ts). */
+interface PageReport {
+  readonly type: "check-page";
+  readonly title: string;
+  /** The app's title, or the name of the error reaching it threw. */
+  readonly reach: string;
+  /** The page's `--bg`. */
+  readonly bg: string;
+  /** When the page loaded (`performance.timeOrigin`). */
+  readonly loaded: number;
+}
+/** The reports, in order, with ES2023's `findLast`: the page has it, and the lib the app is checked against (ES2022) leaves it out. */
+export interface PageReports extends Array<PageReport> {
+  findLast(match: (report: PageReport) => boolean): PageReport | undefined;
+}
+
+// What the checks read and leave on the page's `window`, in the functions they run there. All but `lemma` and
+// `checkSlots` are a lane's own, there only once that lane has set them.
+declare global {
+  interface Window {
+    /** The running composition, which a development build's boot puts here. */
+    readonly lemma: DevApi;
+    /** The `check` web half's slots, which `checkPlugin` puts here. */
+    readonly checkSlots: SlotsService;
+    /** The services `expose` puts here, by contract name: only those it was given. */
+    services?: Services;
+    /** `Threads`, which `atBlankThread` puts here. */
+    blankThreads?: ThreadsService;
+    /** Removals of what the addresses and slots lanes added to slots, which each runs when done. */
+    removals?: (() => void)[];
+    /** The `sessions.events` calls and `sessions.log` streams the addresses lane saw opened: the session, and where each began. */
+    fetched?: [kind: "events" | "log", session: string, after: number][];
+    /** Set by the addresses lane before it follows a link, which a reload would clear. */
+    stayed?: boolean;
+    /** How many times the addresses lane's reader of a route has run. */
+    reruns?: number;
+    /** Disposes of the root the addresses lane runs that reader in. */
+    disposeCount?: () => void;
+    /** Removes the addresses lane's tool view. */
+    removeToolView?: () => void;
+    /** Removes the addresses lane's page without a route. */
+    removeMalformed?: () => void;
+    /** Removes the addresses lane's page added after the one without a route. */
+    removeAfter?: () => void;
+    /** Removes the slots lane's replacement for the composer's suggestions. */
+    removeSuggestion?: () => void;
+    /** Lets the file searches the slots lane holds back go on. */
+    releaseSearch?: () => void;
+    /** The arguments the slots lane's prompt command last ran with. */
+    ranCommand?: string | undefined;
+    /** The thread open before the slots lane opened another. */
+    threadBefore?: string | undefined;
+    /** Removes the parts lane's replacement for the markdown part. */
+    removeReplacement?: () => void;
+    /** Removes the parts lane's markdown part that throws. */
+    removeBroken?: () => void;
+    /** Removes the turns lane's row for a queued prompt (`ComposerQueuedPart`). */
+    removeRow?: () => void;
+    /** The request ids of the prompts sent, which the turns lane records. */
+    sentIds?: (string | undefined)[];
+    /** What the pages drawn in the chat reported, which the pages lane records. */
+    pageReports?: PageReport[];
+    /** The height each page's frame first took, by its title, which the pages lane records. */
+    firstHeights?: Record<string, string>;
+    /** The hashes the Summary page went to, which the pages lane records in that page's frame. */
+    hashes?: string[];
+    /** How many frames the chat has not scrolled for, as the pages lane counts them. */
+    stillFor?: number;
+    /** Where the chat was scrolled to on the frame before, as the pages lane counts. */
+    lastTop?: number;
+    /** The addresses `window.open` was asked for, which the pages lane records in its place. */
+    opened?: string[];
+    /** How many Escapes the Summary page has said it had, which the pages lane counts. */
+    escapes?: number;
+    /** Set by the separate lane when the connect dialog shows. */
+    sawConnect?: boolean;
+    /** The slots of the separate lane's `check-look` web half, which it puts here. */
+    lookSlots?: SlotsService;
+    /** Removes the settings group the separate lane added through `lookSlots`. */
+    removeLookGroup?: () => void;
+    /** How many times the look changed, which the separate lane counts. */
+    looks?: number;
+    /** Stops the separate lane counting the look's changes. */
+    stopLooks?: () => void;
+    /** Set by the separate lane once its stylesheet link has loaded. */
+    linkLoaded?: boolean;
+    /** Whether a binding took Alt+Shift+↓ from the prompt, which the sidebar lane records as the key goes down. */
+    taken?: boolean | undefined;
+    /** Removes the sidebar lane's `ThreadWaits` item. */
+    removeWait?: () => void;
+  }
+  interface HTMLTextAreaElement {
+    /** Set on the composer's text field, to tell whether it was drawn again (the parts lane). */
+    checkMark?: boolean;
+  }
+}
 
 const { values: options } = parseArgs({
   options: { shard: { type: "string", default: "1/1" }, retry: { type: "string", default: "0" }, lane: { type: "string", multiple: true } },
@@ -77,21 +195,21 @@ export const drawn = (page: Page) => page.evaluate(() => new Promise<void>((reso
  * Puts the app's services on `window.services`, by contract name: a wait's page function runs synchronously, so it
  * reads them there rather than awaiting `lemma.service`. A reload drops them.
  */
-export const expose = (page: Page, ...names: string[]) =>
+export const expose = (page: Page, ...names: (keyof Services)[]) =>
   page.evaluate(async (names) => {
     const contracts = (await import("/src/ui/api.ts" as string)).api.contracts;
-    const lemma = (window as any).lemma;
-    (window as any).services = Object.fromEntries(await Promise.all(names.map(async (name) => [name, await lemma.service(contracts[name])])));
+    const lemma = window.lemma;
+    window.services = Object.fromEntries(await Promise.all(names.map(async (name) => [name, await lemma.service(contracts[name])])));
   }, names);
 
 /** Waits for the new-thread page (`/`) to have gone on to a blank thread, as it does once the app knows where one starts. */
 export const atBlankThread = async (page: Page) => {
   await page.evaluate(async () => {
-    const { Threads } = (await import("/src/ui/api.ts" as string)).api.contracts;
-    (window as any).blankThreads = await (window as any).lemma.service(Threads);
+    const { Threads } = (await import("/src/ui/api.ts" as string)).api.contracts as Contracts;
+    window.blankThreads = (await window.lemma.service(Threads))!;
   });
   await page.waitForFunction(() => {
-    const threads = (window as any).blankThreads;
+    const threads = window.blankThreads!;
     return location.pathname.startsWith("/threads/") && threads.active() !== undefined && threads.blank();
   });
 };
@@ -162,7 +280,7 @@ export const boot = async (host: Host) => {
   });
   await page.goto(`${url}/`);
   await settled(page);
-  await page.waitForFunction(() => "lemma" in window && (window as any).lemma.plugins.list().length > 0);
+  await page.waitForFunction(() => "lemma" in window && window.lemma.plugins.list().length > 0);
   expectNoErrors("while booting");
   return { page, errors, warnings, expectNoErrors };
 };
@@ -182,10 +300,10 @@ export const checkPlugin = async (page: Page) => {
 export const switchTo = (page: Page, id: string, enabled: boolean) =>
   page.evaluate(
     async ({ id, enabled }) => {
-      const lemma = (window as any).lemma;
-      const plugin = lemma.plugins.list().find((candidate: any) => candidate.id === id);
-      await lemma.plugins.setEnabled(plugin, enabled);
-      return lemma.plugins.list().find((candidate: any) => candidate.id === id).state;
+      const lemma = window.lemma;
+      const plugin = lemma.plugins.list().find((candidate) => candidate.id === id);
+      await lemma.plugins.setEnabled(plugin!, enabled);
+      return lemma.plugins.list().find((candidate) => candidate.id === id)!.state;
     },
     { id, enabled },
   );
@@ -195,16 +313,16 @@ export async function showView(page: Page, id: string): Promise<void> {
   // The pane is the open thread's, so a view is shown in it once the thread (a blank one too) has loaded.
   await page.waitForFunction(
     async () => {
-      const { Threads } = (await import("/src/ui/api.ts" as string)).api.contracts;
-      return (await (window as any).lemma.service(Threads)).active() !== undefined;
+      const { Threads } = (await import("/src/ui/api.ts" as string)).api.contracts as Contracts;
+      return (await window.lemma.service(Threads))!.active() !== undefined;
     },
     undefined,
     { timeout: 10_000 },
   );
   await page.waitForFunction(
     async (view) => {
-      const { Actions } = (await import("/src/ui/api.ts" as string)).api.contracts;
-      const action = (window as any).lemma.slots().get(Actions, `thread.view.${view}`);
+      const { Actions } = (await import("/src/ui/api.ts" as string)).api.contracts as Contracts;
+      const action = window.lemma.slots().get(Actions, `thread.view.${view}`);
       action?.run();
       return action !== undefined;
     },

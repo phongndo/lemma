@@ -2,6 +2,7 @@ import { For, Match, Show, Switch, createSignal } from "solid-js";
 import type { ConfigField } from "@lemma/contracts";
 import { configEdit, configText, Toggle } from "@lemma/look";
 import type { ConfigFormProps } from "@lemma/look";
+import { errorMessage } from "@lemma/contracts";
 
 /**
  * A plugin's settings, projected from its config Schema: a control per
@@ -20,7 +21,7 @@ export function ConfigForm(props: ConfigFormProps) {
     try {
       await props.onSave({ [field.key]: next });
     } catch (error) {
-      setErrors((all) => ({ ...all, [field.key]: error instanceof Error ? error.message : String(error) }));
+      setErrors((all) => ({ ...all, [field.key]: errorMessage(error) }));
     } finally {
       setSaving(undefined);
     }

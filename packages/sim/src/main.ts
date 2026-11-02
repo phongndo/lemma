@@ -15,6 +15,7 @@ process.env.TZ = "UTC";
 import { parseArgs } from "node:util";
 import { Cause } from "effect";
 import type { SessionEvent } from "@lemma/sessions";
+import { errorMessage } from "@lemma/contracts";
 import { writeSessionFixtures } from "./fixtures.ts";
 import { digestRun } from "./run.ts";
 import { World } from "./world.ts";
@@ -57,7 +58,7 @@ if (values.digest === true) {
 /** A failure's causes, nested ones indented: a plugin's fault names the error that caused it. */
 const explain = (error: unknown, depth = 0): string[] => {
   if (depth > 6 || error === undefined) return [];
-  const message = error instanceof Error ? error.message : String((error as { readonly message?: unknown } | null)?.message ?? error);
+  const message = errorMessage(error);
   const line = `${"  ".repeat(depth)}${(error as { readonly _tag?: string } | null)?._tag ?? (error instanceof Error ? error.name : "error")}: ${message}`;
   const cause = (error as { readonly cause?: unknown } | null)?.cause;
   const inner = Cause.isCause(cause) ? Cause.prettyErrors(cause) : cause === undefined ? [] : [cause];

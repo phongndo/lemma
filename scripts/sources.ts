@@ -1,8 +1,8 @@
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 
-// What the repository's checks scan (check-boundaries.ts, size.ts, examples-coverage.ts): its files, and the extension
-// points the domains' contracts declare in them.
+// What the repository's checks scan (check-boundaries.ts, check-docs.ts, size.ts, examples-coverage.ts): its files,
+// and the extension points the domains' contracts declare in them.
 
 /** Every file under `dir`, but those in `node_modules` and `dist`. */
 export const walk = (dir: string): string[] =>

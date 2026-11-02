@@ -1,7 +1,6 @@
 import { createHash } from "node:crypto";
-import { Schema } from "effect";
+import { Predicate, Schema } from "effect";
 import type { ImageContent, TextContent } from "@lemma/llm";
-import { isObject } from "./values.ts";
 
 type Json = Record<string, unknown>;
 type Content = TextContent | ImageContent;
@@ -41,17 +40,17 @@ const SUBSCHEMAS = new Set(["properties", "patternProperties", "dependentSchemas
  * `enum` value with a `$ref`, is kept as it is.
  */
 export function inputSchema(schema: unknown): Json {
-  const root = isObject(schema) ? schema : {};
-  const defs: Json = { ...(isObject(root["definitions"]) ? root["definitions"] : {}), ...(isObject(root["$defs"]) ? root["$defs"] : {}) };
+  const root = Predicate.isObject(schema) ? schema : {};
+  const defs: Json = { ...(Predicate.isObject(root["definitions"]) ? root["definitions"] : {}), ...(Predicate.isObject(root["$defs"]) ? root["$defs"] : {}) };
   const inline = (node: unknown, seen: ReadonlySet<string>): unknown => {
     if (Array.isArray(node)) return node.map((item) => inline(item, seen));
-    if (!isObject(node)) return node;
+    if (!Predicate.isObject(node)) return node;
     const ref = node["$ref"];
     if (typeof ref === "string") {
       const { $ref: _, ...siblings } = node;
       const name = decodeURIComponent(ref.replace(/^#\/(\$defs|definitions)\//, ""));
       const target = defs[name];
-      if (ref === name || !isObject(target) || seen.has(name)) return inline(siblings, seen);
+      if (ref === name || !Predicate.isObject(target) || seen.has(name)) return inline(siblings, seen);
       return inline({ ...target, ...siblings }, new Set([...seen, name]));
     }
     return Object.fromEntries(
@@ -59,14 +58,14 @@ export function inputSchema(schema: unknown): Json {
         // Inlined where they are used.
         if (key === "$defs" || key === "definitions") return [];
         if (SUBSCHEMA.has(key)) return [[key, inline(value, seen)]];
-        if (SUBSCHEMAS.has(key) && isObject(value))
+        if (SUBSCHEMAS.has(key) && Predicate.isObject(value))
           return [[key, Object.fromEntries(Object.entries(value).map(([name, item]) => [name, Array.isArray(item) ? item : inline(item, seen)]))]];
         return [[key, value]];
       }),
     );
   };
   const out = inline(root, new Set()) as Json;
-  return { ...out, type: "object", properties: isObject(out["properties"]) ? out["properties"] : {} };
+  return { ...out, type: "object", properties: Predicate.isObject(out["properties"]) ? out["properties"] : {} };
 }
 
 /**
@@ -88,7 +87,7 @@ export const outputOf = (outputSchema: unknown) => {
     type: "object",
     properties: {
       content: { type: "array", items: { type: "object" }, description: "Content blocks: text, image (`data` base64, `mimeType`), resource, …" },
-      structuredContent: isObject(outputSchema) ? inputSchema(outputSchema) : {},
+      structuredContent: Predicate.isObject(outputSchema) ? inputSchema(outputSchema) : {},
       isError: { type: "boolean" },
     },
     required: ["content"],
@@ -146,7 +145,7 @@ export function toContent(result: CallResult): Content[] {
     else if (type === "resource_link") {
       const description = typeof block["description"] === "string" ? `: ${block["description"]}` : "";
       out.push({ type: "text", text: `[Resource ${String(block["name"] ?? block["uri"])} at ${String(block["uri"])}${description}]` });
-    } else if (type === "resource" && isObject(block["resource"])) {
+    } else if (type === "resource" && Predicate.isObject(block["resource"])) {
       const resource = block["resource"];
       const uri = String(resource["uri"]);
       const mimeType = typeof resource["mimeType"] === "string" ? resource["mimeType"] : undefined;

@@ -1,7 +1,9 @@
 import assert from "node:assert/strict";
+import type { Slot } from "@lemma/web";
 import { domainPlugins } from "../../../../scripts/plugins.ts";
 import { startHost } from "./hosts.ts";
 import { boot, expose, settled, switchTo } from "./shared.ts";
+import type { Api, Contracts } from "./shared.ts";
 
 // 1–3: booting, the parts, and every plugin off and on.
 export const toggling = async (): Promise<string> => {
@@ -11,18 +13,18 @@ export const toggling = async (): Promise<string> => {
 
   // 2. Every declared part has a provider.
   const unfilled: string[] = await page.evaluate(async () => {
-    const contracts = (await import("/src/ui/api.ts" as string)).api.contracts;
-    const slots = (window as any).lemma.slots();
+    const contracts: Record<string, { readonly name?: unknown } | undefined> = (await import("/src/ui/api.ts" as string)).api.contracts;
+    const slots = window.lemma.slots();
     return Object.values(contracts)
-      .filter((value: any) => typeof value?.name === "string" && value.name.startsWith("part."))
-      .filter((part: any) => slots.first(part) === undefined)
-      .map((part: any) => part.name);
+      .filter((value): value is Slot<unknown> => typeof value?.name === "string" && value.name.startsWith("part."))
+      .filter((part) => slots.first(part) === undefined)
+      .map((part) => part.name);
   });
   assert.deepEqual(unfilled, [], "parts nothing provides");
 
   // 3. Every plugin turns off and on, the way the Plugins page switches it; a locked one (pinned, or needed by one) stays on.
   const plugins: { id: string; locked: boolean; source: string }[] = await page.evaluate(() =>
-    (window as any).lemma.plugins.list().map((plugin: any) => ({ id: plugin.id, locked: plugin.locked !== undefined, source: plugin.source })),
+    window.lemma.plugins.list().map((plugin) => ({ id: plugin.id, locked: plugin.locked !== undefined, source: plugin.source })),
   );
   // The bundled list holds the web half of every plugin in domains/, under the id its folder names.
   assert.deepEqual(
@@ -38,10 +40,10 @@ export const toggling = async (): Promise<string> => {
   );
   // The host's plugins are the host halves they list: it bundles every one.
   const hostPlugins: string[] = await page.evaluate(async () => {
-    const { HostPlugins } = (await import("/src/ui/api.ts" as string)).api.contracts;
-    const host = await (window as any).lemma.service(HostPlugins);
+    const { HostPlugins } = (await import("/src/ui/api.ts" as string)).api.contracts as Contracts;
+    const host = (await window.lemma.service(HostPlugins))!;
     await host.refresh();
-    return host.list().map((plugin: any) => plugin.id);
+    return host.list().map((plugin) => plugin.id);
   });
   assert.deepEqual(
     [...hostPlugins].sort(),
@@ -70,7 +72,7 @@ export const toggling = async (): Promise<string> => {
     await switchTo(page, id, true);
     // A web half whose host half the host is starting again waits for it: back on is once it runs.
     await page
-      .waitForFunction((id) => (window as any).lemma.plugins.list().find((plugin: any) => plugin.id === id)?.state === "active", id, { timeout: 10_000 })
+      .waitForFunction((id) => window.lemma.plugins.list().find((plugin) => plugin.id === id)?.state === "active", id, { timeout: 10_000 })
       .catch(() => assert.fail(`${id} did not come back on`));
     await settled(page);
     expectNoErrors(`turning ${id} back on`);
@@ -78,10 +80,10 @@ export const toggling = async (): Promise<string> => {
     toggled.push(id);
   }
   const off = await page.evaluate(() =>
-    (window as any).lemma.plugins
+    window.lemma.plugins
       .list()
-      .filter((plugin: any) => plugin.state !== "active")
-      .map((plugin: any) => plugin.id),
+      .filter((plugin) => plugin.state !== "active")
+      .map((plugin) => plugin.id),
   );
   assert.deepEqual(off, [], "plugins not back on after the round trip");
   // Only the pinned plugins and what they need stay on; the runtime is the app's, with no row to switch.
@@ -98,8 +100,8 @@ export const toggling = async (): Promise<string> => {
   // The Plugins page needs no plugin that can be turned off: a line of its summary leaves with the plugin that adds it
   // (the turns running, with threads), and its pieces work without kit, from the page itself.
   await page.evaluate(async () => {
-    const { Settings } = (await import("/src/ui/api.ts" as string)).api.contracts;
-    (await (window as any).lemma.service(Settings)).open("plugins");
+    const { Settings } = (await import("/src/ui/api.ts" as string)).api.contracts as Contracts;
+    (await window.lemma.service(Settings))!.open("plugins");
   });
   const running = page.locator(".host-facts dt:text-is('Running')");
   await running.waitFor({ timeout: 5_000 }).catch(() => assert.fail("the Plugins page does not show the turns running"));
@@ -111,13 +113,14 @@ export const toggling = async (): Promise<string> => {
   const domainRow = (domain: string) => page.locator(`.inspector-table [role=rowgroup][aria-label='${domain}'] .inspector-domain`);
   await domainRow("look").click();
   const kit = page.locator(".inspector-row[data-key='web:look.kit']");
-  const kitState = () => page.evaluate(() => (window as any).lemma.plugins.list().find((plugin: any) => plugin.id === "look.kit").state);
+  const kitState = () => page.evaluate(() => window.lemma.plugins.list().find((plugin) => plugin.id === "look.kit")!.state);
   // A web half can neither change a bundled part's fallback nor give its own part one: its `definePart` takes none.
   const fallbacks = await page.evaluate(async () => {
-    const { api } = await import("/src/ui/api.ts" as string);
+    const { api } = (await import("/src/ui/api.ts" as string)) as { readonly api: Api };
     const { fallbackOf, TogglePart } = api.contracts;
     const declared = fallbackOf(TogglePart);
     const mine = () => "a web half's";
+    // @ts-expect-error: a web half's `definePart` takes no fallback, which these pass.
     return { kept: fallbackOf(api.definePart("toggle", mine)) === declared, own: fallbackOf(api.definePart("check.own", mine)) === undefined };
   });
   assert.deepEqual(fallbacks, { kept: true, own: true }, "a web half set a part's fallback");
@@ -150,13 +153,9 @@ export const toggling = async (): Promise<string> => {
   await maxSteps.press("Tab");
   await expose(page, "HostPlugins");
   await page
-    .waitForFunction(
-      () => (window as any).services.HostPlugins.list().find((plugin: any) => plugin.id === "agent.loop").config.values.maxSteps === 150,
-      undefined,
-      {
-        timeout: 5_000,
-      },
-    )
+    .waitForFunction(() => window.services!.HostPlugins.list().find((plugin) => plugin.id === "agent.loop")!.config!.values.maxSteps === 150, undefined, {
+      timeout: 5_000,
+    })
     .catch(() => assert.fail("with kit off, a plugin's settings form does not save"));
   await filter.fill("");
   await kit.locator("input[type=checkbox]").click();
@@ -212,38 +211,35 @@ export const toggling = async (): Promise<string> => {
   const configureAll = (enabled: boolean) =>
     page.evaluate(
       async ({ ids, enabled }) => {
-        const { Client } = (await import("/src/ui/api.ts" as string)).api.contracts;
-        await (await (window as any).lemma.service(Client)).configure(Object.fromEntries(ids.map((id: string) => [id, { enabled }])));
+        const { Client } = (await import("/src/ui/api.ts" as string)).api.contracts as Contracts;
+        await (await window.lemma.service(Client))!.configure(Object.fromEntries(ids.map((id: string) => [id, { enabled }])));
       },
       { ids: unlocked, enabled },
     );
   const active = () =>
     page.evaluate(() =>
-      (window as any).lemma.plugins
+      window.lemma.plugins
         .list()
-        .filter((plugin: any) => plugin.state === "active")
-        .map((plugin: any) => plugin.id),
+        .filter((plugin) => plugin.state === "active")
+        .map((plugin) => plugin.id),
     );
   await configureAll(false);
-  await page.waitForFunction((count) => (window as any).lemma.plugins.list().filter((plugin: any) => plugin.state === "active").length === count, 4);
+  await page.waitForFunction((count) => window.lemma.plugins.list().filter((plugin) => plugin.state === "active").length === count, 4);
   assert.deepEqual(
     [...(await active())].sort(),
     ["frame.pages", "frame.shell", "settings.page", "settings.plugins"],
     "plugins still running with every plugin off",
   );
   const answers = await page.evaluate(async () => {
-    const { Notify, Router } = (await import("/src/ui/api.ts" as string)).api.contracts;
-    const lemma = (window as any).lemma;
-    const notify = await lemma.service(Notify);
+    const { Notify, Router } = (await import("/src/ui/api.ts" as string)).api.contracts as Contracts;
+    const lemma = window.lemma;
+    const notify = (await lemma.service(Notify))!;
     const id = notify.toast({ level: "info", message: "the runtime answers" });
-    return { path: (await lemma.service(Router)).location().pathname, kept: notify.toasts().some((toast: any) => toast.id === id) };
+    return { path: (await lemma.service(Router))!.location().pathname, kept: notify.toasts().some((toast) => toast.id === id) };
   });
   assert.deepEqual(answers, { path: "/settings/plugins", kept: true }, "with every plugin off, the runtime does not answer");
   await configureAll(true);
-  await page.waitForFunction(
-    (count) => (window as any).lemma.plugins.list().filter((plugin: any) => plugin.state === "active").length === count,
-    plugins.length,
-  );
+  await page.waitForFunction((count) => window.lemma.plugins.list().filter((plugin) => plugin.state === "active").length === count, plugins.length);
   expectNoErrors("turning every plugin off and on at once");
 
   // A web half providing part of the runtime is left out, saying so, and the app's own goes on: its toasts still show.
@@ -252,7 +248,7 @@ export const toggling = async (): Promise<string> => {
       defineWebPlugin({ id: "my-notify", provides: { notify: Notify }, setup: () => ({ notify: {} }) });`,
   });
   await page
-    .waitForFunction(() => (window as any).lemma.plugins.list().some((plugin: any) => plugin.id === "my-notify" && plugin.problem !== undefined), undefined, {
+    .waitForFunction(() => window.lemma.plugins.list().some((plugin) => plugin.id === "my-notify" && plugin.problem !== undefined), undefined, {
       timeout: 10_000,
     })
     .catch(() => assert.fail("a web half providing Notify was not left out"));
@@ -261,24 +257,24 @@ export const toggling = async (): Promise<string> => {
     "a web half providing Notify was left out without a warning",
   );
   await page.evaluate(async () => {
-    const { Notify } = (await import("/src/ui/api.ts" as string)).api.contracts;
-    (await (window as any).lemma.service(Notify)).toast({ level: "info", message: "still the app's own" });
+    const { Notify } = (await import("/src/ui/api.ts" as string)).api.contracts as Contracts;
+    (await window.lemma.service(Notify))!.toast({ level: "info", message: "still the app's own" });
   });
   await page
     .waitForSelector(".toast >> text=still the app's own", { timeout: 5_000 })
     .catch(() => assert.fail("toasts stopped with a web half providing Notify"));
   await host.plugins({ "my-notify.web.js": null });
-  await page.waitForFunction(() => !(window as any).lemma.plugins.list().some((plugin: any) => plugin.id === "my-notify"));
+  await page.waitForFunction(() => !window.lemma.plugins.list().some((plugin) => plugin.id === "my-notify"));
   expectNoErrors("a web half providing part of the runtime");
 
   // A web half is the plugin its file is named for (the host knows its id by that): one defining another is not run.
   await host.plugins({ "named.web.js": `export default ({ defineWebPlugin }) => defineWebPlugin({ id: "other", setup: () => {} });` });
   await page
-    .waitForFunction(() => (window as any).lemma.plugins.problems().some((problem: string) => problem.includes('defines "other"')), undefined, {
+    .waitForFunction(() => window.lemma.plugins.problems().some((problem: string) => problem.includes('defines "other"')), undefined, {
       timeout: 10_000,
     })
     .catch(() => assert.fail("a web half defining a plugin other than its file's name was not refused"));
-  assert(!(await page.evaluate(() => (window as any).lemma.plugins.list().some((plugin: any) => plugin.id === "other"))), "a misnamed web half ran");
+  assert(!(await page.evaluate(() => window.lemma.plugins.list().some((plugin) => plugin.id === "other"))), "a misnamed web half ran");
   await host.plugins({ "named.web.js": null });
   return `booted; every part provided; ${toggled.length - locked.length} plugins turned off and on, ${locked.length} locked ones kept on (${locked.join(", ")}); the Plugins page filters, saves settings, and keeps its switches without kit; the runtime answers with every plugin off, and a web half providing Notify is left out`;
 };

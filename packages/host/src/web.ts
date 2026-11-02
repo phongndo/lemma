@@ -1,30 +1,17 @@
-import { createHash } from "node:crypto";
-import { readdir, stat } from "node:fs/promises";
+import { stat } from "node:fs/promises";
 import { extname, join, relative, sep } from "node:path";
 import { Effect } from "effect";
 import { WEB_IMPORTABLE } from "@lemma/contracts";
 import type { WebFile } from "@lemma/contracts";
 import { projectPluginsDir } from "./config.ts";
-import { entriesOf, webPluginOf } from "./manifest.ts";
+import { entriesOf, folderVersion, webPluginOf } from "./manifest.ts";
 import type { PathsService } from "./paths.ts";
 
 /** `<home>/plugins`: the user's plugins, both halves (see `manifest.ts`). */
 export const userPluginsDir = (paths: PathsService): string => join(paths.home, "plugins");
 
-/** A package's version: the files of it its web half may import (`WEB_IMPORTABLE`), by mtime, so an edit to any is a new one. */
-const packageVersion = async (dir: string): Promise<string> => {
-  const files: string[] = [];
-  const walk = async (at: string): Promise<void> => {
-    for (const entry of await readdir(at, { withFileTypes: true }).catch(() => [])) {
-      if (entry.name === "node_modules" || entry.name.startsWith(".")) continue;
-      if (entry.isDirectory()) await walk(join(at, entry.name));
-      else if (WEB_IMPORTABLE.has(extname(entry.name))) files.push(join(at, entry.name));
-    }
-  };
-  await walk(dir);
-  const stamps = await Promise.all(files.sort().map(async (path) => `${path}:${(await stat(path).catch(() => undefined))?.mtimeMs ?? 0}\n`));
-  return createHash("sha256").update(stamps.join("")).digest("hex").slice(0, 12);
-};
+/** Whether a package's web half may import a file of it (`WEB_IMPORTABLE`): what its version is made from. */
+const isWebImportable = (name: string) => WEB_IMPORTABLE.has(extname(name));
 
 /**
  * The files the web app loads from the plugin directories: web halves (`notes.web.js`, a package's `lemma.web`) and
@@ -57,7 +44,9 @@ export function listWebFiles(paths: PathsService, trusted: boolean): Effect.Effe
         if (!info?.isFile()) continue;
         const name = relative(dir, path).split(sep).join("/");
         const version =
-          folder === undefined ? String(Math.round(info.mtimeMs)) : await (versions.get(folder) ?? versions.set(folder, packageVersion(folder)).get(folder)!);
+          folder === undefined
+            ? String(Math.round(info.mtimeMs))
+            : await (versions.get(folder) ?? versions.set(folder, folderVersion(folder, isWebImportable)).get(folder)!);
         const url = `/api/web/${source}@${version}/${name.split("/").map(encodeURIComponent).join("/")}`;
         files.push({ name, source, kind, path, url, ...(plugin === undefined ? {} : { plugin }) });
       }

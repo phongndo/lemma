@@ -1,9 +1,13 @@
 // Compares benchmarks of a base revision with the working tree: the core's microbenchmarks, and with
 // `--harness`, the harness benchmark's step times (`… ms per step`, packages/sim/bench/harness.ts).
-// Like Go's benchstat and Node's benchmark/compare.js, it alternates runs of the two builds on the same machine and
-// reports a change only when a Mann-Whitney U test finds it significant (Bonferroni-corrected
-// across the benchmarks) and it is larger than the threshold. Absolute numbers from shared CI
-// runners mean little; the difference between two builds measured side by side does.
+// Absolute numbers from shared CI runners mean little; the difference between two builds measured side by side does.
+// So, like Go's benchstat and Node's benchmark/compare.js, it checks the base out beside the working tree, and
+// alternates `--runs` runs of the two builds on the same machine (default 10, at least 8).
+// - A benchmark's change is reported only when a Mann-Whitney U test finds it significant at p < 0.05,
+//   Bonferroni-corrected across the benchmarks, and the medians differ by more than `--threshold` (default 0.1).
+// - A change beyond the threshold that the test cannot tell from noise is reported `unclear`.
+// - Each median shows its 95% interval.
+// - `--fail` exits non-zero on a slowdown.
 //
 //   node scripts/bench-compare.ts [--base <ref>] [--runs <n>] [--threshold <fraction>] [--fail] [--harness] [--output <dir>]
 //

@@ -36,10 +36,11 @@ import type { ModelsService } from "@lemma/llm/web";
 import type { ClientService, NotifyService, SlotsService } from "@lemma/web";
 import type { WorkspaceService } from "@lemma/workspace/web";
 import { ChatIcon, ChevronDownIcon, ImageIcon, LogIcon, Segmented, SendIcon, SettingRow, StopIcon, UndoIcon, XIcon } from "@lemma/look";
+import { plural } from "@lemma/web/format";
 import { commandTurn } from "./command.ts";
 import { createCompletion, ghostText } from "./completion.ts";
 import { draftsOf, dropRetry, keepDraft, lostOnReload, returned, unsent } from "./drafts.ts";
-import type { Draft, Drafts } from "./drafts.ts";
+import type { Draft, Drafts, Prompt } from "./drafts.ts";
 import { promptOf, recallTarget, sentPrompts } from "./history.ts";
 import type { SentPrompt } from "./history.ts";
 import { leftOutWarnings, readImage, sortFiles, unreadWarning } from "./images.ts";
@@ -72,10 +73,6 @@ const ComposerConfig = Schema.Struct({
 });
 
 const noPrompt = { text: "", images: [] } as const;
-
-type Send = typeof ComposerConfig.Type.send;
-type WhenBusy = typeof ComposerConfig.Type.whenBusy;
-type Stop = typeof ComposerConfig.Type.stop;
 
 /**
  * A queued prompt in a line: its text, whitespace collapsed, or what it attaches. A plugin's notice, held for the next
@@ -170,6 +167,29 @@ function Composer(props: { deps: Deps }) {
     if (completion.open()) suggestionList?.querySelector(`#${CSS.escape(id)}`)?.scrollIntoView({ block: "nearest" });
   });
 
+  const resize = () => {
+    input.style.height = "auto";
+    input.style.height = `${Math.min(input.scrollHeight, Math.round(window.innerHeight * 0.4))}px`;
+    setScrolls(input.scrollHeight > input.clientHeight + 1);
+  };
+  /** Once the text just set is drawn: the cursor goes to `at`, the box fits the text, and with `focus` takes the focus. */
+  const settle = (at: number, focus: boolean) =>
+    queueMicrotask(() => {
+      if (focus) input.focus();
+      input.setSelectionRange(at, at);
+      syncCursor();
+      resize();
+    });
+  /** Shows `prompt` in the box, the cursor at `at` (its end unless given). */
+  const load = (prompt: Prompt, at = prompt.text.length, focus = false) => {
+    batch(() => {
+      setText(prompt.text);
+      setImages(prompt.images);
+      setCursor(at);
+    });
+    settle(at, focus);
+  };
+
   createEffect(
     on(
       threads.activeId,
@@ -181,15 +201,8 @@ function Composer(props: { deps: Deps }) {
           drafts.set(id, early);
           drafts.set("", undefined);
         }
-        const draft = drafts.get(draftKey());
         setRecalled(undefined);
-        setText(draft?.text ?? "");
-        setImages(draft?.images ?? []);
-        queueMicrotask(() => {
-          resize();
-          input.focus();
-          syncCursor();
-        });
+        load(drafts.get(draftKey()) ?? noPrompt, undefined, true);
       },
       { defer: true },
     ),
@@ -204,12 +217,6 @@ function Composer(props: { deps: Deps }) {
     dropRetry(drafts, draftKey());
   };
 
-  const resize = () => {
-    input.style.height = "auto";
-    input.style.height = `${Math.min(input.scrollHeight, Math.round(window.innerHeight * 0.4))}px`;
-    setScrolls(input.scrollHeight > input.clientHeight + 1);
-  };
-
   onMount(() => {
     props.deps.setFocus(() => input.focus());
     input.focus();
@@ -222,18 +229,8 @@ function Composer(props: { deps: Deps }) {
       props.deps.editing,
       (edit) => {
         if (edit === undefined || edit.sessionId !== draftKey()) return;
-        const draft = drafts.get(edit.sessionId);
-        batch(() => {
-          setRecalled(undefined);
-          setText(draft?.text ?? "");
-          setImages(draft?.images ?? []);
-        });
-        queueMicrotask(() => {
-          resize();
-          input.focus();
-          input.setSelectionRange(edit.cursor, edit.cursor);
-          syncCursor();
-        });
+        setRecalled(undefined);
+        load(drafts.get(edit.sessionId) ?? noPrompt, edit.cursor, true);
       },
       { defer: true },
     ),
@@ -262,16 +259,8 @@ function Composer(props: { deps: Deps }) {
     // A refused prompt comes back with the cursor at its end and its completions dismissed, as Escape does, so they do
     // not cover the notice saying why; when the Enter that sent it comes up no longer decides.
     write: (prompt) => {
-      batch(() => {
-        setText(prompt.text);
-        setImages(prompt.images);
-        setCursor(prompt.text.length);
-      });
+      load(prompt);
       completion.dismiss();
-      queueMicrotask(() => {
-        input.setSelectionRange(prompt.text.length, prompt.text.length);
-        resize();
-      });
     },
     sending,
     setSending,
@@ -357,13 +346,7 @@ function Composer(props: { deps: Deps }) {
     const { at, prompt } = target;
     batch(() => {
       setRecalled(at === undefined ? undefined : { ...prompt, at });
-      setText(prompt.text);
-      setImages(prompt.images);
-      setCursor(prompt.text.length);
-    });
-    queueMicrotask(() => {
-      input.setSelectionRange(prompt.text.length, prompt.text.length);
-      resize();
+      load(prompt);
     });
     return true;
   };
@@ -387,34 +370,26 @@ function Composer(props: { deps: Deps }) {
     edited();
     setText(next);
   };
+  /** Writes `next` (`write`) with the cursor at `at`, the focus in the box. */
+  const writeAt = (next: string, at: number) => {
+    // Together, so completion never sees the new text with the old cursor (and asks for a word nobody typed).
+    batch(() => {
+      write(next);
+      setCursor(at);
+    });
+    settle(at, true);
+  };
   const insert = (value: string) => {
     const start = input.selectionStart ?? boxText().length;
     const end = input.selectionEnd ?? start;
-    const next = boxText().slice(0, start) + value + boxText().slice(end);
-    batch(() => write(next));
-    queueMicrotask(() => {
-      input.focus();
-      input.setSelectionRange(start + value.length, start + value.length);
-      syncCursor();
-      resize();
-    });
+    writeAt(boxText().slice(0, start) + value + boxText().slice(end), start + value.length);
   };
-  /** Puts a suggestion in place of the word being completed. */
   /** Puts a suggestion in place of the word being completed; with `complete`, Tab's, only that, never sending. */
   const pick = (suggestion: ComposerSuggestion, how: "pick" | "complete" = "pick") => {
     const word = completion.match();
     if (word === undefined) return;
     const next = applySuggestion(boxText(), word, suggestion.insert, { space: suggestion.partial !== true });
-    // Together, so completion never sees the new text with the old cursor (and asks for a word nobody typed).
-    batch(() => {
-      write(next.text);
-      setCursor(next.cursor);
-    });
-    queueMicrotask(() => {
-      input.focus();
-      input.setSelectionRange(next.cursor, next.cursor);
-      resize();
-    });
+    writeAt(next.text, next.cursor);
     // A command needing nothing more goes as Enter would send it.
     if (suggestion.submit === true && how === "pick") void submit();
   };
@@ -548,7 +523,7 @@ function Composer(props: { deps: Deps }) {
             class="queue-head"
             aria-expanded={queueOpen()}
             aria-controls={queueId}
-            aria-label={`${queueOpen() ? "Hide" : "Show"} ${queued().length} queued ${queued().length === 1 ? "prompt" : "prompts"}`}
+            aria-label={`${queueOpen() ? "Hide" : "Show"} ${plural(queued().length, "queued prompt")}`}
             onMouseDown={(event) => event.preventDefault()}
             onClick={() => setQueueOpen(!queueOpen())}
           >
@@ -702,12 +677,7 @@ function Composer(props: { deps: Deps }) {
               const value = event.currentTarget.value;
               // Text and cursor together: completion asks for the word once, not for each half of the change.
               batch(() => {
-                const item = taken();
-                if (item !== undefined) item.setText(value);
-                else {
-                  edited();
-                  setText(value);
-                }
+                write(value);
                 syncCursor();
               });
               resize();
@@ -849,62 +819,18 @@ function SuggestionRow(props: ComposerSuggestionProps) {
   );
 }
 
-/** Which keys send, in General › Composer. */
-function SendSetting(props: { send: Send; onChange: (send: Send) => void }) {
+/** One of the composer's choices, in General › Composer. */
+function ChoiceSetting<T extends string>(props: {
+  title: string;
+  description: string;
+  label: string;
+  value: T;
+  options: readonly { readonly value: T; readonly label: string }[];
+  onChange: (value: T) => void;
+}) {
   return (
-    <SettingRow
-      title="Send a message"
-      description={`The other one starts a new line, as does Shift+Enter. ${formatKeys("mod+enter")}, or ${formatKeys("mod+shift+enter")} while it sends, runs it in a new thread in the background.`}
-    >
-      <Segmented
-        label="Send a message with"
-        value={props.send}
-        options={[
-          { value: "enter", label: formatKeys("enter") },
-          { value: "mod+enter", label: formatKeys("mod+enter") },
-        ]}
-        onChange={props.onChange}
-      />
-    </SettingRow>
-  );
-}
-
-/** What sending does while a turn runs, in General › Composer. */
-function WhenBusySetting(props: { whenBusy: WhenBusy; onChange: (whenBusy: WhenBusy) => void }) {
-  return (
-    <SettingRow
-      title="While a turn runs"
-      description="Steer: join it after its current step. Queue: send after the turn ends. Alt with the send key does the other."
-    >
-      <Segmented
-        label="Sending while a turn runs"
-        value={props.whenBusy}
-        options={[
-          { value: "steer", label: "Steer" },
-          { value: "queue", label: "Queue" },
-        ]}
-        onChange={props.onChange}
-      />
-    </SettingRow>
-  );
-}
-
-/** Which Escape stops a running turn, in General › Composer. */
-function StopSetting(props: { stop: Stop; onChange: (stop: Stop) => void }) {
-  return (
-    <SettingRow
-      title="Stop a turn"
-      description="In the prompt, while a turn runs. Twice: a second Escape within a second, so one meant for a menu cannot stop it."
-    >
-      <Segmented
-        label="Stop a turn with"
-        value={props.stop}
-        options={[
-          { value: "escape-twice", label: stopKeys("escape-twice") },
-          { value: "escape", label: stopKeys("escape") },
-        ]}
-        onChange={props.onChange}
-      />
+    <SettingRow title={props.title} description={props.description}>
+      <Segmented label={props.label} value={props.value} options={props.options} onChange={props.onChange} />
     </SettingRow>
   );
 }
@@ -1039,7 +965,6 @@ export default defineWebPlugin({
     );
     use.slots.add(ComposerRegion, { id: "composer", phase: "default", component: () => <Composer deps={deps} /> });
     use.slots.add(ComposerNotices, { id: "composer.answer", order: 50, component: () => <PromptAnswerNotice threads={use.threads} /> });
-    // Its own button goes through the slot other plugins add theirs to, and its queue rows through a part others replace.
     use.slots.add(ComposerActions, { id: "composer.attach", order: 100, component: AttachImages });
     // Under each prompt in the transcript, first: it owns the box the prompt comes back to.
     const bases = createMemo(() => promptBases(use.threads.branch()));
@@ -1066,15 +991,51 @@ export default defineWebPlugin({
       entries: () => [
         {
           text: "Composer: send a message with Enter or Mod+Enter; the other one, or Shift+Enter, starts a new line; Mod+Enter (Mod+Shift+Enter while it sends) runs it in a new thread in the background",
-          view: () => <SendSetting send={send.value()} onChange={send.set} />,
+          view: () => (
+            <ChoiceSetting
+              title="Send a message"
+              description={`The other one starts a new line, as does Shift+Enter. ${formatKeys("mod+enter")}, or ${formatKeys("mod+shift+enter")} while it sends, runs it in a new thread in the background.`}
+              label="Send a message with"
+              value={send.value()}
+              options={[
+                { value: "enter", label: formatKeys("enter") },
+                { value: "mod+enter", label: formatKeys("mod+enter") },
+              ]}
+              onChange={send.set}
+            />
+          ),
         },
         {
           text: "Composer: while a turn runs, sending steers it or queues the message for after it; Alt does the other",
-          view: () => <WhenBusySetting whenBusy={whenBusy.value()} onChange={whenBusy.set} />,
+          view: () => (
+            <ChoiceSetting
+              title="While a turn runs"
+              description="Steer: join it after its current step. Queue: send after the turn ends. Alt with the send key does the other."
+              label="Sending while a turn runs"
+              value={whenBusy.value()}
+              options={[
+                { value: "steer", label: "Steer" },
+                { value: "queue", label: "Queue" },
+              ]}
+              onChange={whenBusy.set}
+            />
+          ),
         },
         {
           text: "Composer: stop a running turn with Escape twice, or once",
-          view: () => <StopSetting stop={stop.value()} onChange={stop.set} />,
+          view: () => (
+            <ChoiceSetting
+              title="Stop a turn"
+              description="In the prompt, while a turn runs. Twice: a second Escape within a second, so one meant for a menu cannot stop it."
+              label="Stop a turn with"
+              value={stop.value()}
+              options={[
+                { value: "escape-twice", label: stopKeys("escape-twice") },
+                { value: "escape", label: stopKeys("escape") },
+              ]}
+              onChange={stop.set}
+            />
+          ),
         },
       ],
     });

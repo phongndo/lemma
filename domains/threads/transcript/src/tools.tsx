@@ -66,6 +66,10 @@ function Diff(props: { diff: string }) {
 
 export type ToolState = "running" | "queued" | "ok" | "error" | "interrupted";
 
+/** A logged call's state: its result's, or with none yet, running while its turn runs and interrupted once it has stopped. */
+export const toolStateOf = (result: ToolResultView | undefined, running: boolean): ToolState =>
+  result === undefined ? (running ? "running" : "interrupted") : result.stopped ? "interrupted" : result.isError ? "error" : "ok";
+
 /** A tool call, through the `chat.tool` part, with the chat's open state, its live output, and how long it has run. */
 export function ToolCard(props: {
   chat: Chat;

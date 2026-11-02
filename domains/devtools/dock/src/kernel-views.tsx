@@ -1,12 +1,13 @@
 import { For, Show, createEffect, createMemo, createResource, createSignal, on, onCleanup } from "solid-js";
-import type { Accessor, JSX } from "solid-js";
-import { KERNEL_LABEL, RUNTIME_LABEL, kernelOf, pluginWiring, tablesOf } from "@lemma/contracts";
+import type { Accessor } from "solid-js";
+import { errorMessage, KERNEL_LABEL, kernelOf, pluginWiring, RUNTIME_LABEL, tablesOf } from "@lemma/contracts";
 import type { InspectorInfo, KernelKind as Kind, PluginStatus, Table } from "@lemma/contracts";
-import { DevtoolsPanels, PLUGIN_PANEL, TRACE_PANEL, clearsOnEscape, rowKeys } from "@lemma/devtools/web";
+import { Chips, DevtoolsPanels, FilterField, PLUGIN_PANEL, SelectableTable, TRACE_PANEL } from "@lemma/devtools/web";
 import { SectionIds, SettingsRoute } from "@lemma/settings";
 import { usePlugin } from "@lemma/web";
 import { INSPECTORS_PANEL, kernelFor, slotViews } from "./kernel.tsx";
 import type { Deps, SlotView } from "./kernel.tsx";
+import { Details, Section } from "./parts.tsx";
 
 /*
  * The kernel's panels' views (see `kernelPanels`), loaded the first time the devtools draw one of their own panels.
@@ -43,31 +44,7 @@ function Names(props: { deps: Deps; kind: Kind; ids: readonly string[]; none?: s
   );
 }
 
-function KindChips(props: { kind: Accessor<Kind>; setKind: (kind: Kind) => void }) {
-  return (
-    <For each={["web", "host"] as const}>
-      {(option) => (
-        <button class="dt-chip" aria-pressed={props.kind() === option} onClick={() => props.setKind(option)}>
-          {kindLabel(option)}
-        </button>
-      )}
-    </For>
-  );
-}
-
-function Section(props: { title: string; aside?: JSX.Element; children: JSX.Element }) {
-  return (
-    <section class="dt-section">
-      <h4>
-        <span>{props.title}</span>
-        <Show when={props.aside}>
-          <span class="dt-section-aside">{props.aside}</span>
-        </Show>
-      </h4>
-      {props.children}
-    </section>
-  );
-}
+const KINDS = (["web", "host"] as const).map((kind) => ({ id: kind, label: kindLabel(kind) }));
 
 function Tables(props: { tables: readonly Table[] }) {
   return (
@@ -162,223 +139,221 @@ function PluginView(props: { deps: Deps; kind: Kind; plugin: PluginStatus; plugi
       : [];
   const own = () => props.inspectors.filter((inspector) => inspector.source === plugin().id);
   return (
-    <aside class="dt-details dt-side" aria-label="Plugin details">
-      <div class="dt-details-title">
-        <strong class="dt-code">{plugin().id}</strong>
-        <span class="dt-muted">{plugin().version ?? ""}</span>
-        <span class={stateClass(plugin().state, plugin().enabled)}>{stateLabel(plugin())}</span>
-        {/* Its spans, while a plugin shows the trace (`devtools.trace`). */}
-        <Show when={deps.slots.get(DevtoolsPanels, TRACE_PANEL)}>
-          <button
-            class="dt-link devtools-end"
-            onClick={() => deps.devtools.show(TRACE_PANEL, `trace:${props.kind === "web" ? "page" : "host"} plugin:${plugin().id}`)}
-          >
-            Spans
-          </button>
-        </Show>
-        <a class="devtools-end" href={deps.router.href(SettingsRoute, { section: SectionIds.plugins }, { plugin: plugin().id, kind: props.kind })}>
-          Plugins page
-        </a>
-      </div>
-      <div class="dt-side-body">
-        <Show when={plugin().fault}>
-          {(fault) => (
-            <div class="dt-banner dt-err">
-              {fault().phase}
-              {fault().operation === undefined ? "" : ` (${fault().operation})`}: {fault().message}
-            </div>
+    <Details
+      label="Plugin details"
+      title={
+        <>
+          <strong class="dt-code">{plugin().id}</strong>
+          <span class="dt-muted">{plugin().version ?? ""}</span>
+          <span class={stateClass(plugin().state, plugin().enabled)}>{stateLabel(plugin())}</span>
+          {/* Its spans, while a plugin shows the trace (`devtools.trace`). */}
+          <Show when={deps.slots.get(DevtoolsPanels, TRACE_PANEL)}>
+            <button
+              class="dt-link devtools-end"
+              onClick={() => deps.devtools.show(TRACE_PANEL, `trace:${props.kind === "web" ? "page" : "host"} plugin:${plugin().id}`)}
+            >
+              Spans
+            </button>
+          </Show>
+          <a class="devtools-end" href={deps.router.href(SettingsRoute, { section: SectionIds.plugins }, { plugin: plugin().id, kind: props.kind })}>
+            Plugins page
+          </a>
+        </>
+      }
+    >
+      <Show when={plugin().fault}>
+        {(fault) => (
+          <div class="dt-banner dt-err">
+            {fault().phase}
+            {fault().operation === undefined ? "" : ` (${fault().operation})`}: {fault().message}
+          </div>
+        )}
+      </Show>
+      <dl class="dt-facts">
+        <dt>Source</dt>
+        <dd>
+          {plugin().source}
+          {plugin().shadows ? ", shadowing the bundled one" : ""}
+        </dd>
+        <Show when={plugin().haltedBy}>
+          {(by) => (
+            <>
+              <dt>Halted by</dt>
+              <dd>
+                <PluginName deps={deps} kind={props.kind} id={by()} />
+              </dd>
+            </>
           )}
         </Show>
-        <dl class="dt-facts">
-          <dt>Source</dt>
-          <dd>
-            {plugin().source}
-            {plugin().shadows ? ", shadowing the bundled one" : ""}
-          </dd>
-          <Show when={plugin().haltedBy}>
-            {(by) => (
-              <>
-                <dt>Halted by</dt>
-                <dd>
-                  <PluginName deps={deps} kind={props.kind} id={by()} />
-                </dd>
-              </>
-            )}
-          </Show>
-          <Show when={plugin().locked}>
-            {(why) => (
-              <>
-                <dt>Kept on</dt>
-                <dd>{why()}</dd>
-              </>
-            )}
-          </Show>
-        </dl>
-        <Section title="Provides" aside="replacing it restarts what requires it">
-          <Show when={wiring().serves.length > 0} fallback={<p class="dt-muted">Nothing.</p>}>
-            <table class="dt-table">
-              <tbody>
-                <For each={wiring().serves}>
-                  {(serve) => (
-                    <tr data-row>
-                      <td class="dt-code">{serve.key}</td>
-                      <td class="dt-wrap">
-                        used by <Names deps={deps} kind={props.kind} ids={serve.users} />
-                      </td>
-                    </tr>
-                  )}
-                </For>
-              </tbody>
-            </table>
-          </Show>
-        </Section>
-        <Section title="Requires">
-          <Show when={wiring().calls.length > 0} fallback={<p class="dt-muted">Nothing.</p>}>
-            <table class="dt-table">
-              <tbody>
-                <For each={wiring().calls}>
-                  {(call) => (
-                    <tr data-row>
-                      <td class="dt-code">{call.key}</td>
-                      <td class="dt-wrap">
-                        <Show
-                          when={call.providers.length > 0}
-                          fallback={call.runtime ? <span class="dt-muted">{RUNTIME_LABEL[props.kind]}</span> : <span class="dt-err">nothing provides it</span>}
-                        >
-                          <For each={call.providers}>
-                            {(provider) => (
-                              <span>
-                                <PluginName deps={deps} kind={props.kind} id={provider.id} />{" "}
-                                <span class={stateClass(provider.state, provider.enabled)}>{stateLabel(provider)}</span>{" "}
-                              </span>
-                            )}
-                          </For>
-                        </Show>
-                      </td>
-                    </tr>
-                  )}
-                </For>
-              </tbody>
-            </table>
-          </Show>
-        </Section>
-        <Show when={wiring().hooks.length > 0}>
-          <Section title="Hooks" aside="its place in each chain">
-            <table class="dt-table">
-              <tbody>
-                <For each={wiring().hooks}>
-                  {(hook) => (
-                    <tr data-row>
-                      <td class="dt-code">{hook.name}</td>
-                      <td class="dt-num dt-muted">
-                        {hook.phase === undefined ? "" : `${hook.phase} · `}order {hook.order}
-                      </td>
-                      <td class="dt-muted">
-                        {hook.position} of {hook.of}
-                      </td>
-                    </tr>
-                  )}
-                </For>
-              </tbody>
-            </table>
-          </Section>
+        <Show when={plugin().locked}>
+          {(why) => (
+            <>
+              <dt>Kept on</dt>
+              <dd>{why()}</dd>
+            </>
+          )}
         </Show>
-        <Show when={wiring().observes.length > 0}>
-          <Section title="Observes">
-            <p class="dt-code">{wiring().observes.join(", ")}</p>
-          </Section>
+      </dl>
+      <Section title="Provides" aside="replacing it restarts what requires it">
+        <Show when={wiring().serves.length > 0} fallback={<p class="dt-muted">Nothing.</p>}>
+          <table class="dt-table">
+            <tbody>
+              <For each={wiring().serves}>
+                {(serve) => (
+                  <tr data-row>
+                    <td class="dt-code">{serve.key}</td>
+                    <td class="dt-wrap">
+                      used by <Names deps={deps} kind={props.kind} ids={serve.users} />
+                    </td>
+                  </tr>
+                )}
+              </For>
+            </tbody>
+          </table>
         </Show>
-        <Show when={props.kind === "web" ? items().length > 0 : (plugin().contributes ?? []).length > 0}>
-          <Section title="Contributes" aside={props.kind === "web" ? "each slot item it added" : "items in other plugins' registries"}>
-            <table class="dt-table">
-              <tbody>
-                <Show
-                  when={props.kind === "web"}
-                  fallback={
-                    <For each={plugin().contributes}>
-                      {(registry) => (
-                        <tr data-row>
-                          <td class="dt-code">{registry.name}</td>
-                          <td class="dt-num">{registry.items}</td>
-                          <td class="dt-code dt-muted dt-wrap">{(registry.keys ?? []).join(", ")}</td>
-                        </tr>
-                      )}
-                    </For>
-                  }
-                >
-                  <For each={items()}>
-                    {(item) => (
+      </Section>
+      <Section title="Requires">
+        <Show when={wiring().calls.length > 0} fallback={<p class="dt-muted">Nothing.</p>}>
+          <table class="dt-table">
+            <tbody>
+              <For each={wiring().calls}>
+                {(call) => (
+                  <tr data-row>
+                    <td class="dt-code">{call.key}</td>
+                    <td class="dt-wrap">
+                      <Show
+                        when={call.providers.length > 0}
+                        fallback={call.runtime ? <span class="dt-muted">{RUNTIME_LABEL[props.kind]}</span> : <span class="dt-err">nothing provides it</span>}
+                      >
+                        <For each={call.providers}>
+                          {(provider) => (
+                            <span>
+                              <PluginName deps={deps} kind={props.kind} id={provider.id} />{" "}
+                              <span class={stateClass(provider.state, provider.enabled)}>{stateLabel(provider)}</span>{" "}
+                            </span>
+                          )}
+                        </For>
+                      </Show>
+                    </td>
+                  </tr>
+                )}
+              </For>
+            </tbody>
+          </table>
+        </Show>
+      </Section>
+      <Show when={wiring().hooks.length > 0}>
+        <Section title="Hooks" aside="its place in each chain">
+          <table class="dt-table">
+            <tbody>
+              <For each={wiring().hooks}>
+                {(hook) => (
+                  <tr data-row>
+                    <td class="dt-code">{hook.name}</td>
+                    <td class="dt-num dt-muted">
+                      {hook.phase === undefined ? "" : `${hook.phase} · `}order {hook.order}
+                    </td>
+                    <td class="dt-muted">
+                      {hook.position} of {hook.of}
+                    </td>
+                  </tr>
+                )}
+              </For>
+            </tbody>
+          </table>
+        </Section>
+      </Show>
+      <Show when={wiring().observes.length > 0}>
+        <Section title="Observes">
+          <p class="dt-code">{wiring().observes.join(", ")}</p>
+        </Section>
+      </Show>
+      <Show when={props.kind === "web" ? items().length > 0 : (plugin().contributes ?? []).length > 0}>
+        <Section title="Contributes" aside={props.kind === "web" ? "each slot item it added" : "items in other plugins' registries"}>
+          <table class="dt-table">
+            <tbody>
+              <Show
+                when={props.kind === "web"}
+                fallback={
+                  <For each={plugin().contributes}>
+                    {(registry) => (
                       <tr data-row>
-                        <td class="dt-code">{item.slot}</td>
-                        <td class="dt-code">{item.id}</td>
-                        <td class="dt-num dt-muted">{placeOf(item)}</td>
+                        <td class="dt-code">{registry.name}</td>
+                        <td class="dt-num">{registry.items}</td>
+                        <td class="dt-code dt-muted dt-wrap">{(registry.keys ?? []).join(", ")}</td>
                       </tr>
                     )}
                   </For>
-                </Show>
-              </tbody>
-            </table>
-          </Section>
-        </Show>
-        <Show when={own().length > 0}>
-          <Section title="Inspectors" aside="what it lets you look into">
-            <For each={own()}>
-              {(inspector) => (
-                <div>
-                  <button class="dt-link" onClick={() => deps.devtools.show(INSPECTORS_PANEL, inspector.id)}>
-                    {inspector.title}
-                  </button>{" "}
-                  <span class="dt-muted">{inspector.description ?? ""}</span>
-                </div>
-              )}
-            </For>
-          </Section>
-        </Show>
-        <Show when={(plugin().configFields ?? []).length > 0}>
-          <Section title="Settings">
-            <table class="dt-table">
-              <tbody>
-                <For each={plugin().configFields}>
-                  {(field) => {
-                    const value = () => plugin().config?.values[field.key];
-                    return (
-                      <tr data-row>
-                        <td class="dt-code">{field.key}</td>
-                        <td class="dt-code">
-                          {field.secret
-                            ? plugin().config?.secretsSet.includes(field.key)
-                              ? "set"
-                              : "unset"
-                            : (JSON.stringify(value() ?? field.default) ?? "")}
-                          {value() === undefined && field.default !== undefined ? <span class="dt-muted"> (default)</span> : ""}
-                        </td>
-                      </tr>
-                    );
-                  }}
-                </For>
-              </tbody>
-            </table>
-          </Section>
-        </Show>
-        <Show when={(plugin().faults ?? []).length > 0}>
-          <Section title="Faults" aside={`${plugin().faults!.length} recent`}>
-            <table class="dt-table">
-              <tbody>
-                <For each={plugin().faults}>
-                  {(fault) => (
+                }
+              >
+                <For each={items()}>
+                  {(item) => (
                     <tr data-row>
-                      <td class="dt-muted dt-code">{new Date(fault.at).toLocaleTimeString([], { hour12: false })}</td>
-                      <td class="dt-code">{fault.phase}</td>
-                      <td class="dt-err">{fault.message}</td>
+                      <td class="dt-code">{item.slot}</td>
+                      <td class="dt-code">{item.id}</td>
+                      <td class="dt-num dt-muted">{placeOf(item)}</td>
                     </tr>
                   )}
                 </For>
-              </tbody>
-            </table>
-          </Section>
-        </Show>
-      </div>
-    </aside>
+              </Show>
+            </tbody>
+          </table>
+        </Section>
+      </Show>
+      <Show when={own().length > 0}>
+        <Section title="Inspectors" aside="what it lets you look into">
+          <For each={own()}>
+            {(inspector) => (
+              <div>
+                <button class="dt-link" onClick={() => deps.devtools.show(INSPECTORS_PANEL, inspector.id)}>
+                  {inspector.title}
+                </button>{" "}
+                <span class="dt-muted">{inspector.description ?? ""}</span>
+              </div>
+            )}
+          </For>
+        </Section>
+      </Show>
+      <Show when={(plugin().configFields ?? []).length > 0}>
+        <Section title="Settings">
+          <table class="dt-table">
+            <tbody>
+              <For each={plugin().configFields}>
+                {(field) => {
+                  const value = () => plugin().config?.values[field.key];
+                  return (
+                    <tr data-row>
+                      <td class="dt-code">{field.key}</td>
+                      <td class="dt-code">
+                        {field.secret ? (plugin().config?.secretsSet.includes(field.key) ? "set" : "unset") : (JSON.stringify(value() ?? field.default) ?? "")}
+                        {value() === undefined && field.default !== undefined ? <span class="dt-muted"> (default)</span> : ""}
+                      </td>
+                    </tr>
+                  );
+                }}
+              </For>
+            </tbody>
+          </table>
+        </Section>
+      </Show>
+      <Show when={(plugin().faults ?? []).length > 0}>
+        <Section title="Faults" aside={`${plugin().faults!.length} recent`}>
+          <table class="dt-table">
+            <tbody>
+              <For each={plugin().faults}>
+                {(fault) => (
+                  <tr data-row>
+                    <td class="dt-muted dt-code">{new Date(fault.at).toLocaleTimeString([], { hour12: false })}</td>
+                    <td class="dt-code">{fault.phase}</td>
+                    <td class="dt-err">{fault.message}</td>
+                  </tr>
+                )}
+              </For>
+            </tbody>
+          </table>
+        </Section>
+      </Show>
+    </Details>
   );
 }
 
@@ -415,70 +390,41 @@ export function PluginsPanel(props: { deps: Deps; inspectors: Accessor<readonly 
   return (
     <div class="dt-scope">
       <div class="dt-toolbar" role="toolbar" aria-label="Plugins toolbar">
-        <label class="dt-filter">
-          <input
-            placeholder="Filter plugins, capabilities"
-            aria-label="Filter plugins"
-            value={filter()}
-            onInput={(event) => setFilter(event.currentTarget.value)}
-            onKeyDown={clearsOnEscape(filter, () => setFilter(""))}
-          />
-        </label>
+        <FilterField label="Filter plugins" placeholder="Filter plugins, capabilities" value={filter()} onInput={setFilter} />
         <span class="dt-sep" />
-        <KindChips kind={kind} setKind={setKind} />
+        <Chips options={KINDS} value={kind()} onChange={setKind} />
         <span class="dt-sep" />
-        <For each={STATES}>
-          {(option) => (
-            <button class="dt-chip" aria-pressed={state() === option.id} onClick={() => setState(option.id)}>
-              {option.label}
-            </button>
-          )}
-        </For>
+        <Chips options={STATES} value={state()} onChange={setState} />
       </div>
       <div class="dt-split">
         <div class="dt-main" tabindex="-1">
-          <table class="dt-table" aria-label="Plugins" role="grid" tabindex="0" onKeyDown={rowKeys(setSelected)}>
-            <thead>
-              <tr>
-                <th>Plugin</th>
-                <th class="devtools-plugins-state">State</th>
-                <th class="devtools-plugins-source">Source</th>
-                <th>Provides</th>
-                <th class="devtools-plugins-requires dt-num">Requires</th>
-                <th class="devtools-plugins-faults dt-num">Faults</th>
-              </tr>
-            </thead>
-            <tbody>
-              <For
-                each={shown()}
-                fallback={
-                  <tr>
-                    <td colSpan={6} class="dt-muted">
-                      No plugin matches
-                    </td>
-                  </tr>
-                }
-              >
-                {(plugin) => (
-                  <tr
-                    data-row
-                    data-key={plugin.id}
-                    data-selected={current()?.id === plugin.id}
-                    aria-selected={current()?.id === plugin.id}
-                    tabindex="-1"
-                    onClick={() => setSelected(plugin.id)}
-                  >
-                    <td class="dt-code">{plugin.id}</td>
-                    <td class={stateClass(plugin.state, plugin.enabled)}>{stateLabel(plugin)}</td>
-                    <td class="dt-muted">{plugin.source}</td>
-                    <td class="dt-code dt-muted">{plugin.provides.join(", ")}</td>
-                    <td class="dt-num">{plugin.requires.length}</td>
-                    <td class={`dt-num ${(plugin.faults ?? []).length > 0 ? "dt-err" : "dt-muted"}`}>{(plugin.faults ?? []).length}</td>
-                  </tr>
-                )}
-              </For>
-            </tbody>
-          </table>
+          <SelectableTable
+            label="Plugins"
+            columns={[
+              { title: "Plugin" },
+              { title: "State", class: "devtools-plugins-state" },
+              { title: "Source", class: "devtools-plugins-source" },
+              { title: "Provides" },
+              { title: "Requires", class: "devtools-plugins-requires dt-num" },
+              { title: "Faults", class: "devtools-plugins-faults dt-num" },
+            ]}
+            rows={shown()}
+            key={(plugin) => plugin.id}
+            selected={current()?.id}
+            onSelect={setSelected}
+            empty="No plugin matches"
+          >
+            {(plugin) => (
+              <>
+                <td class="dt-code">{plugin.id}</td>
+                <td class={stateClass(plugin.state, plugin.enabled)}>{stateLabel(plugin)}</td>
+                <td class="dt-muted">{plugin.source}</td>
+                <td class="dt-code dt-muted">{plugin.provides.join(", ")}</td>
+                <td class="dt-num">{plugin.requires.length}</td>
+                <td class={`dt-num ${(plugin.faults ?? []).length > 0 ? "dt-err" : "dt-muted"}`}>{(plugin.faults ?? []).length}</td>
+              </>
+            )}
+          </SelectableTable>
         </div>
         <Show when={current()} keyed>
           {(plugin) => <PluginView deps={deps} kind={kind()} plugin={plugin} plugins={plugins()} inspectors={props.inspectors()} />}
@@ -499,6 +445,11 @@ export function PluginsPanel(props: { deps: Deps; inspectors: Accessor<readonly 
   );
 }
 
+const WHATS = [
+  { id: "hooks", label: "Hooks" },
+  { id: "events", label: "Events" },
+] as const;
+
 /** Each hook's chain in run order, or each event's observers. */
 export function HooksPanel(props: { deps: Deps }) {
   const { deps } = props;
@@ -506,7 +457,7 @@ export function HooksPanel(props: { deps: Deps }) {
   const [what, setWhat] = createSignal<"hooks" | "events">("hooks");
   const [selected, setSelected] = createSignal<string>();
   const kernel = createMemo(() => kernelFor(deps, kind()));
-  const rows = () =>
+  const rows = (): readonly { name: string; plugins: readonly string[]; orders: readonly string[] | undefined }[] =>
     what() === "hooks"
       ? kernel().hooks.map((hook) => ({
           name: hook.name,
@@ -518,83 +469,58 @@ export function HooksPanel(props: { deps: Deps }) {
   return (
     <div class="dt-scope">
       <div class="dt-toolbar" role="toolbar" aria-label="Hooks toolbar">
-        <KindChips kind={kind} setKind={setKind} />
+        <Chips options={KINDS} value={kind()} onChange={setKind} />
         <span class="dt-sep" />
-        <button class="dt-chip" aria-pressed={what() === "hooks"} onClick={() => setWhat("hooks")}>
-          Hooks
-        </button>
-        <button class="dt-chip" aria-pressed={what() === "events"} onClick={() => setWhat("events")}>
-          Events
-        </button>
+        <Chips options={WHATS} value={what()} onChange={setWhat} />
       </div>
       <div class="dt-split">
         <div class="dt-main" tabindex="-1">
-          <table class="dt-table" aria-label={what() === "hooks" ? "Hooks" : "Events"} role="grid" tabindex="0" onKeyDown={rowKeys(setSelected)}>
-            <thead>
-              <tr>
-                <th>{what() === "hooks" ? "Hook" : "Event"}</th>
-                <th class="devtools-hooks-count dt-num">{what() === "hooks" ? "Handlers" : "Observers"}</th>
-                <th>{what() === "hooks" ? "Runs" : "Observed by"}</th>
-              </tr>
-            </thead>
-            <tbody>
-              <For
-                each={rows()}
-                fallback={
-                  <tr>
-                    <td colSpan={3} class="dt-muted">
-                      {what() === "hooks" ? "No plugin intercepts a hook." : "No plugin observes an event."}
-                    </td>
-                  </tr>
-                }
-              >
-                {(row) => (
-                  <tr
-                    data-row
-                    data-key={row.name}
-                    data-selected={current()?.name === row.name}
-                    aria-selected={current()?.name === row.name}
-                    tabindex="-1"
-                    onClick={() => setSelected(row.name)}
-                  >
-                    <td class="dt-code">{row.name}</td>
-                    <td class="dt-num">{row.plugins.length}</td>
-                    <td class="dt-muted">{row.plugins.join(what() === "hooks" ? " → " : ", ")}</td>
-                  </tr>
-                )}
-              </For>
-            </tbody>
-          </table>
+          <SelectableTable
+            label={what() === "hooks" ? "Hooks" : "Events"}
+            columns={[
+              { title: what() === "hooks" ? "Hook" : "Event" },
+              { title: what() === "hooks" ? "Handlers" : "Observers", class: "devtools-hooks-count dt-num" },
+              { title: what() === "hooks" ? "Runs" : "Observed by" },
+            ]}
+            rows={rows()}
+            key={(row) => row.name}
+            selected={current()?.name}
+            onSelect={setSelected}
+            empty={what() === "hooks" ? "No plugin intercepts a hook." : "No plugin observes an event."}
+          >
+            {(row) => (
+              <>
+                <td class="dt-code">{row.name}</td>
+                <td class="dt-num">{row.plugins.length}</td>
+                <td class="dt-muted">{row.plugins.join(what() === "hooks" ? " → " : ", ")}</td>
+              </>
+            )}
+          </SelectableTable>
         </div>
         <Show when={current()} keyed>
           {(row) => (
-            <aside class="dt-details dt-side" aria-label="Hook details">
-              <div class="dt-details-title">
-                <strong class="dt-code">{row.name}</strong>
-              </div>
-              <div class="dt-side-body">
-                <Section
-                  title={row.orders === undefined ? "Observers" : "Chain"}
-                  aside={row.orders === undefined ? "each hears every event" : "by phase, then lowest order first"}
-                >
-                  <table class="dt-table">
-                    <tbody>
-                      <For each={row.plugins}>
-                        {(id, index) => (
-                          <tr data-row>
-                            <td class="dt-num dt-muted devtools-chain-place">{index() + 1}</td>
-                            <td>
-                              <PluginName deps={deps} kind={kind()} id={id} />
-                            </td>
-                            <Show when={row.orders}>{(orders) => <td class="dt-muted">{orders()[index()]}</td>}</Show>
-                          </tr>
-                        )}
-                      </For>
-                    </tbody>
-                  </table>
-                </Section>
-              </div>
-            </aside>
+            <Details label="Hook details" title={<strong class="dt-code">{row.name}</strong>}>
+              <Section
+                title={row.orders === undefined ? "Observers" : "Chain"}
+                aside={row.orders === undefined ? "each hears every event" : "by phase, then lowest order first"}
+              >
+                <table class="dt-table">
+                  <tbody>
+                    <For each={row.plugins}>
+                      {(id, index) => (
+                        <tr data-row>
+                          <td class="dt-num dt-muted devtools-chain-place">{index() + 1}</td>
+                          <td>
+                            <PluginName deps={deps} kind={kind()} id={id} />
+                          </td>
+                          <Show when={row.orders}>{(orders) => <td class="dt-muted">{orders()[index()]}</td>}</Show>
+                        </tr>
+                      )}
+                    </For>
+                  </tbody>
+                </table>
+              </Section>
+            </Details>
           )}
         </Show>
       </div>
@@ -626,93 +552,62 @@ export function RegistriesPanel(props: { deps: Deps }) {
   return (
     <div class="dt-scope">
       <div class="dt-toolbar" role="toolbar" aria-label="Registries toolbar">
-        <label class="dt-filter">
-          <input
-            placeholder="Filter registries, plugins"
-            aria-label="Filter registries"
-            value={filter()}
-            onInput={(event) => setFilter(event.currentTarget.value)}
-            onKeyDown={clearsOnEscape(filter, () => setFilter(""))}
-          />
-        </label>
+        <FilterField label="Filter registries" placeholder="Filter registries, plugins" value={filter()} onInput={setFilter} />
         <span class="dt-sep" />
-        <KindChips kind={kind} setKind={setKind} />
+        <Chips options={KINDS} value={kind()} onChange={setKind} />
       </div>
       <div class="dt-split">
         <div class="dt-main" tabindex="-1">
-          <table class="dt-table" aria-label="Registries" role="grid" tabindex="0" onKeyDown={rowKeys(setSelected)}>
-            <thead>
-              <tr>
-                <th>{kind() === "web" ? "Slot" : "Registry"}</th>
-                <th class="devtools-registries-items dt-num">Items</th>
-                <th>Plugins</th>
-              </tr>
-            </thead>
-            <tbody>
-              <For
-                each={rows()}
-                fallback={
-                  <tr>
-                    <td colSpan={3} class="dt-muted">
-                      None matches
-                    </td>
-                  </tr>
-                }
-              >
-                {(row) => (
-                  <tr
-                    data-row
-                    data-key={row.name}
-                    data-selected={current()?.name === row.name}
-                    aria-selected={current()?.name === row.name}
-                    tabindex="-1"
-                    onClick={() => setSelected(row.name)}
-                  >
-                    <td class="dt-code">{row.name}</td>
-                    <td class="dt-num">{row.items}</td>
-                    <td class="dt-muted">{row.plugins.join(", ")}</td>
-                  </tr>
-                )}
-              </For>
-            </tbody>
-          </table>
+          <SelectableTable
+            label="Registries"
+            columns={[{ title: kind() === "web" ? "Slot" : "Registry" }, { title: "Items", class: "devtools-registries-items dt-num" }, { title: "Plugins" }]}
+            rows={rows()}
+            key={(row) => row.name}
+            selected={current()?.name}
+            onSelect={setSelected}
+            empty="None matches"
+          >
+            {(row) => (
+              <>
+                <td class="dt-code">{row.name}</td>
+                <td class="dt-num">{row.items}</td>
+                <td class="dt-muted">{row.plugins.join(", ")}</td>
+              </>
+            )}
+          </SelectableTable>
         </div>
         <Show when={current()} keyed>
           {(row) => (
-            <aside class="dt-details dt-side" aria-label="Registry details">
-              <Show
-                when={kind() === "web" ? web().find((view) => view.name === row.name) : undefined}
-                keyed
-                fallback={
-                  <>
-                    <div class="dt-details-title">
-                      <strong class="dt-code">{row.name}</strong>
-                    </div>
-                    <div class="dt-side-body">
-                      <Section title="Contributors">
-                        <table class="dt-table" aria-label="Registry items">
-                          <tbody>
-                            <For each={host().find((registry) => registry.name === row.name)?.contributors ?? []}>
-                              {(contributor) => (
-                                <tr data-row>
-                                  <td>
-                                    <PluginName deps={deps} kind="host" id={contributor.plugin} />
-                                  </td>
-                                  <td class="dt-num">{contributor.items}</td>
-                                  <td class="dt-code dt-muted dt-wrap">{contributor.keys.join(", ")}</td>
-                                </tr>
-                              )}
-                            </For>
-                          </tbody>
-                        </table>
-                      </Section>
-                    </div>
-                  </>
-                }
-              >
-                {(view) => (
-                  <>
-                    <div class="dt-details-title">
+            <Show
+              when={kind() === "web" ? web().find((view) => view.name === row.name) : undefined}
+              keyed
+              fallback={
+                <Details label="Registry details" title={<strong class="dt-code">{row.name}</strong>}>
+                  <Section title="Contributors">
+                    <table class="dt-table" aria-label="Registry items">
+                      <tbody>
+                        <For each={host().find((registry) => registry.name === row.name)?.contributors ?? []}>
+                          {(contributor) => (
+                            <tr data-row>
+                              <td>
+                                <PluginName deps={deps} kind="host" id={contributor.plugin} />
+                              </td>
+                              <td class="dt-num">{contributor.items}</td>
+                              <td class="dt-code dt-muted dt-wrap">{contributor.keys.join(", ")}</td>
+                            </tr>
+                          )}
+                        </For>
+                      </tbody>
+                    </table>
+                  </Section>
+                </Details>
+              }
+            >
+              {(view) => (
+                <Details
+                  label="Registry details"
+                  title={
+                    <>
                       <strong class="dt-code">{view.name}</strong>
                       <Show when={view.contract}>
                         {(contract) => (
@@ -721,52 +616,51 @@ export function RegistriesPanel(props: { deps: Deps }) {
                           </span>
                         )}
                       </Show>
-                    </div>
-                    <div class="dt-side-body">
-                      <dl class="dt-facts">
-                        <dt>Shows</dt>
-                        <dd>{view.shows === "first" ? "the first item; the rest are replaced" : "every item, in order"}</dd>
-                        <Show when={view.phases}>
-                          {(phases) => (
-                            <>
-                              <dt>Phases</dt>
-                              <dd>
-                                {phases().join(", ")}; an item naming none goes in {view.defaultPhase}
-                              </dd>
-                            </>
-                          )}
-                        </Show>
-                      </dl>
-                      <Section title="Items" aside={view.phases === undefined ? "by order, then plugin" : "by phase, then order, then plugin"}>
-                        <Show when={view.items.length > 0} fallback={<p class="dt-muted">Empty: nothing adds to it now.</p>}>
-                          <table class="dt-table" aria-label="Registry items">
-                            <tbody>
-                              <For each={view.items}>
-                                {(item, index) => (
-                                  <tr data-row>
-                                    <td class="dt-num dt-muted devtools-registry-place">{placeOf(item)}</td>
-                                    <td class="dt-code">{item.id}</td>
-                                    <td>
-                                      <PluginName deps={deps} kind="web" id={item.plugin} />
-                                    </td>
-                                    <Show when={view.shows === "first"}>
-                                      <td class="dt-muted">{index() === 0 ? "shown" : "replaced"}</td>
-                                    </Show>
-                                  </tr>
-                                )}
-                              </For>
-                            </tbody>
-                          </table>
-                        </Show>
-                      </Section>
-                      <Section title="Add here">
-                        <pre class="dt-pre">{snippet(view)}</pre>
-                      </Section>
-                    </div>
-                  </>
-                )}
-              </Show>
-            </aside>
+                    </>
+                  }
+                >
+                  <dl class="dt-facts">
+                    <dt>Shows</dt>
+                    <dd>{view.shows === "first" ? "the first item; the rest are replaced" : "every item, in order"}</dd>
+                    <Show when={view.phases}>
+                      {(phases) => (
+                        <>
+                          <dt>Phases</dt>
+                          <dd>
+                            {phases().join(", ")}; an item naming none goes in {view.defaultPhase}
+                          </dd>
+                        </>
+                      )}
+                    </Show>
+                  </dl>
+                  <Section title="Items" aside={view.phases === undefined ? "by order, then plugin" : "by phase, then order, then plugin"}>
+                    <Show when={view.items.length > 0} fallback={<p class="dt-muted">Empty: nothing adds to it now.</p>}>
+                      <table class="dt-table" aria-label="Registry items">
+                        <tbody>
+                          <For each={view.items}>
+                            {(item, index) => (
+                              <tr data-row>
+                                <td class="dt-num dt-muted devtools-registry-place">{placeOf(item)}</td>
+                                <td class="dt-code">{item.id}</td>
+                                <td>
+                                  <PluginName deps={deps} kind="web" id={item.plugin} />
+                                </td>
+                                <Show when={view.shows === "first"}>
+                                  <td class="dt-muted">{index() === 0 ? "shown" : "replaced"}</td>
+                                </Show>
+                              </tr>
+                            )}
+                          </For>
+                        </tbody>
+                      </table>
+                    </Show>
+                  </Section>
+                  <Section title="Add here">
+                    <pre class="dt-pre">{snippet(view)}</pre>
+                  </Section>
+                </Details>
+              )}
+            </Show>
           )}
         </Show>
       </div>
@@ -795,7 +689,7 @@ export function InspectorsPanel(props: { deps: Deps; inspectors: Accessor<readon
       try {
         return { value: await deps.client.inspect(id) };
       } catch (error) {
-        return { error: error instanceof Error ? error.message : String(error) };
+        return { error: errorMessage(error) };
       }
     },
   );
@@ -812,42 +706,24 @@ export function InspectorsPanel(props: { deps: Deps; inspectors: Accessor<readon
       </div>
       <div class="dt-split">
         <div class="dt-main devtools-inspectors-list" tabindex="-1">
-          <table class="dt-table" aria-label="Inspectors" role="grid" tabindex="0" onKeyDown={rowKeys(setSelected)}>
-            <thead>
-              <tr>
-                <th>Inspector</th>
-                <th>Plugin</th>
-              </tr>
-            </thead>
-            <tbody>
-              <For
-                each={props.inspectors()}
-                fallback={
-                  <tr>
-                    <td colSpan={2} class="dt-muted">
-                      No running host plugin adds one
-                    </td>
-                  </tr>
-                }
-              >
-                {(inspector) => (
-                  <tr
-                    data-row
-                    data-key={inspector.id}
-                    data-selected={current()?.id === inspector.id}
-                    aria-selected={current()?.id === inspector.id}
-                    tabindex="-1"
-                    onClick={() => setSelected(inspector.id)}
-                  >
-                    <td>{inspector.title}</td>
-                    <td>
-                      <PluginName deps={deps} kind="host" id={inspector.source} />
-                    </td>
-                  </tr>
-                )}
-              </For>
-            </tbody>
-          </table>
+          <SelectableTable
+            label="Inspectors"
+            columns={[{ title: "Inspector" }, { title: "Plugin" }]}
+            rows={props.inspectors()}
+            key={(inspector) => inspector.id}
+            selected={current()?.id}
+            onSelect={setSelected}
+            empty="No running host plugin adds one"
+          >
+            {(inspector) => (
+              <>
+                <td>{inspector.title}</td>
+                <td>
+                  <PluginName deps={deps} kind="host" id={inspector.source} />
+                </td>
+              </>
+            )}
+          </SelectableTable>
         </div>
         <Show when={current()} keyed>
           {(inspector) => (

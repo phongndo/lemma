@@ -3,7 +3,7 @@ import { access, readFile } from "node:fs/promises";
 import { Schema, SchemaTransformation } from "effect";
 import type { Tool } from "@lemma/tools";
 import { unifiedPatch } from "@lemma/tools/diff";
-import { fsMessage, replaceFile, resolveToCwd, text, throwIfAborted, withFileLock } from "@lemma/tools/files";
+import { fsMessage, replaceFile, resolveToCwd, text, throwIfAborted, withFileQueue } from "@lemma/tools/files";
 import { applyEditsToNormalizedContent, detectLineEnding, normalizeToLF, restoreLineEndings, splitBom } from "./edit-diff.ts";
 
 const Replacement = Schema.Struct({
@@ -83,7 +83,7 @@ export const editTool: Tool<EditInput> = {
   execute: async ({ path, edits }, { cwd, signal }) => {
     if (edits.length === 0) throw new Error("Edit tool input is invalid. edits must contain at least one replacement.");
     const absolute = resolveToCwd(path, cwd);
-    return withFileLock(absolute, async () => {
+    return withFileQueue(absolute, async () => {
       throwIfAborted(signal);
       let raw: string;
       try {

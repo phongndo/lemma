@@ -2,7 +2,7 @@ import { Context, Data, Schema } from "effect";
 import type { Effect, Stream } from "effect";
 import { Registry } from "@lemma/core";
 import type { Awaitable } from "@lemma/core";
-import { defineChannel, HostError, optionalPayload, serveChannel } from "@lemma/contracts";
+import { defineChannel, errorMessage, HostError, optionalPayload, serveChannel } from "@lemma/contracts";
 import type { Channel } from "@lemma/contracts";
 import { CliFile, CliInput, CommandSpec, specProblem } from "./spec.ts";
 import type { ArgSpec, FlagSpec } from "./spec.ts";
@@ -373,13 +373,10 @@ export const asHostError = (error: unknown, subject?: string): HostError => {
     readonly path?: unknown;
   };
   const code = typeof tagged?.reason === "string" ? tagged.reason : typeof tagged?._tag === "string" ? tagged._tag : "Failed";
-  const message = typeof tagged?.message === "string" && tagged.message !== "" ? tagged.message : error instanceof Error ? error.message : String(error);
+  const message = typeof tagged?.message === "string" && tagged.message !== "" ? tagged.message : errorMessage(error);
   const named = typeof tagged?.sessionId === "string" ? tagged.sessionId : typeof tagged?.path === "string" ? tagged.path : subject;
   return new HostError({ code, message, ...(named === undefined ? {} : { subject: named }) });
 };
 
 /** A value as JSON carries it, so what a command returns crosses the wire as the client prints it: no `undefined` fields, dates as strings. */
 export const plainJson = (value: unknown): unknown => (value === undefined ? undefined : JSON.parse(JSON.stringify(value)));
-
-/** Why a check or a command failed, in words. */
-export const describeFailure = (cause: unknown): string => (cause instanceof Error ? cause.message : typeof cause === "string" ? cause : String(cause));

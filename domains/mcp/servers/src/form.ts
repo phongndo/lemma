@@ -1,6 +1,7 @@
 import type { Exposure, McpServerConfig } from "@lemma/mcp";
+import { Predicate } from "effect";
+import { errorMessage } from "@lemma/contracts";
 import { SERVER_NAME } from "@lemma/mcp";
-import { isObject } from "./values.ts";
 
 /*
  * The web half's model of adding and editing a server: a command line as one string, name and value rows, and entries
@@ -52,6 +53,7 @@ const recordOf = (rows: Rows): Record<string, string> | undefined => {
 /** Whether `text` can be an icon: an `https:` address, or an image as a `data:` URL. */
 export const isImageAddress = (text: string): boolean => /^https:\/\/\S+$/.test(text) || /^data:image\/[a-z0-9.+-]+(;[^,]*)?,.+$/i.test(text);
 
+/** pi's names for exposures it has and this plugin runs as code mode: `deferred` loads by search, which code mode's `searchTools` does. */
 const EXPOSURE_ALIASES: Readonly<Record<string, Exposure>> = { deferred: "codemode", "codemode-deferred": "codemode" };
 const exposureAlias = (value: unknown): unknown => (typeof value === "string" ? (EXPOSURE_ALIASES[value] ?? value) : value);
 
@@ -64,7 +66,7 @@ export const normalize = (entry: Record<string, unknown>): Record<string, unknow
   const out: Record<string, unknown> = { ...rest };
   if (disabled === true && out["enabled"] === undefined) out["enabled"] = false;
   if (out["exposure"] !== undefined) out["exposure"] = exposureAlias(out["exposure"]);
-  if (isObject(out["toolExposure"]))
+  if (Predicate.isObject(out["toolExposure"]))
     out["toolExposure"] = Object.fromEntries(Object.entries(out["toolExposure"]).map(([tool, value]) => [tool, exposureAlias(value)]));
   return out;
 };
@@ -136,7 +138,7 @@ export function entryOf(draft: ServerDraft, base: McpServerConfig = {}): { reado
 }
 
 const isEntry = (value: unknown): value is Record<string, unknown> =>
-  isObject(value) && (typeof value["command"] === "string" || typeof value["url"] === "string");
+  Predicate.isObject(value) && (typeof value["command"] === "string" || typeof value["url"] === "string");
 
 /**
  * The servers in JSON pasted from another client or a README: a whole file (`{ "mcpServers": { … } }`, or VS Code's
@@ -153,14 +155,14 @@ export function parsePasted(
     const trimmed = text.trim();
     json = JSON.parse(trimmed.startsWith('"') ? `{${trimmed.replace(/,\s*$/, "")}}` : trimmed);
   } catch (cause) {
-    return { error: `Not JSON: ${(cause as Error).message}` };
+    return { error: `Not JSON: ${errorMessage(cause)}` };
   }
-  if (!isObject(json)) return { error: "Paste a JSON object: a config with mcpServers, servers by name, or one server" };
+  if (!Predicate.isObject(json)) return { error: "Paste a JSON object: a config with mcpServers, servers by name, or one server" };
   if (isEntry(json)) {
     if (!SERVER_NAME.test(name)) return { error: "This is one server: give it a name" };
     return { servers: [{ name, entry: normalize(json) as McpServerConfig }] };
   }
-  const byName = isObject(json["mcpServers"]) ? json["mcpServers"] : isObject(json["servers"]) ? json["servers"] : json;
+  const byName = Predicate.isObject(json["mcpServers"]) ? json["mcpServers"] : Predicate.isObject(json["servers"]) ? json["servers"] : json;
   const servers = Object.entries(byName).filter(([, entry]) => isEntry(entry));
   if (servers.length === 0) return { error: "No server found: each needs a command or a url" };
   // In this plugin's terms (`disabled: true` is `enabled: false`), as a client sends them, which drops what it does not know.

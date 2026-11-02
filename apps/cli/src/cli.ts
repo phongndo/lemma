@@ -3,7 +3,7 @@ import type { Scope } from "effect";
 import { CliChannels, closest, columns, GLOBAL_FLAGS, inputJsonSchema, parseInput, renderGlobalFlags, renderHelp, usageLine } from "@lemma/cli";
 import type { CliCommandInfo, CommandSpec } from "@lemma/cli";
 import { callChannel } from "@lemma/client";
-import { shellWord } from "@lemma/contracts";
+import { errorMessage, shellWord } from "@lemma/contracts";
 import { readEnvironments } from "@lemma/contracts/discovery";
 import { isDefaultProfile, profileNameProblem, profileOf } from "@lemma/contracts/profiles";
 import { listProfiles } from "@lemma/profiles/local";
@@ -380,7 +380,7 @@ export async function run(argv: readonly string[], given: Io): Promise<number> {
       Effect.fail(
         new CliError({
           code: "Unexpected",
-          message: `The host's reply could not be read: ${defect instanceof Error ? defect.message : String(defect)}`,
+          message: `The host's reply could not be read: ${errorMessage(defect)}`,
           exit: ExitCode.failed,
         }),
       ),

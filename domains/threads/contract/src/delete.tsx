@@ -2,11 +2,12 @@ import { Show } from "solid-js";
 import type { SessionInfo } from "@lemma/sessions";
 import { Dialog } from "@lemma/look";
 import { usePlugin } from "@lemma/web";
+import { plural } from "@lemma/web/format";
 import { sessionTitle } from "./list.ts";
 import type { ThreadsService } from "./threads.ts";
 
 /** How many threads, as words: `1 thread`, `3 threads`. */
-export const threadCount = (count: number): string => `${count} ${count === 1 ? "thread" : "threads"}`;
+export const threadCount = (count: number): string => plural(count, "thread");
 
 /**
  * Asks before deleting threads for good, saying what goes and what stays: everything said and done in them goes, a

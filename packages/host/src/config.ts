@@ -1,12 +1,12 @@
 import { readFile, readlink, realpath, stat, unlink } from "node:fs/promises";
 import { dirname, isAbsolute, join, resolve } from "node:path";
-import { Effect, Predicate, Result, Schema, SchemaIssue } from "effect";
+import { Effect, Predicate, Result, Schema } from "effect";
 import { applyEdits, modify, parse as parseJsonc, printParseErrorCode } from "jsonc-parser";
 import type { ParseError } from "jsonc-parser";
-import { ConfigFile } from "@lemma/contracts";
+import { ConfigFile, errorMessage } from "@lemma/contracts";
 import { isInside, kindOf, writeFileAtomic } from "@lemma/contracts/fs";
 import type { ConfigScope, PluginChange, PluginRow } from "@lemma/contracts";
-import { Diagnostic } from "@lemma/core";
+import { Diagnostic, firstIssue } from "@lemma/core";
 import type { PathsService } from "./paths.ts";
 
 interface LoadedComposition {
@@ -79,7 +79,7 @@ export function loadComposition(paths: PathsService): Effect.Effect<LoadedCompos
         }),
       );
     }
-    // The web halves' old directory: its files are no longer loaded.
+    // The web halves' old directory (Lemma 0.1): its files are no longer loaded.
     if (yield* exists(join(dirname(paths.userConfig), "ui"))) {
       diagnostics.push(
         new Diagnostic({
@@ -191,7 +191,8 @@ export const readConfigText = (path: string): Effect.Effect<string | undefined, 
       () => Effect.succeed(undefined),
     ),
     Effect.mapError(
-      (error) => new Diagnostic({ severity: "error", message: `${path}: cannot read config: ${error.message}`, suggestion: "Fix the file's permissions" }),
+      (error) =>
+        new Diagnostic({ severity: "error", message: `${path}: cannot read config: ${error.message}`, suggestion: "Fix the file's permissions or remove it" }),
     ),
   );
 
@@ -245,7 +246,7 @@ export function updateConfig(path: string, rows: Readonly<Record<string, PluginC
       catch: (cause) =>
         new Diagnostic({
           severity: "error",
-          message: `${path}: cannot write config: ${cause instanceof Error ? cause.message : String(cause)}`,
+          message: `${path}: cannot write config: ${errorMessage(cause)}`,
           suggestion: "Fix the directory's permissions",
         }),
     });
@@ -258,7 +259,7 @@ export function updateConfig(path: string, rows: Readonly<Record<string, PluginC
         catch: (cause) =>
           new Diagnostic({
             severity: "error",
-            message: `${path}: cannot put the config back: ${cause instanceof Error ? cause.message : String(cause)}; it still holds the change`,
+            message: `${path}: cannot put the config back: ${errorMessage(cause)}; it still holds the change`,
             suggestion: "Undo the change in the file by hand",
           }),
       }),
@@ -289,41 +290,20 @@ const readConfig = (path: string): Effect.Effect<ReadConfig> =>
       trustedProjects: [],
       diagnostics,
     });
-    const text = yield* Effect.tryPromise({ try: () => readFile(path, "utf8"), catch: (cause) => cause as NodeJS.ErrnoException }).pipe(Effect.result);
-    if (Result.isFailure(text)) {
-      if (text.failure.code === "ENOENT") return empty(false);
-      return empty(true, [
-        new Diagnostic({
-          severity: "error",
-          message: `${path}: cannot read config: ${text.failure.message}`,
-          suggestion: "Fix the file's permissions or remove it",
-        }),
-      ]);
-    }
+    const text = yield* Effect.result(readConfigText(path));
+    if (Result.isFailure(text)) return empty(true, [text.failure]);
+    if (text.success === undefined) return empty(false);
     const parsed = parseConfig(path, text.success);
     if (Result.isFailure(parsed)) return empty(true, [parsed.failure]);
-    // The `ui` section is gone, not ignored without a word: a plugin's one row in `plugins` decides both its halves.
-    const raw: unknown = parseJsonc(text.success, [], { allowTrailingComma: true, disallowComments: false });
-    const leftover = Predicate.isObject(raw) && "ui" in raw;
-    return {
-      path,
-      found: true,
-      plugins: parsed.success.plugins ?? {},
-      trustedProjects: parsed.success.trustedProjects ?? [],
-      diagnostics: leftover
-        ? [
-            new Diagnostic({
-              severity: "warning",
-              message: `${path}: its "ui" section is no longer read`,
-              suggestion: `Move its rows into "plugins": one row decides both halves of a plugin`,
-            }),
-          ]
-        : [],
-    };
+    const { config, warnings } = parsed.success;
+    return { path, found: true, plugins: config.plugins ?? {}, trustedProjects: config.trustedProjects ?? [], diagnostics: warnings };
   });
 
-/** JSONC with comments and trailing commas; anything else the parser recovers from is still an error here. */
-function parseConfig(path: string, text: string): Result.Result<ConfigFile, Diagnostic> {
+/**
+ * JSONC with comments and trailing commas; anything else the parser recovers from is still an error here. A `ui`
+ * section is a warning: Lemma 0.1 read web halves' rows there, and one row in `plugins` now decides both halves.
+ */
+function parseConfig(path: string, text: string): Result.Result<{ readonly config: ConfigFile; readonly warnings: readonly Diagnostic[] }, Diagnostic> {
   const errors: ParseError[] = [];
   const value: unknown = parseJsonc(text, errors, { allowTrailingComma: true, disallowComments: false });
   if (errors.length) {
@@ -339,8 +319,8 @@ function parseConfig(path: string, text: string): Result.Result<ConfigFile, Diag
   }
   const decoded = Schema.decodeUnknownResult(ConfigFile)(value);
   if (Result.isFailure(decoded)) {
-    const issue = SchemaIssue.makeFormatterStandardSchemaV1()(decoded.failure.issue).issues[0];
-    const at = issue?.path?.filter((segment): segment is string | number => typeof segment === "string" || typeof segment === "number") ?? [];
+    const issue = firstIssue(decoded.failure.issue);
+    const at = issue?.path ?? [];
     return Result.fail(
       new Diagnostic({
         severity: "error",
@@ -351,7 +331,17 @@ function parseConfig(path: string, text: string): Result.Result<ConfigFile, Diag
       }),
     );
   }
-  return Result.succeed(decoded.success);
+  const warnings =
+    Predicate.isObject(value) && "ui" in value
+      ? [
+          new Diagnostic({
+            severity: "warning",
+            message: `${path}: its "ui" section is no longer read`,
+            suggestion: `Move its rows into "plugins": one row decides both halves of a plugin`,
+          }),
+        ]
+      : [];
+  return Result.succeed({ config: decoded.success, warnings });
 }
 
 function position(text: string, offset: number): { line: number; column: number } {

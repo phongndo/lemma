@@ -1,4 +1,4 @@
-import { For, Index, Match, Show, Switch, createEffect, createMemo, createSignal, on, onCleanup, onMount, untrack } from "solid-js";
+import { For, Index, Match, Show, Switch, createMemo, createSignal } from "solid-js";
 import type { Component, JSX } from "solid-js";
 import { formatDuration, formatTokens } from "@lemma/client/format";
 import { parseModelRef } from "@lemma/llm";
@@ -15,8 +15,6 @@ import {
   parseDraftArgs,
   createProjector,
   pendingToolCalls,
-  promptMarks,
-  promptText,
   markKey,
   queuePlaces,
   ChatThinkingPart,
@@ -57,33 +55,24 @@ import type {
   QueuePlaces,
   PromptActionProps,
   PromptInfo,
-  PromptMark,
   ThreadsService,
 } from "@lemma/threads";
 import { errorView } from "./error.ts";
 import { thoughtHeadline, thoughtTitles } from "./thought.ts";
 import { displayedCalls, displayEntries, workEntries } from "./work.ts";
-import type { DisplayEntry, ToolBlock, WorkEntry, WorkRow } from "./work.ts";
-import { JUMP_MARGIN, jumpOver, locate as locatePrompts } from "./prompt-rail.ts";
+import type { DisplayEntry, WorkEntry } from "./work.ts";
+import { pendingMark } from "./prompt-rail.ts";
 import { createNow } from "@lemma/web/now";
-import { createStickToBottom } from "@lemma/web/scroll";
 import { Client, Contained, Each, Notify, Router, Slots, WebPlugins, defineWebPlugin, usePlugin } from "@lemma/web";
 import type { SlotsService, Part } from "@lemma/web";
-import { AlertIcon, ChatIcon, ChevronDownIcon, ChevronIcon, BrainIcon, Icon, Markdown, RedoIcon, SearchIcon, Spinner, CopyButton, XIcon } from "@lemma/look";
+import { AlertIcon, ChatIcon, ChevronIcon, BrainIcon, Icon, Markdown, RedoIcon, SearchIcon, CopyButton, XIcon } from "@lemma/look";
 import { Actions } from "@lemma/actions";
 import styles from "./chat.css?inline";
 import { ChatConfig } from "./config.ts";
 import type { Chat } from "./config.ts";
-import { PromptRail } from "./rail.tsx";
+import { ChatView, promptAnchor } from "./chat-view.tsx";
 import { addSettings } from "./settings.tsx";
-import { Images, ToolCard, ToolDisplay, ToolDisplays, toolView } from "./tools.tsx";
-import { FindBar } from "./find-bar.tsx";
-import type { ToolState } from "./tools.tsx";
-
-/** The chat's scroll position, kept with each history entry. */
-const SCROLL_STATE = "chat.scroll";
-/** How often, at most, the prompt rail measures where the prompts are while the layout changes (ms): each frame while a turn streams. */
-const MEASURE_MS = 200;
+import { Images, ToolCard, ToolDisplay, ToolDisplays, toolStateOf, toolView } from "./tools.tsx";
 
 /** A prompt's text as written: its text parts, a blank line between them. */
 const textOf = (content: ChatUserProps["content"]): string =>
@@ -143,9 +132,6 @@ function CopyPrompt(props: PromptActionProps) {
     </Show>
   );
 }
-
-/** The fragment that names a prompt in its thread's address: what a prompt's link ends with. */
-const promptAnchor = (eventId: string) => `prompt-${eventId}`;
 
 /** The transcript's own `PromptActions` item: copies the address of the thread opened at the prompt (`promptAnchor`). */
 const copyLink = (threads: ThreadsService) =>
@@ -217,11 +203,7 @@ function BlockView(props: { chat: Chat; block: Block; scope: string; turnEnded: 
       </Match>
       <Match when={props.block.kind === "tool" && props.block}>
         {(b) => {
-          const toolState = (): ToolState => {
-            const result = b().result;
-            if (result !== undefined) return result.stopped ? "interrupted" : result.isError ? "error" : "ok";
-            return props.turnEnded || !props.chat.threads.busy() ? "interrupted" : "running";
-          };
+          const toolState = () => toolStateOf(b().result, !props.turnEnded && props.chat.threads.busy());
           return (
             <>
               <ToolCard chat={props.chat} id={b().call.id} name={b().call.name} args={b().call.arguments} result={b().result} state={toolState()} />
@@ -325,7 +307,7 @@ function FailedAttempt(props: { chat: Chat; item: AttemptItem }) {
           <AlertIcon />
         </span>
         <span class="attempt-label">Attempt failed</span>
-        <span class="attempt-error">{props.item.message.errorMessage ?? ""}</span>
+        <span class="attempt-error tw:truncate">{props.item.message.errorMessage ?? ""}</span>
         <span class="attempt-time">{formatDuration(props.item.timing.endedAt - props.item.timing.startedAt)}</span>
       </button>
       <Show when={open() && hasContent()}>
@@ -333,6 +315,17 @@ function FailedAttempt(props: { chat: Chat; item: AttemptItem }) {
           <Blocks chat={props.chat} blocks={props.item.blocks} scope={props.item.id} turnEnded={true} displays={false} />
         </div>
       </Show>
+    </div>
+  );
+}
+
+/** Context a plugin added to the conversation, as a line: its plugin and its first line, the whole text in the tooltip. */
+function ContextLine(props: { source: string; text: string }) {
+  return (
+    <div class="divider" data-tip={props.text}>
+      <span>
+        Context from {props.source}: {props.text.split("\n")[0]}
+      </span>
     </div>
   );
 }
@@ -385,17 +378,7 @@ function ItemView(props: {
       </Match>
       <Match when={props.item.kind === "context" && props.item}>
         {(item) => (
-          <Show
-            when={props.chat.contextView(item().source)}
-            keyed
-            fallback={
-              <div class="divider" data-tip={item().text}>
-                <span>
-                  Context from {item().source}: {item().text.split("\n")[0]}
-                </span>
-              </div>
-            }
-          >
+          <Show when={props.chat.contextView(item().source)} keyed fallback={<ContextLine source={item().source} text={item().text} />}>
             {(view) => (
               <Contained
                 slot={ContextViews}
@@ -477,17 +460,66 @@ function TurnFooter(props: ChatTurnFooterProps) {
   );
 }
 
-/** A row of folded work: a block on its own, or an item whole. */
-function WorkRowView(props: { chat: Chat; row: WorkRow; turnEnded: boolean }) {
+/** An entry of folded work: a block on its own, an item whole, or calls made one after another under their line. */
+function WorkEntryView(props: { chat: Chat; entry: WorkEntry; turnEnded: boolean }) {
   return (
-    <Show
-      when={props.row.kind === "block" && props.row}
-      fallback={
-        <ItemView chat={props.chat} item={(props.row as Extract<WorkRow, { kind: "item" }>).item} turnEnded={props.turnEnded} note={false} displays={false} />
-      }
-    >
-      {(row) => <BlockView chat={props.chat} block={row().block} scope={row().scope} turnEnded={props.turnEnded} displays={false} />}
-    </Show>
+    <Switch>
+      <Match when={props.entry.kind === "block" && props.entry}>
+        {(row) => <BlockView chat={props.chat} block={row().block} scope={row().scope} turnEnded={props.turnEnded} displays={false} />}
+      </Match>
+      <Match when={props.entry.kind === "item" && props.entry}>
+        {(row) => <ItemView chat={props.chat} item={row().item} turnEnded={props.turnEnded} note={false} displays={false} />}
+      </Match>
+      <Match when={props.entry.kind === "group" && props.entry}>
+        {(group) => (
+          <ChatWorkGroup
+            summary={group().summary}
+            tools={group().tools}
+            failed={group().failed}
+            at={group().at}
+            open={props.chat.isOpen(group().key, props.chat.config.expandTools)}
+            onToggle={() => props.chat.toggle(group().key, props.chat.config.expandTools)}
+          >
+            <Keyed each={group().rows}>{(row) => <WorkEntryView chat={props.chat} entry={row()} turnEnded={props.turnEnded} />}</Keyed>
+          </ChatWorkGroup>
+        )}
+      </Match>
+    </Switch>
+  );
+}
+
+/** What a fold's calls show the reader (`ToolViews`' `display`): one call's, or a run of one tool's its view draws together. */
+function DisplayEntryView(props: { chat: Chat; entry: DisplayEntry; running: boolean }) {
+  return (
+    <Switch>
+      <Match when={props.entry.kind === "one" && props.entry.block}>
+        {(block) => (
+          <ToolDisplay
+            chat={props.chat}
+            id={block().call.id}
+            name={block().call.name}
+            args={block().call.arguments}
+            result={block().result}
+            state={toolStateOf(block().result, props.running)}
+          />
+        )}
+      </Match>
+      <Match when={props.entry.kind === "many" && props.entry}>
+        {(many) => (
+          <ToolDisplays
+            chat={props.chat}
+            name={many().name}
+            calls={many().blocks.map((block) => ({
+              id: block.call.id,
+              name: block.call.name,
+              args: block.call.arguments,
+              result: block.result,
+              state: toolStateOf(block.result, props.running),
+            }))}
+          />
+        )}
+      </Match>
+    </Switch>
   );
 }
 
@@ -520,8 +552,6 @@ function WorkFold(props: { chat: Chat; work: Extract<TurnEntry, { kind: "work" }
       (name) => props.chat.toolView(name)?.displays !== undefined,
     ),
   );
-  const stateOf = (block: ToolBlock): ToolState =>
-    block.result !== undefined ? (block.result.stopped ? "interrupted" : block.result.isError ? "error" : "ok") : props.running ? "running" : "interrupted";
   const duration = () => (live() ? Math.max(0, props.chat.now() - props.work.since) : props.work.duration);
   return (
     <>
@@ -534,60 +564,10 @@ function WorkFold(props: { chat: Chat; work: Extract<TurnEntry, { kind: "work" }
         open={props.chat.isOpen(props.work.key, props.running)}
         onToggle={() => props.chat.toggle(props.work.key, props.running)}
       >
-        <Keyed each={entries()}>
-          {(entry) => (
-            <Show
-              when={entry().kind === "group" && (entry() as Extract<WorkEntry, { kind: "group" }>)}
-              fallback={<WorkRowView chat={props.chat} row={entry() as WorkRow} turnEnded={!props.running} />}
-            >
-              {(group) => (
-                <ChatWorkGroup
-                  summary={group().summary}
-                  tools={group().tools}
-                  failed={group().failed}
-                  at={group().at}
-                  open={props.chat.isOpen(group().key, props.chat.config.expandTools)}
-                  onToggle={() => props.chat.toggle(group().key, props.chat.config.expandTools)}
-                >
-                  <Keyed each={group().rows}>{(row) => <WorkRowView chat={props.chat} row={row()} turnEnded={!props.running} />}</Keyed>
-                </ChatWorkGroup>
-              )}
-            </Show>
-          )}
-        </Keyed>
+        <Keyed each={entries()}>{(entry) => <WorkEntryView chat={props.chat} entry={entry()} turnEnded={!props.running} />}</Keyed>
         <Index each={live() ? props.drafts : []}>{(draft) => <Draft chat={props.chat} draft={draft()} />}</Index>
       </ChatWork>
-      <Keyed each={displays()}>
-        {(entry) => (
-          <Show
-            when={entry().kind === "many" && (entry() as Extract<DisplayEntry, { kind: "many" }>)}
-            fallback={
-              <ToolDisplay
-                chat={props.chat}
-                id={(entry() as Extract<DisplayEntry, { kind: "one" }>).block.call.id}
-                name={(entry() as Extract<DisplayEntry, { kind: "one" }>).block.call.name}
-                args={(entry() as Extract<DisplayEntry, { kind: "one" }>).block.call.arguments}
-                result={(entry() as Extract<DisplayEntry, { kind: "one" }>).block.result}
-                state={stateOf((entry() as Extract<DisplayEntry, { kind: "one" }>).block)}
-              />
-            }
-          >
-            {(many) => (
-              <ToolDisplays
-                chat={props.chat}
-                name={many().name}
-                calls={many().blocks.map((block) => ({
-                  id: block.call.id,
-                  name: block.call.name,
-                  args: block.call.arguments,
-                  result: block.result,
-                  state: stateOf(block),
-                }))}
-              />
-            )}
-          </Show>
-        )}
-      </Keyed>
+      <Keyed each={displays()}>{(entry) => <DisplayEntryView chat={props.chat} entry={entry()} running={props.running} />}</Keyed>
     </>
   );
 }
@@ -664,6 +644,27 @@ function WorkingView(props: ChatWorkingProps) {
   );
 }
 
+/** An entry of a folded turn: a run of work, or an item on its own. `mark`: see `ItemView`. */
+function FoldedEntry(props: {
+  chat: Chat;
+  entry: TurnEntry;
+  ended: boolean;
+  running: boolean;
+  drafts: readonly StepDraft[];
+  mark: (item: Item) => string | undefined;
+}) {
+  return (
+    <Switch>
+      <Match when={props.entry.kind === "work" && props.entry}>
+        {(work) => <WorkFold chat={props.chat} work={work()} drafts={props.drafts} running={props.running} />}
+      </Match>
+      <Match when={props.entry.kind === "item" && props.entry}>
+        {(entry) => <ItemView chat={props.chat} item={entry().item} turnEnded={props.ended} note={entry().note} mark={props.mark(entry().item)} />}
+      </Match>
+    </Switch>
+  );
+}
+
 /**
  * A turn; `running` when it is the one the session is running now, whose live run of work shows its streaming steps
  * (`drafts`). The last turn ends with the steers sent and not yet placed (`steers`), after the step under way, where
@@ -689,20 +690,9 @@ function Turn(props: { chat: Chat; turn: TurnView; running: boolean; drafts: rea
         fallback={<For each={props.turn.items}>{(item) => <ItemView chat={props.chat} item={item} turnEnded={ended()} mark={markOf(item)} />}</For>}
       >
         <Keyed each={keyed()}>
-          {(keyedEntry) => {
-            const entry = () => keyedEntry().entry;
-            return entry().kind === "work" ? (
-              <WorkFold chat={props.chat} work={entry() as Extract<TurnEntry, { kind: "work" }>} drafts={props.drafts} running={props.running} />
-            ) : (
-              <ItemView
-                chat={props.chat}
-                item={(entry() as Extract<TurnEntry, { kind: "item" }>).item}
-                turnEnded={ended()}
-                note={(entry() as Extract<TurnEntry, { kind: "item" }>).note}
-                mark={markOf((entry() as Extract<TurnEntry, { kind: "item" }>).item)}
-              />
-            );
-          }}
+          {(keyedEntry) => (
+            <FoldedEntry chat={props.chat} entry={keyedEntry().entry} ended={ended()} running={props.running} drafts={props.drafts} mark={markOf} />
+          )}
         </Keyed>
       </Show>
       <Show when={props.turn.end?.reason === "error" && props.turn.end.error !== lastError() && props.turn.end.error}>
@@ -724,9 +714,6 @@ function Turn(props: { chat: Chat; turn: TurnView; running: boolean; drafts: rea
   );
 }
 
-/** The prompt rail's key for a steer sent and not yet placed. */
-const pendingMark = (requestId: string) => `steer:${requestId}`;
-
 /**
  * A steer sent and not yet placed, where it will join, as it will show once placed; until then it can be withdrawn. A
  * plugin's notice (`QueuedPrompt.source`) shows as the context line it will be, with no place on the prompt rail.
@@ -736,16 +723,7 @@ function PendingSteer(props: { chat: Chat; steer: QueuePlaces["joining"][number]
   const notice = () => props.steer.source;
   const noticeText = () => props.steer.display ?? props.steer.content.flatMap((part) => (part.type === "text" ? [part.text] : [])).join("\n");
   return (
-    <Show
-      when={notice() === undefined}
-      fallback={
-        <div class="divider" data-tip={noticeText()}>
-          <span>
-            Context from {notice()}: {noticeText().split("\n")[0]}
-          </span>
-        </div>
-      }
-    >
+    <Show when={notice() === undefined} fallback={<ContextLine source={notice()!} text={noticeText()} />}>
       <div class="steer-pending" data-mark={pendingMark(props.steer.requestId)}>
         <button
           type="button"
@@ -845,261 +823,6 @@ function Transcript(props: { chat: Chat; turns: readonly TurnView[] }) {
   );
 }
 
-/** `findWith`: hands the plugin what opens the find bar (focusing it when open) while the view is shown, and undefined once it is not. */
-function ChatView(props: { chat: Chat; turns: () => readonly TurnView[]; findWith: (open: (() => void) | undefined) => void }) {
-  const threads = props.chat.threads;
-  let scroller!: HTMLDivElement;
-  let content!: HTMLDivElement;
-  // Follows new output while the reader is at the bottom, and leaves them alone once they scroll up.
-  const stick = createStickToBottom(() => scroller);
-  const stuck = stick.stuck;
-  // Every prompt a person sent that the chat shows: each turn's, its steers, and the steers sent and not yet placed, at
-  // the end. A plugin's notice is none.
-  const marks = createMemo((): readonly PromptMark[] => [
-    ...promptMarks(props.turns()),
-    ...queuePlaces(threads).joining.flatMap((steer) =>
-      steer.source === undefined ? [{ key: pendingMark(steer.requestId), prompt: promptText(steer.content), reply: "" }] : [],
-    ),
-  ]);
-  const railShown = () => props.chat.config.promptRail && marks().length > 1;
-  const [current, setCurrent] = createSignal(0);
-  const [steps, setSteps] = createSignal<{ previous: number | undefined; next: number | undefined }>(
-    { previous: undefined, next: undefined },
-    { equals: (a, b) => a.previous === b.previous && a.next === b.next },
-  );
-  const [seen, setSeen] = createSignal<{ first: number; last: number } | undefined>(undefined, {
-    equals: (a, b) => a?.first === b?.first && a?.last === b?.last,
-  });
-  /** The space beside the transcript's text, where the prompt rail goes. */
-  const [room, setRoom] = createSignal(0);
-  /** A prompt's place: its turn, or the steer (`data-mark`). */
-  const markElement = (key: string) => content.querySelector<HTMLElement>(`[data-mark="${CSS.escape(key)}"]`);
-  /** Where `element` starts in the scrolled transcript, as `scrollTop` counts: a steer is inside its turn. */
-  const topOf = (element: HTMLElement) => element.getBoundingClientRect().top - scroller.getBoundingClientRect().top + scroller.scrollTop;
-  /** Where a jump is taking the view, until the scroll gets there or the reader takes it elsewhere. */
-  let heading: number | undefined;
-  /**
-   * Where each prompt's place starts (`topOf`), by its key: measured again once the layout has changed (`moved`), at
-   * most every `MEASURE_MS`, since measuring reads every place in a transcript that may be long; a scroll moves none.
-   */
-  let places = new Map<string | undefined, number>();
-  let moved = true;
-  let measuredAt = -Infinity;
-  let measureLater: ReturnType<typeof setTimeout> | undefined;
-  /**
-   * Which prompts' turns are in view (a turn runs to the next prompt, the last
-   * to the end); the one being read: the last whose turn starts above the top
-   * third of the view, or the last one at the bottom; and the nearest turns
-   * starting above and below where the view is (or is going), for stepping.
-   * Only while the rail shows it.
-   */
-  const locate = () => {
-    if (!railShown()) return;
-    if (moved && measureLater === undefined) {
-      const wait = measuredAt + MEASURE_MS - performance.now();
-      if (wait > 0) measureLater = setTimeout(() => ((measureLater = undefined), locateSoon()), wait);
-      else {
-        places = new Map();
-        for (const element of content.querySelectorAll<HTMLElement>("[data-mark]")) places.set(element.dataset.mark, topOf(element));
-        moved = false;
-        measuredAt = performance.now();
-      }
-    }
-    const found = locatePrompts(
-      marks().map((mark) => places.get(mark.key)),
-      { top: scroller.scrollTop, height: scroller.clientHeight, scrollHeight: scroller.scrollHeight },
-      heading,
-    );
-    setCurrent(found.current);
-    setSeen(found.seen);
-    setSteps({ previous: found.previous, next: found.next });
-  };
-  let locating = 0;
-  const locateSoon = () => {
-    cancelAnimationFrame(locating);
-    locating = requestAnimationFrame(locate);
-  };
-  /** The layout changed: the places are measured again before the next locating, or as soon after the last as allowed. */
-  const relocate = () => {
-    moved = true;
-    locateSoon();
-  };
-  const jump = (key: string) => {
-    const element = markElement(key);
-    if (element === null) return;
-    const target = Math.min(Math.max(0, topOf(element) - JUMP_MARGIN), scroller.scrollHeight - scroller.clientHeight);
-    heading = Math.abs(target - scroller.scrollTop) < 2 ? undefined : target;
-    scroller.scrollTo({ top: target, behavior: "smooth" });
-    locate();
-  };
-  /** Where the reader was in this history entry (back or forward returns there), or undefined at the bottom. */
-  const remembered = () => props.chat.router.entry<number | undefined>(SCROLL_STATE);
-  /** A position to return to once the transcript is tall enough to hold it. */
-  let restoring: number | undefined;
-  /** `settled`: the log is loaded and drawn, so a position still out of reach (a taller or wider window) is as near as it gets. */
-  const restore = (settled = false) => {
-    const reach = scroller.scrollHeight - scroller.clientHeight;
-    if (restoring === undefined || (!settled && reach < restoring)) return;
-    scroller.scrollTop = Math.min(restoring, reach);
-    restoring = undefined;
-    stick.placed();
-  };
-  let saving = 0;
-  const onScroll = () => {
-    const lastTop = stick.lastTop();
-    stick.onScroll();
-    if (heading !== undefined && jumpOver(heading, scroller.scrollTop, lastTop)) heading = undefined;
-    locateSoon();
-    if (restoring !== undefined) return;
-    cancelAnimationFrame(saving);
-    saving = requestAnimationFrame(() => remembered().set(stuck() ? undefined : scroller.scrollTop));
-  };
-
-  /** A disclosure the reader just opened or closed: it stays where it was on screen rather than the view jumping to the bottom. */
-  let anchor: { readonly element: Element; readonly top: number } | undefined;
-  const noteToggle = (event: MouseEvent) => {
-    const button = (event.target as Element | null)?.closest?.("button[aria-expanded]");
-    if (button === null || button === undefined) return;
-    anchor = { element: button, top: button.getBoundingClientRect().top };
-    // A toggle that changes no size leaves nothing to hold.
-    requestAnimationFrame(() => requestAnimationFrame(() => (anchor = undefined)));
-  };
-
-  onMount(() => {
-    // The text moves with the view's width and with the content's (the width setting, the narrow layout's padding).
-    // From the view's edge, so the scroller's left gutter counts.
-    const measure = new ResizeObserver(() =>
-      setRoom(content.getBoundingClientRect().left - scroller.getBoundingClientRect().left + parseFloat(getComputedStyle(content).paddingLeft)),
-    );
-    measure.observe(scroller);
-    measure.observe(content);
-    onCleanup(() => measure.disconnect());
-    // Follow new output while the reader is at the bottom; leave them alone once they scroll up.
-    const observer = new ResizeObserver(() => {
-      const held = anchor;
-      anchor = undefined;
-      if (held !== undefined && held.element.isConnected) {
-        scroller.scrollTop += held.element.getBoundingClientRect().top - held.top;
-        stick.placed();
-      } else if (restoring !== undefined) restore();
-      else stick.keep();
-      relocate();
-    });
-    // Its border box: the end it pads for the composer grows with the composer, and the end stays in view.
-    observer.observe(content, { box: "border-box" });
-    // Capture: the toggle's own handler changes the DOM before a bubbling listener would see the click.
-    content.addEventListener("click", noteToggle, true);
-    onCleanup(() => {
-      observer.disconnect();
-      content.removeEventListener("click", noteToggle, true);
-      cancelAnimationFrame(locating);
-      clearTimeout(measureLater);
-      cancelAnimationFrame(saving);
-    });
-  });
-  // The rail shown again (its setting, a second prompt) is located at once.
-  createEffect(on(railShown, (shown) => shown && relocate()));
-  createEffect(
-    on(threads.activeId, () => {
-      heading = undefined;
-      restoring = untrack(() => remembered().get());
-      if (restoring === undefined) stick.follow();
-      else {
-        stick.release();
-        queueMicrotask(() => restore());
-      }
-    }),
-  );
-  /** The prompt the address names (`#prompt-<event id>`, a prompt's link), which the view goes to once it shows it. */
-  const linked = createMemo(() => {
-    const hash = props.chat.router.location().hash;
-    return hash.startsWith(`#${promptAnchor("")}`) ? decodeURIComponent(hash.slice(1 + promptAnchor("").length)) : undefined;
-  });
-  /** Puts the linked prompt at the top of the view, marked for a moment; false while it is not drawn (not loaded, or not on the branch). */
-  const goToLinked = (): boolean => {
-    const id = linked();
-    const element = id === undefined ? null : content.querySelector<HTMLElement>(`[data-prompt="${CSS.escape(id)}"]`);
-    if (element === null) return false;
-    restoring = undefined;
-    heading = undefined;
-    scroller.scrollTop = Math.min(Math.max(0, topOf(element) - JUMP_MARGIN), scroller.scrollHeight - scroller.clientHeight);
-    stick.placed();
-    for (const marked of content.querySelectorAll<HTMLElement>("[data-linked]")) delete marked.dataset.linked;
-    // Read the layout between, so the mark starts over on a prompt marked before.
-    void element.offsetWidth;
-    element.dataset.linked = "";
-    return true;
-  };
-  let settling = 0;
-  /**
-   * The loaded transcript has been laid out whole once (`data-drawn`): from then on a turn out of view is not drawn
-   * (chat.css), and holds the place of the size it was drawn at, so every place in the thread stays where it is.
-   */
-  const [drawn, setDrawn] = createSignal(false);
-  const settled = () => {
-    setDrawn(true);
-    if (!goToLinked()) restore(true);
-  };
-  createEffect(() => {
-    cancelAnimationFrame(settling);
-    if (!threads.log().loaded) return setDrawn(false);
-    // Two frames: the loaded transcript is laid out (and the resize observer has had its turn) before the wait ends.
-    settling = requestAnimationFrame(() => (settling = requestAnimationFrame(settled)));
-  });
-  onCleanup(() => cancelAnimationFrame(settling));
-  // A link to a prompt of the thread shown, followed here: the address changes, and the thread stays.
-  createEffect(on(linked, () => untrack(() => threads.log().loaded) && goToLinked(), { defer: true }));
-
-  const [finding, setFinding] = createSignal(false);
-  let findInput: HTMLInputElement | undefined;
-  /** What had focus before the find bar took it, given back when it closes. */
-  let returnTo: Element | null = null;
-  props.findWith(() => {
-    if (!finding()) {
-      returnTo = document.activeElement;
-      setFinding(true);
-    }
-    findInput?.focus();
-    findInput?.select();
-  });
-  onCleanup(() => props.findWith(undefined));
-  const closeFind = () => {
-    setFinding(false);
-    findInput = undefined;
-    if (returnTo instanceof HTMLElement && returnTo.isConnected) returnTo.focus();
-    returnTo = null;
-  };
-
-  return (
-    <div class="chat-view">
-      <Show when={finding()}>
-        <FindBar content={content} scroller={scroller} input={(element) => (findInput = element)} onClose={closeFind} />
-      </Show>
-      <div class="scroller" ref={scroller} onScroll={onScroll}>
-        <div class="content" ref={content} data-drawn={drawn() ? "" : undefined}>
-          <Show when={threads.activeId() !== undefined && !threads.log().loaded}>
-            <div class="loading">
-              <Spinner /> Loading session…
-            </div>
-          </Show>
-          <Transcript chat={props.chat} turns={props.turns()} />
-          <Show when={threads.log().error}>
-            <div class="callout callout-error">Could not load the full session: {threads.log().error}</div>
-          </Show>
-        </div>
-        <Show when={!stuck()}>
-          <button class="jump" aria-label="Jump to latest" onClick={() => stick.follow(true)}>
-            <ChevronDownIcon />
-          </button>
-        </Show>
-      </div>
-      <Show when={railShown()}>
-        <PromptRail marks={marks()} current={current()} previous={steps().previous} next={steps().next} seen={seen()} room={room()} onJump={jump} />
-      </Show>
-    </div>
-  );
-}
-
 /**
  * The session as a conversation, projected from its log. Tool calls render
  * through the `chat.tools` slot when a plugin fills it for that tool.
@@ -1154,7 +877,7 @@ export default defineWebPlugin({
     part(ChatWorkGroupPart, workGroupView(slots));
     part(ChatWorkingPart, WorkingView);
     part(ChatTurnFooterPart, TurnFooter);
-    // Its own buttons under a prompt go through the slot other plugins add theirs to: the composer's "Edit from here" is 10.
+    // After the composer's "Edit from here" (10).
     slots.add(PromptActions, { id: "chat.copy-prompt", order: 20, component: CopyPrompt });
     slots.add(PromptActions, { id: "chat.prompt-link", order: 30, component: copyLink(threads) });
     // Before a view added without an order (0), whatever its plugin's id: a thread opens on its transcript.
@@ -1164,7 +887,11 @@ export default defineWebPlugin({
       title: "Thread",
       icon: ChatIcon,
       composer: true,
-      component: () => <ChatView chat={chat} turns={() => transcript().turns} findWith={(open) => setFind(() => open)} />,
+      component: () => (
+        <ChatView chat={chat} turns={() => transcript().turns} findWith={(open) => setFind(() => open)}>
+          <Transcript chat={chat} turns={transcript().turns} />
+        </ChatView>
+      ),
     });
     addSettings(slots, webPlugins, notify, plugin.id, plugin.config);
     slots.add(Actions, {

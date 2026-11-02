@@ -1,7 +1,6 @@
 # commands.host
 
-The host's own commands. Adds them to `Commands`. Requires `Interaction` and `HostControl`.
-No config.
+The host's own commands. Adds them to `Commands`. No config.
 
 | Command               | Title                  | Does                                                                                                                                |
 | --------------------- | ---------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |

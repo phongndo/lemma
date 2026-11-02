@@ -1,6 +1,10 @@
 # sessions.cli
 
-The sessions' commands for the `lemma` command (`CliCommands` in [`@lemma/cli`](../../cli/README.md)): `sessions list|show|new|title|pin|unpin|archive|unarchive|delete|checkout|open|inspect|cache|watch`. Requires nothing: it reaches the sessions through their channels (`callHere`, `followHere`). No config.
+The sessions' commands for the `lemma` command (`CliCommands` in
+[`@lemma/cli`](../../cli/README.md)):
+`sessions list|show|new|title|pin|unpin|archive|unarchive|delete|checkout|open|inspect|cache|watch`.
+It reaches the sessions through their channels (`callHere`, `followHere`). No
+config.
 
 - **Directories are the host's.** `list` and `new` default to the client's
   directory, which is the host's only when they are one machine: with a host

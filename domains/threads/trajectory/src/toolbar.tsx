@@ -1,5 +1,6 @@
-import { For, Show } from "solid-js";
+import { Show } from "solid-js";
 import { formatDuration } from "@lemma/client/format";
+import { Chips, FilterField } from "@lemma/devtools/web";
 import { XIcon } from "@lemma/look";
 import type { View, TypeFilter } from "./state.ts";
 
@@ -36,30 +37,20 @@ export function createToolbar(view: View) {
   function Toolbar() {
     return (
       <div class="dt-toolbar" role="toolbar" aria-label="Trajectory toolbar">
-        <label class="dt-filter">
+        <FilterField
+          ref={(el) => (refs.filterInput = el)}
+          type="search"
+          label="Filter trajectory"
+          placeholder="Filter  (is:error  tool:bash  turn:2  -text)"
+          value={query()}
+          onInput={setQuery}
+        >
           <svg class="icon" width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">
             <path d="M2 3h12l-4.5 5.5V13l-3 1.5V8.5z" />
           </svg>
-          <input
-            ref={(el) => {
-              refs.filterInput = el;
-            }}
-            type="search"
-            placeholder="Filter  (is:error  tool:bash  turn:2  -text)"
-            aria-label="Filter trajectory"
-            value={query()}
-            onInput={(event) => setQuery(event.currentTarget.value)}
-            spellcheck={false}
-          />
-        </label>
+        </FilterField>
         <span class="dt-sep" />
-        <For each={TYPES}>
-          {(type) => (
-            <button class="dt-chip" aria-pressed={typeFilter() === type.id} onClick={() => setTypeFilter(type.id)}>
-              {type.label}
-            </button>
-          )}
-        </For>
+        <Chips options={TYPES} value={typeFilter()} onChange={setTypeFilter} />
         <span class="dt-sep" />
         <label class="dt-check" data-tip="Group rows under their turn">
           <input type="checkbox" checked={groupTurns()} onChange={(event) => setGroupTurns(event.currentTarget.checked)} />

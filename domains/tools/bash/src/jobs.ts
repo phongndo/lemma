@@ -72,13 +72,13 @@ const howItEnded = (exitCode: number | null, timedOut: boolean, timeout: number 
   timedOut ? `timed out after ${timeout} seconds, and was stopped` : exitCode === null ? "ended without an exit code" : `exited with code ${exitCode}`;
 
 /** A background command's end in a line: what a transcript shows of its notice. */
-export const exitLine = (job: Job, exitCode: number | null, timedOut: boolean, timeout: number | undefined): string => {
+const exitLine = (job: Job, exitCode: number | null, timedOut: boolean, timeout: number | undefined): string => {
   const command = job.command.replace(/\s+/g, " ").trim();
   return `Background job ${job.id} (${command.length > 60 ? `${command.slice(0, 59)}…` : command}) ${howItEnded(exitCode, timedOut, timeout)}`;
 };
 
 /** What the model is told when a background command exits: how it ended, and both ends of its output. */
-export function exitText(job: Job, output: OutputAccumulator, exitCode: number | null, timedOut: boolean, timeout: number | undefined, now: number): string {
+function exitText(job: Job, output: OutputAccumulator, exitCode: number | null, timedOut: boolean, timeout: number | undefined, now: number): string {
   const snapshot = output.snapshot();
   const full = job.outputPath === undefined ? "Its output could not be saved." : `Full output: ${job.outputPath}`;
   const body = output.shown(snapshot, full);

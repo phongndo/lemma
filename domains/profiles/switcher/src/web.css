@@ -49,9 +49,6 @@
 }
 
 .profiles-current-name {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
   font-size: var(--font-size-base);
   font-weight: 600;
   color: var(--text);
@@ -74,14 +71,10 @@
   background: var(--ok);
 }
 
-/* Settings › Profiles: a row each, on the settings' row grid (`.setting-row`). */
-.profiles-name {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-/* Renaming in place: the field sits where the name was, so the row keeps its height. */
+/*
+ * Settings › Profiles: a row each, on the settings' row grid (`.setting-row`). Renaming in place: the field sits where
+ * the name was, so the row keeps its height.
+ */
 .profiles-name-field {
   max-width: 280px;
   height: 24px;

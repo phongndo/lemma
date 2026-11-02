@@ -70,7 +70,6 @@ export const jobFiles = (dir: string) => {
     },
   };
 };
-export type JobFiles = ReturnType<typeof jobFiles>;
 
 /** The prompt section naming a thread's agents still at work in the background: none while there are none. */
 export const workingSection = (jobs: readonly Job[]): string | undefined =>

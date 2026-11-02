@@ -42,7 +42,7 @@ describe("listWebFiles", () => {
       expect(untrusted[0]!.path).toBe(join(user, "composer.web.js"));
       // A file's version is its mtime; a package's, the files its web half may import, so a module it imports is versioned with it.
       expect(untrusted[0]!.url).toMatch(/^\/api\/web\/user@\d+\/composer\.web\.js$/);
-      expect(untrusted[2]!.url).toMatch(/^\/api\/web\/user@[0-9a-f]{12}\/ticker\/web\.js$/);
+      expect(untrusted[2]!.url).toMatch(/^\/api\/web\/user@[0-9a-f]{16}\/ticker\/web\.js$/);
       expect(untrusted[3]!.url.split("/")[3]).toBe(untrusted[2]!.url.split("/")[3]);
 
       const trusted = await Effect.runPromise(listWebFiles(paths, true));

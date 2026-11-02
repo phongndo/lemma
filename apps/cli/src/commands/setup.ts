@@ -7,7 +7,7 @@ import type { ParseError } from "jsonc-parser";
 import { CliChannels, table } from "@lemma/cli";
 import type { CheckResult } from "@lemma/cli";
 import { makeHostRpcHttp } from "@lemma/client";
-import { HOST_PROTOCOL } from "@lemma/contracts";
+import { errorMessage, HOST_PROTOCOL } from "@lemma/contracts";
 import { environmentNameProblem, environmentsPath, LOCAL, normalizeUrl, readDiscovery, readEnvironments, writeEnvironments } from "@lemma/contracts/discovery";
 import { isInside, writeFileAtomic } from "@lemma/contracts/fs";
 import { profileOf } from "@lemma/contracts/profiles";
@@ -76,7 +76,7 @@ const health = (url: string, token: string): Effect.Effect<string> =>
   });
 
 const failedWrite = (path: string, cause: unknown) =>
-  new CliError({ code: "WriteFailed", message: `Cannot write ${path}: ${cause instanceof Error ? cause.message : String(cause)}`, exit: ExitCode.failed });
+  new CliError({ code: "WriteFailed", message: `Cannot write ${path}: ${errorMessage(cause)}`, exit: ExitCode.failed });
 
 /** The environments this client knows: the root's, whatever the profile. */
 const environmentsOf = (io: Io) =>

@@ -3,6 +3,7 @@ import { settled as eventually } from "../../../../scripts/e2e.ts";
 import { scripted, startHost } from "./hosts.ts";
 import { git } from "./seed.ts";
 import { drawn, log, open, settled, url } from "./shared.ts";
+import type { Api, Contracts } from "./shared.ts";
 
 /** A plugin of the user's with a command that asks a form, as a plugin's settings are asked for. */
 const PULL_REQUEST = `import { Effect, Schema } from "effect";
@@ -111,8 +112,8 @@ export const separate = async (): Promise<string> => {
   // Reload is its own plugin: an action (listed in the palette, keys bindable) that its footer button, right of the dot, runs.
   assert.ok(
     await fresh.evaluate(async () => {
-      const { Actions } = (await import("/src/ui/api.ts" as string)).api.contracts;
-      return (window as any).lemma.slots().get(Actions, "reload.app") !== undefined;
+      const { Actions } = (await import("/src/ui/api.ts" as string)).api.contracts as Contracts;
+      return window.lemma.slots().get(Actions, "reload.app") !== undefined;
     }),
     "reload is not an action",
   );
@@ -128,8 +129,8 @@ export const separate = async (): Promise<string> => {
   await Promise.all([
     fresh.waitForEvent("load"),
     fresh.evaluate(async () => {
-      const { Actions } = (await import("/src/ui/api.ts" as string)).api.contracts;
-      (window as any).lemma.slots().get(Actions, "reload.app")?.run();
+      const { Actions } = (await import("/src/ui/api.ts" as string)).api.contracts as Contracts;
+      window.lemma.slots().get(Actions, "reload.app")?.run();
     }),
   ]);
   await fresh.waitForSelector(".main-head .connection-connected");
@@ -184,7 +185,7 @@ export const separate = async (): Promise<string> => {
   await connect.waitForSelector(".custom-provider-form");
   await connect.evaluate(() => {
     const seen = new MutationObserver(() => {
-      if (document.querySelector(".dialog.connect:not(.custom-provider)") !== null) (window as any).sawConnect = true;
+      if (document.querySelector(".dialog.connect:not(.custom-provider)") !== null) window.sawConnect = true;
     });
     seen.observe(document.body, { childList: true, subtree: true });
   });
@@ -195,7 +196,7 @@ export const separate = async (): Promise<string> => {
   await fields.nth(3).fill("sk-gateway");
   await connect.click(".custom-provider >> text=Add provider");
   await connect.waitForSelector(".custom-provider", { state: "detached", timeout: 10_000 });
-  assert.notEqual(await connect.evaluate(() => (window as any).sawConnect), true, "adding a custom provider with a key opened the connect dialog too");
+  assert.notEqual(await connect.evaluate(() => window.sawConnect), true, "adding a custom provider with a key opened the connect dialog too");
   // One whose key the provider refuses (the scripted one refuses any with "wrong" in it): the connect dialog says why, and
   // takes another.
   await connect.locator(".provider", { hasText: "Custom provider" }).locator(".provider-connect").click();
@@ -284,8 +285,8 @@ export const separate = async (): Promise<string> => {
     await styled.waitForSelector("[role=radiogroup][aria-label='Light theme'] [role=radio]");
     await styled.evaluate(async () => {
       document.querySelector("[role=radiogroup][aria-label='Light theme'] [role=radio]")!.setAttribute("data-check-kept", "");
-      const { SettingsGroups, SectionIds } = (await import("/src/ui/api.ts" as string)).api.contracts;
-      (window as any).removeLookGroup = (window as any).lookSlots.add(SettingsGroups, {
+      const { SettingsGroups, SectionIds } = (await import("/src/ui/api.ts" as string)).api.contracts as Contracts;
+      window.removeLookGroup = window.lookSlots!.add(SettingsGroups, {
         id: "check-recompute",
         section: SectionIds.appearance,
         order: 5,
@@ -295,13 +296,13 @@ export const separate = async (): Promise<string> => {
     });
     await drawn(styled);
     assert.equal(await styled.locator("[role=radio][data-check-kept]").count(), 1, `a settings row was drawn again ${where}`);
-    await styled.evaluate(() => (window as any).removeLookGroup());
+    await styled.evaluate(() => window.removeLookGroup!());
     await drawn(styled);
   };
   await keepsRow("as its section's groups were asked again");
   await styled.click("[role=radiogroup][aria-label='Light theme'] [role=radio][aria-label='Check day']");
   await styled.waitForFunction(() => document.documentElement.style.getPropertyValue("--bg") === "rgb(250, 240, 220)", undefined, { timeout: 5_000 });
-  const day = await styled.evaluate(async () => (await import("/src/ui/api.ts" as string)).api.look.tokenColor("--bg-raised"));
+  const day = await styled.evaluate(async () => ((await import("/src/ui/api.ts" as string)) as { readonly api: Api }).api.look.tokenColor("--bg-raised"));
   const [red, , blue] = [1, 3, 5].map((at) => Number.parseInt(day.slice(at, at + 2), 16)) as [number, number, number];
   assert(day !== "#ffffff" && red - blue > 15, `a light theme's raised surface does not follow its background: ${day}`);
   await styled.fill("[aria-label='Search settings']", "light theme palette");
@@ -310,28 +311,26 @@ export const separate = async (): Promise<string> => {
   await styled.fill("[aria-label='Search settings']", "");
   // The look changes with a stylesheet too (a web half's), once a linked one has loaded: what renderers redraw on.
   await styled.evaluate(async () => {
-    const { onLookChange } = (await import("/src/ui/api.ts" as string)).api.look;
-    (window as any).looks = 0;
-    (window as any).stopLooks = onLookChange(() => (window as any).looks++);
+    const { onLookChange } = ((await import("/src/ui/api.ts" as string)) as { readonly api: Api }).api.look;
+    window.looks = 0;
+    window.stopLooks = onLookChange(() => window.looks!++);
     const style = document.createElement("style");
     style.textContent = ":root { --check-look: 1; }";
     document.head.append(style);
   });
-  await styled
-    .waitForFunction(() => (window as any).looks >= 1, undefined, { timeout: 5_000 })
-    .catch(() => assert.fail("a stylesheet added is no look change"));
+  await styled.waitForFunction(() => window.looks! >= 1, undefined, { timeout: 5_000 }).catch(() => assert.fail("a stylesheet added is no look change"));
   const before = await styled.evaluate(() => {
     const link = document.createElement("link");
     link.rel = "stylesheet";
     link.href = URL.createObjectURL(new Blob([":root { --check-look: 2; }"], { type: "text/css" }));
-    link.addEventListener("load", () => ((window as any).linkLoaded = true));
+    link.addEventListener("load", () => (window.linkLoaded = true));
     document.head.append(link);
-    return (window as any).looks as number;
+    return window.looks!;
   });
   await styled
-    .waitForFunction((before) => (window as any).linkLoaded === true && (window as any).looks >= before + 2, before, { timeout: 5_000 })
+    .waitForFunction((before) => window.linkLoaded === true && window.looks! >= before + 2, before, { timeout: 5_000 })
     .catch(() => assert.fail("a linked stylesheet's loading is no look change"));
-  await styled.evaluate(() => (window as any).stopLooks());
+  await styled.evaluate(() => window.stopLooks!());
 
   await bare.plugins({ "check-look.web.js": null });
   await styled.waitForSelector(".check-utilities", { state: "detached", timeout: 10_000 });
@@ -381,8 +380,8 @@ export const separate = async (): Promise<string> => {
   await form
     .waitForFunction(
       async () => {
-        const { Commands } = (await import("/src/ui/api.ts" as string)).api.contracts;
-        const commands = await (window as any).lemma.service(Commands);
+        const { Commands } = (await import("/src/ui/api.ts" as string)).api.contracts as Contracts;
+        const commands = (await window.lemma.service(Commands))!;
         const command = commands.list().find((command: { readonly id: string }) => command.id === "pull-request.open");
         if (command !== undefined) void commands.run(command);
         return command !== undefined;
@@ -510,8 +509,8 @@ export const separate = async (): Promise<string> => {
   );
   // Back to Settings › Profiles.
   await profiles.evaluate(async () => {
-    const { Settings } = (await import("/src/ui/api.ts" as string)).api.contracts;
-    (await (window as any).lemma.service(Settings)).open("profiles");
+    const { Settings } = (await import("/src/ui/api.ts" as string)).api.contracts as Contracts;
+    (await window.lemma.service(Settings))!.open("profiles");
   });
   // Renaming in place: Manage › Rename puts a field where the name was, and Enter keeps what is typed.
   await work.getByRole("button", { name: "Work options" }).click();

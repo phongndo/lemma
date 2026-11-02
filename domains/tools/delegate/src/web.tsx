@@ -7,6 +7,7 @@ import type { ContextViewProps, ThreadsService, ToolBodyProps, ToolDisplaysProps
 import { AgentIcon, Avatar, ChevronIcon, Icon, StopIcon } from "@lemma/look";
 import { Client, Slots, defineWebPlugin, usePlugin } from "@lemma/web";
 import type { SlotsService } from "@lemma/web";
+import { elapsed } from "@lemma/web/format";
 import { createNow } from "@lemma/web/now";
 import {
   agentOfCall,
@@ -14,7 +15,6 @@ import {
   callDetails,
   childrenOf,
   DELEGATE,
-  elapsed,
   endedState,
   groupStatus,
   isActive,
@@ -94,10 +94,10 @@ function AgentRow(props: {
         <AgentAvatar seed={props.session?.id} state={props.state} size={22} />
         <span class="agent-text">
           <span class="agent-line">
-            <span class="agent-title">{props.title}</span>
+            <span class="agent-title tw:truncate">{props.title}</span>
             <span class="agent-state">{stateLabel[props.state]}</span>
           </span>
-          <Show when={props.detail}>{(detail) => <span class="agent-detail">{detail()}</span>}</Show>
+          <Show when={props.detail}>{(detail) => <span class="agent-detail tw:truncate">{detail()}</span>}</Show>
         </span>
         <Show when={props.time}>{(time) => <span class="agent-time">{time()}</span>}</Show>
         <Show when={props.session !== undefined}>
@@ -237,7 +237,7 @@ export default defineWebPlugin({
           <button type="button" class="agent-group-head" aria-expanded={open()} onClick={() => setOpen((was) => !was)}>
             <Stack seeds={agents().flatMap((agent) => (agent.session === undefined ? [] : [agent.session.id]))} states={agents().map((agent) => agent.state)} />
             <span class="agent-text">
-              <span class="agent-title">{agentsLabel(props.calls.length)}</span>
+              <span class="agent-title tw:truncate">{agentsLabel(props.calls.length)}</span>
               <span class="agent-group-status" classList={{ active: status().active, failed: failed() }}>
                 {status().label}
               </span>
@@ -353,7 +353,7 @@ export default defineWebPlugin({
             {(session) => (
               <button type="button" class="agent-crumb" data-tip="The thread this agent works for" onClick={() => back()}>
                 <Icon name="arrow-left" />
-                <span class="agent-crumb-title">{sessionTitle(session())}</span>
+                <span class="agent-crumb-title tw:truncate">{sessionTitle(session())}</span>
                 <span class="agent-crumb-sep" aria-hidden="true">
                   /
                 </span>

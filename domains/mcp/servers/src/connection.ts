@@ -1,6 +1,8 @@
 import type { AuthProvider, Client, StreamableHTTPClientTransport, Tool as McpTool } from "@modelcontextprotocol/client";
 import type { StdioClientTransport } from "@modelcontextprotocol/client/stdio";
 import type { McpServerConfig } from "@lemma/mcp";
+import { errorMessage } from "@lemma/contracts";
+import { errorCode } from "@lemma/contracts/fs";
 import { NeedsSignIn, needsSignIn } from "./auth.ts";
 import type { Challenge } from "./auth.ts";
 import { isImageAddress } from "./form.ts";
@@ -51,10 +53,10 @@ export function describe(error: unknown, config: McpServerConfig): string {
   const status = statusOf(error);
   if ((status === 401 || status === 403) && sendsOwnToken(config))
     return `The server answered ${status}: it refused the token in the Authorization header. Check it, or remove the header to sign in instead.`;
-  const code = (error as NodeJS.ErrnoException | undefined)?.code;
+  const code = errorCode(error);
   if (code === "ENOENT" && config.command !== undefined) return `Command not found: ${config.command}`;
   if (code === "ERR_INVALID_URL") return `Not a URL: ${config.url} (write it whole, as https://example.com/mcp)`;
-  return error instanceof Error ? error.message : String(error);
+  return errorMessage(error);
 }
 
 /** The icons a server declares, as `Connection.icons` keeps them: one for any theme, and one for a dark theme besides. */
@@ -72,7 +74,7 @@ export function declaredIcons(declared: readonly { readonly src: string; readonl
  * with a client error other than a timeout or a rate limit, which trying again would only repeat.
  */
 const retryable = (error: unknown): boolean => {
-  if ((error as NodeJS.ErrnoException | undefined)?.code === "ERR_INVALID_URL") return false;
+  if (errorCode(error) === "ERR_INVALID_URL") return false;
   const status = statusOf(error);
   return status === undefined || status < 400 || status >= 500 || status === 408 || status === 429;
 };

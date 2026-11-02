@@ -4,6 +4,7 @@ import type { Browser as PlaywrightBrowser, BrowserContext, BrowserType, Locator
 import { BrowserError, hasTarget, parseRef, targetProblem } from "@lemma/browser";
 import type { Browser, BrowserImage, BrowserTab, BrowserTarget, ConsoleMessage, InTab, LoadState } from "@lemma/browser";
 import { HTML_MEASURE_SOURCE } from "@lemma/tools/html";
+import { errorMessage } from "@lemma/contracts";
 import { findChromium, isExecutableFile } from "./executable.ts";
 import { isLocalUrl } from "./local.ts";
 import { capTree, consoleLevel, consoleMessage, fieldRefs, keepMessage, maskFields, MAX_CONSOLE_MESSAGES, withGeneration } from "./snapshot.ts";
@@ -114,7 +115,7 @@ const describe = (target: BrowserTarget) =>
 /** A Playwright failure as a `BrowserError` the model can act on. */
 const toBrowserError = (cause: unknown, target?: BrowserTarget): BrowserError => {
   if (cause instanceof BrowserError) return cause;
-  const message = cause instanceof Error ? cause.message : String(cause);
+  const message = errorMessage(cause);
   const what = target === undefined || !hasTarget(target) ? "the page" : describe(target);
   if (/strict mode violation/i.test(message)) {
     const count = /resolved to (\d+) elements/.exec(message)?.[1];
@@ -134,7 +135,7 @@ const toBrowserError = (cause: unknown, target?: BrowserTarget): BrowserError =>
  * it as `"[Circular]"` (one reached twice by other paths is written out each time), and nothing (`undefined`, a
  * function) as `null`, so any value the page has comes back.
  */
-export const toJson = (value: unknown): string => {
+const toJson = (value: unknown): string => {
   // The objects holding the one written now, outermost first: `this` is its holder, so the rest were left behind.
   const holders: object[] = [];
   const json = JSON.stringify(value, function (this: unknown, _, item: unknown) {
@@ -159,11 +160,7 @@ const loadPlaywright = (): Promise<BrowserType> =>
     (loaded) => loaded.chromium,
     (cause: unknown) => {
       playwright = undefined;
-      throw fail(
-        "Unavailable",
-        `Playwright (playwright-core) could not be loaded: ${firstLine(cause instanceof Error ? cause.message : String(cause))}`,
-        cause,
-      );
+      throw fail("Unavailable", `Playwright (playwright-core) could not be loaded: ${firstLine(errorMessage(cause))}`, cause);
     },
   ));
 
@@ -225,7 +222,7 @@ export const makeChromium = (options: ChromiumOptions) => {
         if ("problem" in found) throw fail("Unavailable", found.problem);
         executable = found.path;
         return chromium.launch({ executablePath: found.path, headless: options.headless }).catch((cause: unknown) => {
-          throw fail("Unavailable", `Chromium at ${found.path} did not start: ${firstLine(cause instanceof Error ? cause.message : String(cause))}`, cause);
+          throw fail("Unavailable", `Chromium at ${found.path} did not start: ${firstLine(errorMessage(cause))}`, cause);
         });
       })
       .then(
@@ -424,7 +421,7 @@ export const makeChromium = (options: ChromiumOptions) => {
       try {
         return (await page.goto(url, { waitUntil }))?.status();
       } catch (cause) {
-        const message = cause instanceof Error ? cause.message : String(cause);
+        const message = errorMessage(cause);
         const interrupting = /is interrupted by another navigation to "([^"]*)"/.exec(message)?.[1];
         if (interrupting !== undefined && attempt === 0) {
           await page.waitForURL(interrupting, { waitUntil: "commit", timeout: INTERRUPTED_WAIT_MS }).catch(() => {});
@@ -469,7 +466,8 @@ export const makeChromium = (options: ChromiumOptions) => {
       options,
     );
 
-  const point = (options: BrowserTarget) => ({ x: options.x!, y: options.y! });
+  /** The point a target without a locator names, as the mouse's arguments. */
+  const point = (options: BrowserTarget) => [options.x!, options.y!] as const;
 
   const service: Service = {
     open: (sessionId, { tabId, url, newTab }) =>
@@ -546,14 +544,14 @@ export const makeChromium = (options: ChromiumOptions) => {
     click: (sessionId, options) =>
       act(sessionId, options, async (tab, locator) => {
         const how = { button: options.button ?? "left", clickCount: options.clickCount ?? 1 } as const;
-        if (locator === undefined) await tab.page.mouse.click(options.x!, options.y!, how);
+        if (locator === undefined) await tab.page.mouse.click(...point(options), how);
         else await locator.click(how);
       }),
 
     type: (sessionId, options) =>
       act(sessionId, options, async (tab, locator) => {
         if (locator === undefined) {
-          await tab.page.mouse.click(options.x!, options.y!);
+          await tab.page.mouse.click(...point(options));
           await tab.page.keyboard.type(options.text);
         } else await locator.fill(options.text);
         if (options.submit !== true) return;
@@ -565,17 +563,15 @@ export const makeChromium = (options: ChromiumOptions) => {
       act(sessionId, options, async (tab, locator) => {
         if (locator !== undefined) await locator.press(options.key);
         else if (hasTarget(options)) {
-          await tab.page.mouse.click(options.x!, options.y!);
+          await tab.page.mouse.click(...point(options));
           await tab.page.keyboard.press(options.key);
         } else await tab.page.keyboard.press(options.key);
       }),
 
     hover: (sessionId, options) =>
       act(sessionId, options, async (tab, locator) => {
-        if (locator === undefined) {
-          const { x, y } = point(options);
-          await tab.page.mouse.move(x, y);
-        } else await locator.hover();
+        if (locator === undefined) await tab.page.mouse.move(...point(options));
+        else await locator.hover();
       }),
 
     select: (sessionId, options) =>
@@ -588,7 +584,7 @@ export const makeChromium = (options: ChromiumOptions) => {
       act(sessionId, options, async (tab, locator) => {
         if (locator !== undefined) return locator.scrollIntoViewIfNeeded();
         const viewport = tab.page.viewportSize() ?? VIEWPORT;
-        const { x, y } = hasTarget(options) ? point(options) : { x: viewport.width / 2, y: viewport.height / 2 };
+        const [x, y] = hasTarget(options) ? point(options) : [viewport.width / 2, viewport.height / 2];
         await tab.page.mouse.move(x, y);
         await tab.page.evaluate(scrollAt, { x, y, dx: options.deltaX ?? 0, dy: options.deltaY ?? viewport.height * 0.8 });
       }),

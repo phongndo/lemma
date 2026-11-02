@@ -12,7 +12,7 @@ import { ComposerControls, PromptCommands, ThreadsActionIds } from "@lemma/threa
 import { Slots, defineWebPlugin } from "@lemma/web";
 import { matchesKeys, withKeys } from "@lemma/web/keys";
 import type { ModelsService } from "@lemma/llm/web";
-import { BrainIcon, CheckIcon, ChevronDownIcon, PlusIcon, Popover, SearchIcon, SettingRow, StarIcon } from "@lemma/look";
+import { BrainIcon, CheckIcon, ChevronDownIcon, MenuItem, PlusIcon, Popover, SearchIcon, SettingRow, StarIcon } from "@lemma/look";
 import type { Placement } from "@lemma/look";
 import styles from "./model-picker.css?inline";
 
@@ -93,23 +93,15 @@ function ThinkingPicker(props: {
         {(close) => (
           <For each={levels()}>
             {(level) => (
-              <button
-                class="menu-item"
-                role="menuitemradio"
-                aria-checked={effectiveThinking() === level}
-                onClick={() => {
+              <MenuItem
+                label={LEVEL_LABEL[level]}
+                checked={effectiveThinking() === level}
+                close={close}
+                run={() => {
                   chooseThinking(level);
-                  close();
                   props.afterPick?.();
                 }}
-              >
-                <span class="menu-check">
-                  <Show when={effectiveThinking() === level}>
-                    <CheckIcon />
-                  </Show>
-                </span>
-                {LEVEL_LABEL[level]}
-              </button>
+              />
             )}
           </For>
         )}
@@ -358,11 +350,11 @@ function ModelPicker(props: {
                       data-ref={model.ref}
                       onClick={() => pick(model.ref, close)}
                     >
-                      <span class="model-name" data-tip={details()}>
+                      <span class="model-name tw:truncate" data-tip={details()}>
                         {model.name}
                       </span>
                       <Show when={mixed()}>
-                        <span class="model-provider">{providerName(model.provider)}</span>
+                        <span class="model-provider tw:truncate">{providerName(model.provider)}</span>
                       </Show>
                       <span class="model-current">
                         <Show when={selected()}>

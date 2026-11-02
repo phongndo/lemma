@@ -3,6 +3,7 @@ import { readdirSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { startHost } from "./hosts.ts";
 import { boot, root, showView } from "./shared.ts";
+import type { Contracts } from "./shared.ts";
 
 /** An example folder plugin's files, as a user copies it into the plugin directory: all but its tests and installs. */
 const folder = (name: string, dir = resolve(root, "../../examples", name)): Record<string, string> =>
@@ -29,8 +30,8 @@ export const examples = async (): Promise<string> => {
   await page.waitForSelector(".todo-view >> text=No todos in this thread.");
   assert.equal(
     await page.evaluate(async () => {
-      const { ToolViews } = (await import("/src/ui/api.ts" as string)).api.contracts;
-      return (window as any).lemma.slots().get(ToolViews, "todo")?.icon;
+      const { ToolViews } = (await import("/src/ui/api.ts" as string)).api.contracts as Contracts;
+      return window.lemma.slots().get(ToolViews, "todo")?.icon;
     }),
     "check",
     "examples/todo added no view of its tool's calls",

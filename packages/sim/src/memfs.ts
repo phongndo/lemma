@@ -1,14 +1,13 @@
 import { constants } from "node:fs";
 import { dirname } from "node:path";
 import type { FileHandle, FileStats, FileSystem } from "@lemma/contracts/fs";
+import { errno } from "@lemma/testing/disk";
 
 /*
  * A file system in memory for the harness benchmark: an append grows a file's buffer in place (doubling it when full),
  * as a real file grows, where `SimDisk` copies the whole file to model what a crash keeps. It models no crash and no
  * fault: only what costs, so the benchmark measures the harness, not its disk's bookkeeping.
  */
-
-const errno = (code: string, message: string) => Object.assign(new Error(`${code}: ${message}`), { code });
 
 class Contents {
   private bytes = new Uint8Array(1024);
@@ -59,11 +58,9 @@ export interface DiskCounts {
   removes: number;
 }
 
-export const newDiskCounts = (): DiskCounts => ({ opens: 0, reads: 0, bytesRead: 0, writes: 0, bytesWritten: 0, syncs: 0, renames: 0, removes: 0 });
-
 /** A file system in memory, counting what is done to it in `counts`. */
 export class MemFs implements FileSystem {
-  readonly counts: DiskCounts = newDiskCounts();
+  readonly counts: DiskCounts = { opens: 0, reads: 0, bytesRead: 0, writes: 0, bytesWritten: 0, syncs: 0, renames: 0, removes: 0 };
   private readonly files = new Map<string, Contents>();
   private readonly directories = new Set<string>(["/"]);
   private nextIno = 2;

@@ -65,11 +65,19 @@ export type AnyRoute = Route<any, any>;
 export type ParamsOf<R> = R extends Route<infer P, any> ? P : never;
 export type SearchOf<R> = R extends Route<any, infer S> ? S : never;
 
-export interface RouteOptions<P extends string, Params, ParamsEncoded extends Encoded, Search, SearchEncoded extends Encoded> {
+/** A route's path and params, however its search is described. */
+interface PathOptions<P extends string, Params, ParamsEncoded extends Encoded> {
   /** `/users/:id/:tab?`; see `parsePattern`. */
   readonly path: P;
   /** Decodes the path's params from their strings; its fields are the path's names. Without one they are the strings. */
   readonly params?: Schema.Codec<Params, ParamsEncoded> & CheckParams<P, ParamsEncoded>;
+}
+
+export interface RouteOptions<P extends string, Params, ParamsEncoded extends Encoded, Search, SearchEncoded extends Encoded> extends PathOptions<
+  P,
+  Params,
+  ParamsEncoded
+> {
   /** Decodes the query string from its strings; without one the route takes none. Unknown keys are ignored. */
   readonly search?: Schema.Codec<Search, SearchEncoded>;
 }
@@ -85,11 +93,11 @@ export type SearchDefaults = { readonly [key: string]: string | number | boolean
 /** The search a defaults object describes: its keys, typed as their defaults are, every one present. */
 export type SearchFromDefaults<D> = { readonly [K in keyof D]: D[K] extends string ? string : D[K] extends number ? number : boolean };
 
-export interface RouteDefaultsOptions<P extends string, Params, ParamsEncoded extends Encoded, D extends SearchDefaults> {
-  /** `/users/:id/:tab?`; see `parsePattern`. */
-  readonly path: P;
-  /** Decodes the path's params from their strings; its fields are the path's names. Without one they are the strings. */
-  readonly params?: Schema.Codec<Params, ParamsEncoded> & CheckParams<P, ParamsEncoded>;
+export interface RouteDefaultsOptions<P extends string, Params, ParamsEncoded extends Encoded, D extends SearchDefaults> extends PathOptions<
+  P,
+  Params,
+  ParamsEncoded
+> {
   /** The search by its defaults (see `SearchDefaults`); write a Schema for anything else. */
   readonly search: D;
 }

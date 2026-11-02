@@ -16,7 +16,6 @@ import {
   nestedAgents,
   nextNeeding,
   noMarks,
-  runTime,
   sectionIn,
   sections,
   shortAge,
@@ -52,12 +51,6 @@ describe("times", () => {
       const at = now - minutes * 60_000 - 29_000;
       expect(shortAge(at, now)).toBe(relativeTime(at, now).replace("just now", "now").replace(" ago", ""));
     }
-  });
-
-  test("a running turn's time", () => {
-    expect(runTime(0, 12_000)).toBe("12s");
-    expect(runTime(0, 3 * 60_000)).toBe("3m");
-    expect(runTime(0, 65 * 60_000)).toBe("1h 5m");
   });
 });
 

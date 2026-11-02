@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { startHost } from "./hosts.ts";
 import { boot, checkPlugin } from "./shared.ts";
+import type { Channel, Contracts } from "./shared.ts";
 
 // 6: what plugins add to the places the defaults use: the extension slots, the palette, and the composer's completions.
 export const slots = async (): Promise<string> => {
@@ -24,8 +25,8 @@ export const slots = async (): Promise<string> => {
           element.textContent = slot;
           return element;
         };
-        const remove = (window as any).checkSlots.add(contracts[slot], { id: `check.${slot}`, order: 1_000, component, ...extra });
-        ((window as any).removals ??= []).push(remove);
+        const remove = window.checkSlots.add(contracts[slot], { id: `check.${slot}`, order: 1_000, component, ...extra });
+        (window.removals ??= []).push(remove);
       },
       { slot, extra },
     );
@@ -42,9 +43,9 @@ export const slots = async (): Promise<string> => {
   await page.waitForSelector(".thread-card", { state: "detached", timeout: 5_000 });
   // A palette source: its items come up in the palette as they are searched for.
   await page.evaluate(async () => {
-    const { Actions, PaletteSources } = (await import("/src/ui/api.ts" as string)).api.contracts;
-    const add = (window as any).checkSlots.add;
-    ((window as any).removals ??= []).push(
+    const { Actions, PaletteSources } = (await import("/src/ui/api.ts" as string)).api.contracts as Contracts;
+    const add = window.checkSlots.add;
+    (window.removals ??= []).push(
       add(PaletteSources, {
         id: "check.source",
         order: 1_000,
@@ -104,9 +105,9 @@ export const slots = async (): Promise<string> => {
   await page.waitForSelector(".completions", { state: "detached" });
   // A plugin's source answers its own trigger; Escape closes the menu until the word is left, and Tab picks.
   await page.evaluate(async () => {
-    const { ComposerCompletions, ComposerSuggestionPart } = (await import("/src/ui/api.ts" as string)).api.contracts;
-    const slots = (window as any).checkSlots;
-    ((window as any).removals ??= []).push(
+    const { ComposerCompletions, ComposerSuggestionPart } = (await import("/src/ui/api.ts" as string)).api.contracts as Contracts;
+    const slots = window.checkSlots;
+    (window.removals ??= []).push(
       slots.add(ComposerCompletions, {
         id: "check.completion",
         order: 1_000,
@@ -116,7 +117,7 @@ export const slots = async (): Promise<string> => {
       }),
     );
     // Its rows draw through the `composer.suggestion` part, which a plugin replaces.
-    (window as any).removeSuggestion = slots.add(ComposerSuggestionPart, {
+    window.removeSuggestion = slots.add(ComposerSuggestionPart, {
       id: "check.suggestion",
       component: (props: { suggestion: { label: string } }) => {
         const element = document.createElement("span");
@@ -135,7 +136,7 @@ export const slots = async (): Promise<string> => {
   await page.keyboard.type("y");
   assert.equal(await page.locator(".completions").count(), 0, "a dismissed word reopens its menu while it is typed on");
   await page.keyboard.type(" #z");
-  await page.evaluate(() => (window as any).removeSuggestion());
+  await page.evaluate(() => window.removeSuggestion!());
   await page
     .waitForSelector(".completion .menu-label >> text=Check z", { timeout: 5_000 })
     .catch(() => assert.fail("the default suggestion row does not return"));
@@ -144,8 +145,8 @@ export const slots = async (): Promise<string> => {
   // Enter while the answer is on its way waits for it, rather than sending a half-typed mention. The answer is held
   // until Enter is down, so it is still on its way however long the keys took to arrive.
   await page.evaluate(async () => {
-    const { Client } = (await import("/src/ui/api.ts" as string)).api.contracts;
-    const channel = (await (window as any).lemma.service(Client)).channel;
+    const { Client } = (await import("/src/ui/api.ts" as string)).api.contracts as Contracts;
+    const channel = (await window.lemma.service(Client))!.channel as Channel;
     const call = channel.call;
     let release!: () => void;
     const held = new Promise<void>((resolve) => (release = resolve));
@@ -153,7 +154,7 @@ export const slots = async (): Promise<string> => {
       if ((typeof target === "string" ? target : target.id) === "files.search") await held;
       return call(target, payload);
     };
-    (window as any).releaseSearch = () => {
+    window.releaseSearch = () => {
       channel.call = call;
       release();
     };
@@ -162,7 +163,7 @@ export const slots = async (): Promise<string> => {
   await page.keyboard.type("@READ");
   await page.keyboard.press("Enter");
   assert.equal(await page.inputValue("textarea"), "@READ", "Enter sent the prompt while its suggestions loaded");
-  await page.evaluate(() => (window as any).releaseSearch());
+  await page.evaluate(() => window.releaseSearch!());
   await page.waitForSelector(".completion >> text=README.md", { timeout: 5_000 });
   await page.keyboard.press("Enter");
   assert.equal(await page.inputValue("textarea"), "@README.md ", "Enter does not pick once the suggestions arrive");
@@ -185,14 +186,14 @@ export const slots = async (): Promise<string> => {
   // `/` completes a command, then its arguments, across the space: Tab only completes, and Enter on the last runs it.
   // A plugin's command (`PromptCommands`) shows beside the bundled ones; it runs here rather than being sent.
   await page.evaluate(async () => {
-    const { PromptCommands } = (await import("/src/ui/api.ts" as string)).api.contracts;
-    ((window as any).removals ??= []).push(
-      (window as any).checkSlots.add(PromptCommands, {
+    const { PromptCommands } = (await import("/src/ui/api.ts" as string)).api.contracts as Contracts;
+    (window.removals ??= []).push(
+      window.checkSlots.add(PromptCommands, {
         id: "checkpick",
         order: 1_000,
         description: "Checks a command's argument",
         args: [{ name: "speed", values: () => [{ value: "slow" }, { value: "high" }] }],
-        run: ({ args }: { args: readonly string[] }) => void ((window as any).ranCommand = args.join(" ")),
+        run: ({ args }: { args: readonly string[] }) => void (window.ranCommand = args.join(" ")),
       }),
     );
   });
@@ -220,18 +221,18 @@ export const slots = async (): Promise<string> => {
   await page.keyboard.type("hi");
   await page.keyboard.press("Enter");
   await page
-    .waitForFunction(() => (window as any).ranCommand === "high", undefined, { timeout: 5_000 })
+    .waitForFunction(() => window.ranCommand === "high", undefined, { timeout: 5_000 })
     .catch(() => assert.fail("Enter on the last argument does not run the command"));
   assert.equal(await page.inputValue("textarea"), "", "a command that ran stays in the prompt");
   // Words a command does not take are refused, not dropped: the prompt stays, and says why.
-  await page.evaluate(() => ((window as any).ranCommand = undefined));
+  await page.evaluate(() => (window.ranCommand = undefined));
   await page.keyboard.type("/checkpick high and more");
   await page.keyboard.press("Enter");
   await page
     .waitForSelector(".toast-text >> text=/checkpick takes <speed>", { timeout: 5_000 })
     .catch(() => assert.fail("a command with words too many does not say so"));
   assert.equal(await page.inputValue("textarea"), "/checkpick high and more", "a command with words too many lost the prompt");
-  assert.equal(await page.evaluate(() => (window as any).ranCommand), undefined, "a command with words too many ran");
+  assert.equal(await page.evaluate(() => window.ranCommand), undefined, "a command with words too many ran");
   await page.fill("textarea", "");
   // A word trigger inside a command line completes as anywhere: `@` past `/compact`.
   await page.keyboard.type("/compact keep @READ");
@@ -256,19 +257,19 @@ export const slots = async (): Promise<string> => {
   expectNoErrors("completing in the composer");
   // An inspector tab: it lists for the selected plugin. Over a thread with requests, whose latest one the Cost tab reads.
   await page.evaluate(async () => {
-    const { PluginTabs, Settings, Threads } = (await import("/src/ui/api.ts" as string)).api.contracts;
-    const lemma = (window as any).lemma;
-    const threads = await lemma.service(Threads);
-    (window as any).threadBefore = threads.activeId();
-    await threads.select(threads.list().find((info: { readonly title?: string }) => info.title === "Fix flaky session log test").id);
-    const remove = (window as any).checkSlots.add(PluginTabs, {
+    const { PluginTabs, Settings, Threads } = (await import("/src/ui/api.ts" as string)).api.contracts as Contracts;
+    const lemma = window.lemma;
+    const threads = (await lemma.service(Threads))!;
+    window.threadBefore = threads.activeId();
+    await threads.select(threads.list().find((info) => info.title === "Fix flaky session log test")!.id);
+    const remove = window.checkSlots.add(PluginTabs, {
       id: "check.tab",
       order: 1_000,
       label: () => "Checked",
       component: () => document.createElement("span"),
     });
-    ((window as any).removals ??= []).push(remove);
-    (await lemma.service(Settings)).open("plugins");
+    (window.removals ??= []).push(remove);
+    (await lemma.service(Settings))!.open("plugins");
   });
   // A bundled plugin's, in its domain: the check plugin's own row goes with a reload (below).
   await page.click(".inspector-table [role=rowgroup][aria-label='agent'] .inspector-domain");
@@ -281,14 +282,14 @@ export const slots = async (): Promise<string> => {
     .catch(() => assert.fail("the Cost tab does not show what a plugin put in the latest request"));
   // Back over the thread it was opened over, as the checks below expect, the page as it was left.
   await page.evaluate(async () => {
-    const { Settings, Threads } = (await import("/src/ui/api.ts" as string)).api.contracts;
-    const lemma = (window as any).lemma;
-    await (await lemma.service(Threads)).select((window as any).threadBefore);
-    (await lemma.service(Settings)).open("plugins");
+    const { Settings, Threads } = (await import("/src/ui/api.ts" as string)).api.contracts as Contracts;
+    const lemma = window.lemma;
+    await (await lemma.service(Threads))!.select(window.threadBefore);
+    (await lemma.service(Settings))!.open("plugins");
   });
   await page.waitForSelector(".inspector-table [aria-selected=true] >> text=agent.loop", { timeout: 5_000 });
   await page.evaluate(() => {
-    for (const remove of (window as any).removals) remove();
+    for (const remove of window.removals!) remove();
   });
   await page.waitForFunction(() => document.querySelectorAll(".check-marker").length === 0);
   expectNoErrors("adding to the extension slots");

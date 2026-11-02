@@ -113,11 +113,23 @@ export const FaultRecord = Schema.Struct({
 });
 export type FaultRecord = typeof FaultRecord.Type;
 
-/** A fault in a line: the core's message, then what caused it. */
-export const faultMessage = (fault: { readonly message: string; readonly cause: Cause.Cause<unknown> }): string => {
-  const cause = Cause.squash(fault.cause);
-  return `${fault.message}: ${cause instanceof Error ? cause.message : String(cause)}`;
+/**
+ * What went wrong, in words: an `Error`'s message, the `message` string of an
+ * object that carries one, or else the value as a string. It runs in browsers
+ * as in Node, so clients and plugins alike say a failure the same way.
+ */
+export const errorMessage = (cause: unknown): string => {
+  if (cause instanceof Error) return cause.message;
+  const message = typeof cause === "object" && cause !== null ? (cause as { readonly message?: unknown }).message : undefined;
+  return typeof message === "string" ? message : String(cause);
 };
+
+/** Why an Effect failed, in words: the `errorMessage` of its cause, squashed to one error. */
+export const causeMessage = (cause: Cause.Cause<unknown>): string => errorMessage(Cause.squash(cause));
+
+/** A fault in a line: the core's message, then what caused it. */
+export const faultMessage = (fault: { readonly message: string; readonly cause: Cause.Cause<unknown> }): string =>
+  `${fault.message}: ${causeMessage(fault.cause)}`;
 
 /**
  * One plugin the host knows, running or not: what clients see of it

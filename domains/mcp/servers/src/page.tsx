@@ -44,11 +44,11 @@ function Row(props: { item: ServerItem; selected: boolean; open: () => void }) {
           <Mark icon={props.item.icon} iconDark={props.item.iconDark} />
         </span>
         <span class="setting-text">
-          <span class="setting-title integration-row-title">
+          <span class="setting-title integration-row-title tw:truncate">
             {props.item.title}
             <Show when={props.item.version}>{(version) => <code class="integration-version">v{version()}</code>}</Show>
           </span>
-          <span class="setting-desc integration-row-status" data-tone={props.item.status.tone}>
+          <span class="setting-desc integration-row-status tw:truncate" data-tone={props.item.status.tone}>
             <Show when={dotted(props.item.status.tone)}>
               <span class="integration-dot" aria-hidden="true" />
             </Show>

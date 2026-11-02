@@ -10,8 +10,7 @@ lists (Connected, Popular, All providers, a search's results, and Custom) to
 connect again to `ErrorActions` (in `@lemma/threads`), the
 `LlmActionIds.providers` action ("Log in to a provider…") to `Actions`, and
 its row as the default of `ProviderRowPart`
-([`@lemma/llm/web`](../contract/src/web/parts.tsx)). Requires `Models`,
-`Settings`, `Dialogs`, `Notify`, `Slots`, and `WebPlugins`.
+([`@lemma/llm/web`](../contract/src/web/parts.tsx)).
 
 | Config  | Default | What it does                                                                                                                                                                                          |
 | ------- | ------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -19,33 +18,21 @@ its row as the default of `ProviderRowPart`
 
 ## Behavior
 
-- **Logins from any client.** The connect dialog shows what a running
-  sign-in asks now (`Models.signIns`), whichever client started it: the page
-  to open, the device code to enter and how long it lasts, the key to paste
-  (and why the provider refused the last one), or the flow's question, and
-  answers it (`Models.answerSignIn`). One another client started shows while
-  it waits on the person. Closing the dialog cancels the login
-  (`Models.cancelLogin`) wherever it runs; a click beside it does not close it.
-- **A browser on another machine.** One that cannot reach the host ends the
-  sign-in on a page that fails to load; the dialog takes that page's address
-  (a `browser` step that takes a paste), with the field open from the start
-  when the app itself is served from another machine, and says the
-  credentials are stored on the host.
-- **Who it is signed in as.** A row says the account and plan a sign-in
-  names, and one whose sign-in expired (`ProviderInfo.expired`) offers
-  **Sign in again**. A failed request in the transcript whose provider is not
-  connected, or whose sign-in expired, offers the same (`ErrorActions`).
-- **Logging out says what it does.** Lemma forgets its copy of the key or
-  sign-in; the dialog says the provider honors it until it is revoked there,
-  and links where a key is deleted.
-- **Custom providers.** The form asks a name, a base URL, a wire API, model
-  ids, and optionally a key and an SVG logo (chosen, or dropped on its button,
-  as `SvgDrop` in `@lemma/look` takes one). The
-  key never enters config: it answers the new provider's `api_key` sign-in,
-  so the host checks and stores it as it does any key; a key it refuses opens
-  the connect dialog to take another. Removing a custom provider logs out
-  of it first, unless its key comes from the environment or it needs none.
-- **Opened with nothing set up**, from the composer's notice or the palette,
-  the section says why, and Settings closes once a login connects a provider.
-- **Enter in the search** starts the first unconnected match's sign-in, else
-  its first way in.
+- **Sign-ins from any client.** The connect dialog shows and answers the step a
+  running sign-in asks (`Models.signIns`, `Models.answerSignIn`), whichever
+  client started it. Closing the dialog cancels the login wherever it runs
+  (`Models.cancelLogin`). A click beside the dialog does not close it.
+- **A browser on another machine.** Paste the address of the page the sign-in
+  ended on, which failed to load. The field is open from the start when the app
+  is served from another machine. The credentials are stored on the host.
+- **Sign in again.** A row names the account and plan its sign-in names. An
+  expired sign-in (`ProviderInfo.expired`) offers **Sign in again**. So does a
+  failed request in the transcript whose provider is not connected
+  (`ErrorActions`).
+- **Logging out** forgets Lemma's copy of the key or sign-in. The provider
+  honors it until you revoke it there, which the dialog links to.
+- **Custom providers.** The key never enters config. It answers the new
+  provider's `api_key` sign-in, so the host checks and stores it as any key.
+  Removing a custom provider logs out of it first, unless its key comes from the
+  environment or it needs none.
+- **Enter in the search** starts the first unconnected match's sign-in.

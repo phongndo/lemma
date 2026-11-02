@@ -1,6 +1,10 @@
 # llm.cli
 
-The model providers' commands for the `lemma` command (`CliCommands` in [`@lemma/cli`](../../cli/README.md)): `models`, `providers`, `login`, and `logout`; and the check `llm.models` (`CliChecks`), which `lemma doctor` fails when no model is there to use. Requires `Interaction`, to ask at the terminal what a sign-in asks; it reaches the providers through their channels. No config.
+The model providers' commands for the `lemma` command (`CliCommands` in
+[`@lemma/cli`](../../cli/README.md)): `models`, `providers`, `login`, and
+`logout`; and the check `llm.models` (`CliChecks`), which `lemma doctor` fails
+when no model is there to use. It asks at the terminal what a sign-in asks
+(`Interaction`), and reaches the providers through their channels. No config.
 
 ## `login`
 

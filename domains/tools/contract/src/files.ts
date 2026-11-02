@@ -1,7 +1,7 @@
 /**
  * Node only: `@lemma/tools/files`. What a tool that reads or writes files needs to behave as the bundled file tools
  * do: paths resolved against the session's directory (`~` expanded, a leading `@` dropped), messages for failed file
- * operations, one write at a time per file (`withFileLock`, and `withFileLocks` for several), and writes that replace
+ * operations, one write at a time per file (`withFileQueue`, and `withFileQueues` for several), and writes that replace
  * a file whole or not at all (`replaceFile`); and for a tool with output too long to return whole, a private temp file
  * holding it (`outputFile`), and its start and end for the model (`boundOutput`).
  */
@@ -14,6 +14,7 @@ import { keepEnds, lineCount } from "./bound.ts";
 import type { Cut } from "./bound.ts";
 import { ToolResult } from "./tools.ts";
 import { errorCode, expandHome, isAlive, kindOf, writeFileAtomic } from "@lemma/contracts/fs";
+import { errorMessage } from "@lemma/contracts";
 
 export const text = (value: string, details?: unknown): ToolResult =>
   new ToolResult({ content: [{ type: "text", text: value }], ...(details === undefined ? {} : { details }) });
@@ -62,7 +63,7 @@ export function fsMessage(cause: unknown, display: string): string {
     case "ENOTDIR":
       return `A parent of ${display} is not a directory`;
     default:
-      return cause instanceof Error ? cause.message : String(cause);
+      return errorMessage(cause);
   }
 }
 
@@ -86,19 +87,21 @@ export async function realPath(file: string): Promise<string> {
 const lockKey = realPath;
 
 /**
- * Serializes writes and edits to one file (across sessions too); different
- * files proceed in parallel. Keyed by real path so symlinks share a queue.
+ * Serializes writes and edits to one file in this process (across sessions
+ * too); different files proceed in parallel. Keyed by real path so symlinks
+ * share a queue. Other processes are not held off: `holdFileLock` in
+ * `@lemma/contracts/fs` is the lock between processes.
  */
-export async function withFileLock<T>(file: string, work: () => Promise<T>): Promise<T> {
+export async function withFileQueue<T>(file: string, work: () => Promise<T>): Promise<T> {
   return lockOn(await lockKey(file), work);
 }
 
 /**
- * `withFileLock` for several files at once, as a change to them together needs: each held until `work` settles, taken
+ * `withFileQueue` for several files at once, as a change to them together needs: each held until `work` settles, taken
  * one at a time in one order, so two calls naming the same files never each hold one the other waits for. Names of
  * one file (a symlink and its target) take its lock once.
  */
-export async function withFileLocks<T>(files: readonly string[], work: () => Promise<T>): Promise<T> {
+export async function withFileQueues<T>(files: readonly string[], work: () => Promise<T>): Promise<T> {
   const keys = [...new Set(await Promise.all(files.map(lockKey)))].sort();
   const take = (index: number): Promise<T> => (index === keys.length ? work() : lockOn(keys[index]!, () => take(index + 1)));
   return take(0);
@@ -265,7 +268,7 @@ export async function boundOutput(
     file = made.path;
     rest = `Full output: ${file}`;
   } catch (cause) {
-    rest = `The full output could not be saved: ${cause instanceof Error ? cause.message : String(cause)}`;
+    rest = `The full output could not be saved: ${errorMessage(cause)}`;
   } finally {
     made?.release();
   }

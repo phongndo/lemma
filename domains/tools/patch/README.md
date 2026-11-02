@@ -61,7 +61,7 @@ plugins off.
   a file's BOM is kept out of matching and put back, and the patch applies
   whole or not at all. Files are read, checked (writable, removable, not a
   directory; a file to create, in a directory that can take it), and patched
-  in memory under every file's lock (`withFileLocks`), before any is written.
+  in memory under every file's lock (`withFileQueues`), before any is written.
   A file is one file however the patch names it (`realPath`: through a
   symlink, or as a Move's destination), so a patch that would change one twice
   is refused, as Codex refuses a path named twice, rather than lose a change.

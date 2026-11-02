@@ -3,20 +3,8 @@ import { Cause, Duration, Effect, Exit, Fiber, Queue, Schema, Stream } from "eff
 import type { Context, Scope } from "effect";
 import { awaitable, definePlugin, PluginContext, Registries } from "@lemma/core";
 import type { Awaitable, Contribution } from "@lemma/core";
-import { Channels, HostError, Inspectors, InteractionError, InteractionOrigin, withContribution } from "@lemma/contracts";
-import {
-  asHostError,
-  CLI_CONTRACT,
-  CliChecks,
-  CliCommands,
-  CliRunner,
-  closest,
-  describeFailure,
-  InProgress,
-  inputProblem,
-  plainJson,
-  serveCli,
-} from "@lemma/cli";
+import { causeMessage, Channels, HostError, Inspectors, InteractionError, InteractionOrigin, withContribution } from "@lemma/contracts";
+import { asHostError, CLI_CONTRACT, CliChecks, CliCommands, CliRunner, closest, InProgress, inputProblem, plainJson, serveCli } from "@lemma/cli";
 import type { CheckResult, CliCommand, CliCommandInfo, CliContext, CliElement, CliResult, RunRequest } from "@lemma/cli";
 
 type Service = Context.Service.Shape<typeof CliRunner>;
@@ -307,7 +295,7 @@ const makeRunner = (
                 title: item.title,
                 source: pluginId,
                 status: "fail" as const,
-                message: `The check failed: ${describeFailure(Cause.squash(cause))}`,
+                message: `The check failed: ${causeMessage(cause)}`,
               }),
             ),
           ),

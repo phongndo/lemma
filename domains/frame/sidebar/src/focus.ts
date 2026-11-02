@@ -1,6 +1,6 @@
 import { onCleanup } from "solid-js";
 import { nothingFocused } from "@lemma/frame";
-import { stepFor } from "@lemma/web/keys";
+import { focusStep } from "@lemma/web/keys";
 import type { WebPluginContext } from "@lemma/web";
 
 /** What a press can put focus on. */
@@ -60,12 +60,8 @@ export const keepFocus = (plugin: Pick<WebPluginContext<unknown>, "listen">, lis
   return { focusIn: remember, focusOut: (event: FocusEvent) => forget(event.relatedTarget) };
 };
 
-/** Moves focus between rows with ↑ and ↓ (`stepFor`). */
+/** Moves focus between rows with ↑ and ↓ (`focusStep`), from a row only: a control in one keeps its keys. */
 export const rowKeys = (event: KeyboardEvent): void => {
-  const rows = [...(event.currentTarget as HTMLElement).querySelectorAll<HTMLElement>("[data-session-row]")];
-  const index = rows.indexOf(document.activeElement as HTMLElement);
-  const next = index === -1 ? undefined : stepFor(event.key, index, rows.length);
-  if (next === undefined) return;
-  event.preventDefault();
-  rows[next]?.focus();
+  if (document.activeElement?.matches("[data-session-row]") !== true) return;
+  if (focusStep(event.currentTarget as HTMLElement, "[data-session-row]", event.key) !== undefined) event.preventDefault();
 };

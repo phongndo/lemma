@@ -7,6 +7,7 @@ import { SectionIds, Settings, SettingsGroups, SettingsSections } from "@lemma/s
 import { Notify, Slots, WebPlugins, defineWebPlugin } from "@lemma/web";
 import type { WebPluginsService, SlotItem, SlotsService } from "@lemma/web";
 import { CommandIcon, PlusIcon, Popover, RefreshIcon, SearchField, SearchIcon, XIcon } from "@lemma/look";
+import { plural } from "@lemma/web/format";
 import styles from "./keys-page.css?inline";
 
 const SECTION = SectionIds.keyboard;
@@ -356,9 +357,7 @@ function KeysBody(props: { deps: Deps }) {
   return (
     <div class="keys-page" ref={page}>
       <SearchField value={query()} onInput={setQuery} placeholder="Search by command or keys" label="Search shortcuts">
-        <span class="shortcut-count">
-          {bound()} {bound() === 1 ? "shortcut" : "shortcuts"}
-        </span>
+        <span class="shortcut-count">{plural(bound(), "shortcut")}</span>
         <AddBinding deps={deps} onPick={setAdding} />
       </SearchField>
       <Show when={!keymapOn()}>

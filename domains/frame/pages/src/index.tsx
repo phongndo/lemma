@@ -8,6 +8,7 @@ import { SectionIds, SettingsRoute } from "@lemma/settings";
 import { Notify, Pages, Router, Slots, WebPlugins, defineWebPlugin } from "@lemma/web";
 import type { Page, SlotItem } from "@lemma/web";
 import { isMac } from "@lemma/web/keys";
+import { errorMessage } from "@lemma/contracts";
 import { ahead, see } from "./history.ts";
 import type { Seen } from "./history.ts";
 import styles from "./pages.css?inline";
@@ -28,7 +29,7 @@ export default defineWebPlugin({
   setup: ({ router, slots, notify, plugins }) => {
     function Failed(props: { failure: RouteFailure<SlotItem<Page>> }) {
       const owner = slots.owner(Pages, props.failure.entry.id);
-      const message = props.failure.error instanceof Error ? props.failure.error.message : String(props.failure.error);
+      const message = errorMessage(props.failure.error);
       notify.toast({ level: "error", ...(owner === undefined ? {} : { source: owner }), message: `This page failed: ${message}` });
       return (
         <main class="page-missing">

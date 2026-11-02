@@ -92,9 +92,10 @@ replace it.
 - **Utilities** (`src/tailwind.css`) are Tailwind's, prefixed `tw:` and named
   for the tokens: the token `--x` is the value `x`, as in `tw:bg-bg-raised`
   and `tw:text-text-2`. Use them for a plugin's own layout and spacing, as
-  `look.appearance-page` does. A piece other plugins draw, or a user would
-  restyle across the app, keeps a semantic class and a part, so one rule in a
-  stylesheet restyles it everywhere. Write a class whole (`tw:bg-accent`,
+  `look.appearance-page` does, and `tw:truncate` for a line cut short with an
+  ellipsis. A piece other plugins draw, or a user would restyle across the
+  app, keeps a semantic class and a part, so one rule in a stylesheet restyles
+  it everywhere. Write a class whole (`tw:bg-accent`,
   never `tw:bg-${name}`): the build finds classes by reading the source
   (`src/`, `domains/`, and `packages/web`).
 

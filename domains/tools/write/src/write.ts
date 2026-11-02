@@ -1,6 +1,6 @@
 import { Schema } from "effect";
 import type { Tool } from "@lemma/tools";
-import { fsMessage, replaceFile, resolveToCwd, text, throwIfAborted, withFileLock } from "@lemma/tools/files";
+import { fsMessage, replaceFile, resolveToCwd, text, throwIfAborted, withFileQueue } from "@lemma/tools/files";
 
 export const WriteInput = Schema.Struct({
   path: Schema.String.annotate({ description: "Path to the file to write (relative or absolute)" }),
@@ -15,7 +15,7 @@ export const writeTool: Tool<WriteInput> = {
   input: WriteInput,
   execute: async ({ path, content }, { cwd, signal }) => {
     const absolute = resolveToCwd(path, cwd);
-    return withFileLock(absolute, async () => {
+    return withFileQueue(absolute, async () => {
       // Checked between steps rather than rejecting from a listener, so the lock is held until the write settles.
       throwIfAborted(signal);
       try {

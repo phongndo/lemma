@@ -1,30 +1,19 @@
-import { Effect, Queue, Schedule, Schema, Stream } from "effect";
+import { Effect, Schedule, Schema, Stream } from "effect";
 // pi-ai's modules, not its index: the index loads TypeBox (~670 modules), which only a provider's requests use.
 import { createModels } from "@earendil-works/pi-ai/models";
-import type { AuthCheck, AuthContext, Provider, SimpleStreamOptions } from "@earendil-works/pi-ai";
+import type { AuthCheck, AuthContext, ModelTypeMap, Provider } from "@earendil-works/pi-ai";
 import { setOAuthPageRenderer } from "@earendil-works/pi-ai/utils/oauth-page";
 import { builtinProviders } from "@earendil-works/pi-ai/providers/all";
 import { Events, Hooks, Registries, definePlugin } from "@lemma/core";
 import type { Contribution } from "@lemma/core";
-import { Channels, HostControl, Notice, Paths } from "@lemma/contracts";
+import { Channels, errorMessage, HostControl, Notice, Paths } from "@lemma/contracts";
 import { Credentials } from "@lemma/credentials";
 import { Llm, LLM_CONTRACT, LlmError, makeSignIns, ModelsChanged, parseModelRef, Providers, serveLlm, streamThroughHook } from "@lemma/llm";
-import type { AuthType, LlmRequest, LoginOptions, ProviderInfo, ProviderSpec, StreamEvent } from "@lemma/llm";
+import type { AuthType, LlmRequest, LoginOptions, ProviderInfo, ProviderSpec } from "@lemma/llm";
 import { accountOf } from "./account.ts";
 import type { Account } from "./account.ts";
 import { credentialStore, runner, signInInteraction } from "./auth.ts";
-import {
-  makeEventMapper,
-  reasoningFor,
-  toClassifierContext,
-  toClassifierInfo,
-  toClassifierResult,
-  toContext,
-  toImageModelInfo,
-  toImagesContext,
-  toImagesResult,
-  toModelInfo,
-} from "./convert.ts";
+import { toClassifierContext, toClassifierInfo, toClassifierResult, toImageModelInfo, toImagesContext, toImagesResult, toModelInfo } from "./convert.ts";
 import { networkSources, planSource, withLiveCatalog, withPlanCatalog } from "./catalog.ts";
 import { deviceId } from "./device.ts";
 import { identityHeaders } from "./identity.ts";
@@ -40,6 +29,7 @@ import {
   withBuiltinIdentity,
   withoutAnthropicOAuth,
 } from "./providers.ts";
+import { streamResponse } from "./stream.ts";
 
 const Config = Schema.Struct({
   include: Schema.optional(Schema.Array(Schema.String)).annotate({ description: "Built-in provider ids to register; default all." }),
@@ -69,35 +59,6 @@ const Config = Schema.Struct({
     }),
 });
 type Config = typeof Config.Type;
-
-/** The response header a provider names its request id in, by the names providers use (not a CDN's trace id). */
-const REQUEST_ID_HEADERS = ["request-id", "x-request-id", "openai-request-id", "x-amzn-requestid", "x-goog-request-id"];
-const requestIdOf = (headers: Readonly<Record<string, string>>): string | undefined => {
-  const lower = new Map(Object.entries(headers).map(([key, value]) => [key.toLowerCase(), value]));
-  return REQUEST_ID_HEADERS.map((name) => lower.get(name)).find((value) => value !== undefined);
-};
-
-/** What `providerOptions` (`LlmRequest`) pi-ai passes on: a temperature, sampling parameters, and metadata. */
-const passedOn = (options: LlmRequest["providerOptions"]): Pick<SimpleStreamOptions, "temperature" | "samplingParams" | "metadata"> => {
-  if (options === undefined) return {};
-  const record = (value: unknown) => (typeof value === "object" && value !== null && !Array.isArray(value) ? (value as Record<string, unknown>) : undefined);
-  const temperature = typeof options.temperature === "number" ? options.temperature : undefined;
-  const samplingParams = record(options.samplingParams);
-  const metadata = record(options.metadata);
-  return {
-    ...(temperature === undefined ? {} : { temperature }),
-    ...(samplingParams === undefined ? {} : { samplingParams }),
-    ...(metadata === undefined ? {} : { metadata }),
-  };
-};
-
-/**
- * Times pi-ai asks again itself, before a response starts, when the provider
- * fails in a way its SDK would retry (pi-ai makes none unless told). It waits
- * the delay the provider names (`Retry-After`) up to a minute; a longer one it
- * reports in the error, for the caller to wait out.
- */
-const SDK_RETRIES = 2;
 
 interface Options {
   /** Replaces pi-ai's built-in provider list (tests register the faux provider here). Filtered by `include`/`exclude`. */
@@ -176,7 +137,7 @@ function loginError(error: unknown, provider: Provider): LlmError {
   if (isAbort(error)) {
     return new LlmError({ reason: "Cancelled", provider: provider.id, message: `${provider.name} login was cancelled`, cause: error });
   }
-  const detail = error instanceof Error ? error.message : String(error);
+  const detail = errorMessage(error);
   return new LlmError({ reason: "LoginFailed", provider: provider.id, message: `${provider.name} login failed: ${detail}`, cause: error });
 }
 
@@ -378,104 +339,45 @@ export function makeLlmPlugin(options: Options = {}) {
         return parsed === undefined ? undefined : models.getModel(parsed.provider, parsed.model);
       };
 
+      /**
+       * A list of one type of model, each as `info`: every one known, or (`available`) those of the providers set up to
+       * use. A provider that fails to say lists none.
+       */
+      const listOfType =
+        <M, I>(all: () => readonly M[], available: (provider: string, signal: AbortSignal) => Promise<readonly M[]>, info: (model: M) => I) =>
+        (query?: { readonly available?: boolean }) =>
+          query?.available === true
+            ? Effect.forEach(
+                models.getProviders(),
+                (provider) => Effect.tryPromise((signal) => available(provider.id, signal)).pipe(Effect.orElseSucceed(() => [])),
+                { concurrency: "unbounded" },
+              ).pipe(Effect.map((lists) => lists.flat().map(info)))
+            : Effect.sync(() => all().map(info));
+
+      /**
+       * Runs the model of `type` that `ref` names. pi-ai's `classify` and `generateImages` never reject: a provider's
+       * failure, or missing auth, is the result's error.
+       */
+      const runOfType = <T extends "classifier" | "image", R>(
+        type: T,
+        ref: string,
+        run: (model: ModelTypeMap[T], options: { readonly signal: AbortSignal; readonly headers?: Record<string, string> }) => Promise<R>,
+      ) =>
+        Effect.suspend(() => {
+          const parsed = parseModelRef(ref);
+          const model = parsed === undefined ? undefined : models.getModelOfType(type, parsed.provider, parsed.model);
+          if (model === undefined) return Effect.fail(unknownModel(ref));
+          const headers = identityHeaders(model);
+          return Effect.promise((signal) => run(model, { signal, ...(headers === undefined ? {} : { headers }) }));
+        });
+
       const terminal = (request: LlmRequest) =>
-        Effect.gen(function* () {
+        Effect.suspend(() => {
           const model = findModel(request.model);
           const provider = model === undefined ? undefined : models.getProvider(model.provider);
-          if (model === undefined || provider === undefined) return yield* Effect.fail(unknownModel(request.model));
-          const reasoning = reasoningFor(model, request.thinking);
-          // The model's own headers, and Lemma's User-Agent.
-          const headers = { ...model.headers, ...identityHeaders(model) };
-          return Stream.callback<StreamEvent>((queue) =>
-            Effect.acquireRelease(
-              Effect.sync(() => {
-                const controller = new AbortController();
-                const mapper = makeEventMapper(model, provider);
-                let closed = false;
-                /** The provider's answer, held until `start` has gone out: a stream begins with `start`. */
-                let answer: StreamEvent | undefined;
-                let started = false;
-                const send = (out: StreamEvent[]) => {
-                  if (closed || out.length === 0) return;
-                  // Where in `out` what was held goes: right after its `start`, first once the stream has started, or
-                  // before an error that came with no `start`.
-                  const startAt = out.findIndex((event) => event.type === "start");
-                  if (startAt >= 0) started = true;
-                  const at = startAt >= 0 ? startAt + 1 : started ? 0 : out.findIndex((event) => event.type === "error");
-                  if (answer !== undefined && at >= 0) {
-                    out = [...out.slice(0, at), answer, ...out.slice(at)];
-                    answer = undefined;
-                  }
-                  Queue.offerAllUnsafe(queue, out);
-                };
-                const streamOptions: SimpleStreamOptions = {
-                  signal: controller.signal,
-                  cacheRetention: config.cacheRetention,
-                  maxRetries: SDK_RETRIES,
-                  ...(Object.keys(headers).length === 0 ? {} : { headers }),
-                  ...(reasoning === undefined ? {} : { reasoning }),
-                  ...(request.maxTokens === undefined ? {} : { maxTokens: request.maxTokens }),
-                  ...(request.sessionId === undefined ? {} : { sessionId: request.sessionId }),
-                  ...passedOn(request.providerOptions),
-                  // Before its body: told to the caller, and logged with the answer.
-                  onResponse: (response) => {
-                    const requestId = requestIdOf(response.headers);
-                    answer = { type: "provider", status: response.status, ...(requestId === undefined ? {} : { requestId }) };
-                  },
-                };
-                const close = (out: StreamEvent[]) => {
-                  send(out);
-                  if (!closed) Queue.endUnsafe(queue);
-                  closed = true;
-                };
-                // A response that sends nothing for `streamTimeout` ends at once as a transient failure, and the
-                // request is aborted: a half-open connection would otherwise hold the turn forever.
-                const idleMs = config.streamTimeout * 1000;
-                let stalled = false;
-                let timer: ReturnType<typeof setTimeout> | undefined;
-                // Armed again on every event of the stream: one timer, restarted (`refresh`), rather than a new one each
-                // time. Never once it has fired, as `refresh` would start it again.
-                const arm = () => {
-                  if (idleMs <= 0 || stalled) return;
-                  if (timer !== undefined) {
-                    timer.refresh();
-                    return;
-                  }
-                  timer = setTimeout(() => {
-                    stalled = true;
-                    close(
-                      mapper.end(new Error(`The model sent nothing for ${config.streamTimeout} seconds; the request was cut off as stalled`), {
-                        kind: "transient",
-                      }),
-                    );
-                    controller.abort();
-                  }, idleMs);
-                };
-                void (async () => {
-                  arm();
-                  try {
-                    for await (const event of models.streamSimple(model, toContext(request, model), streamOptions)) {
-                      if (stalled) break;
-                      arm();
-                      send(mapper.push(event));
-                      if (mapper.finished) break;
-                    }
-                    close(mapper.end());
-                  } catch (error) {
-                    close(mapper.end(error));
-                  } finally {
-                    clearTimeout(timer);
-                  }
-                })();
-                return () => {
-                  clearTimeout(timer);
-                  controller.abort();
-                };
-              }),
-              // Interrupting the consumer aborts the provider request.
-              (stop) => Effect.sync(stop),
-            ),
-          );
+          return model === undefined || provider === undefined
+            ? Effect.fail(unknownModel(request.model))
+            : Effect.succeed(streamResponse(models, model, provider, request, config));
         });
 
       const llm = Llm.of({
@@ -506,14 +408,11 @@ export function makeLlmPlugin(options: Options = {}) {
           ),
         ),
 
-        models: (query) =>
-          query?.available === true
-            ? Effect.forEach(
-                models.getProviders(),
-                (provider) => Effect.tryPromise((signal) => models.getAvailable(provider.id, { signal })).pipe(Effect.orElseSucceed(() => [])),
-                { concurrency: "unbounded" },
-              ).pipe(Effect.map((lists) => lists.flat().map(toModelInfo)))
-            : Effect.sync(() => models.getModels().map(toModelInfo)),
+        models: listOfType(
+          () => models.getModels(),
+          (provider, signal) => models.getAvailable(provider, { signal }),
+          toModelInfo,
+        ),
 
         model: (ref) => {
           const model = findModel(ref);
@@ -522,50 +421,23 @@ export function makeLlmPlugin(options: Options = {}) {
 
         stream: (request) => streamThroughHook(hooks, request, terminal),
 
-        classifiers: (query) =>
-          query?.available === true
-            ? Effect.forEach(
-                models.getProviders(),
-                (provider) =>
-                  Effect.tryPromise((signal) => models.getAvailableOfType("classifier", provider.id, { signal })).pipe(Effect.orElseSucceed(() => [])),
-                { concurrency: "unbounded" },
-              ).pipe(Effect.map((lists) => lists.flat().map(toClassifierInfo)))
-            : Effect.sync(() => models.getModelsOfType("classifier").map(toClassifierInfo)),
+        classifiers: listOfType(
+          () => models.getModelsOfType("classifier"),
+          (provider, signal) => models.getAvailableOfType("classifier", provider, { signal }),
+          toClassifierInfo,
+        ),
 
         classify: (ref, context) =>
-          Effect.gen(function* () {
-            const parsed = parseModelRef(ref);
-            const model = parsed === undefined ? undefined : models.getModelOfType("classifier", parsed.provider, parsed.model);
-            if (model === undefined) return yield* Effect.fail(unknownModel(ref));
-            const headers = identityHeaders(model);
-            // pi-ai's classify never rejects: a provider's failure, or missing auth, is the result's error.
-            const result = yield* Effect.promise((signal) =>
-              models.classify(model, toClassifierContext(context), { signal, ...(headers === undefined ? {} : { headers }) }),
-            );
-            return toClassifierResult(result);
-          }),
+          runOfType("classifier", ref, (model, options) => models.classify(model, toClassifierContext(context), options)).pipe(Effect.map(toClassifierResult)),
 
-        imageModels: (query) =>
-          query?.available === true
-            ? Effect.forEach(
-                models.getProviders(),
-                (provider) => Effect.tryPromise((signal) => models.getAvailableOfType("image", provider.id, { signal })).pipe(Effect.orElseSucceed(() => [])),
-                { concurrency: "unbounded" },
-              ).pipe(Effect.map((lists) => lists.flat().map(toImageModelInfo)))
-            : Effect.sync(() => models.getModelsOfType("image").map(toImageModelInfo)),
+        imageModels: listOfType(
+          () => models.getModelsOfType("image"),
+          (provider, signal) => models.getAvailableOfType("image", provider, { signal }),
+          toImageModelInfo,
+        ),
 
         generateImages: (ref, context) =>
-          Effect.gen(function* () {
-            const parsed = parseModelRef(ref);
-            const model = parsed === undefined ? undefined : models.getModelOfType("image", parsed.provider, parsed.model);
-            if (model === undefined) return yield* Effect.fail(unknownModel(ref));
-            const headers = identityHeaders(model);
-            // Like classify: a provider's failure, or missing auth, is the result's error.
-            const result = yield* Effect.promise((signal) =>
-              models.generateImages(model, toImagesContext(context), { signal, ...(headers === undefined ? {} : { headers }) }),
-            );
-            return toImagesResult(result);
-          }),
+          runOfType("image", ref, (model, options) => models.generateImages(model, toImagesContext(context), options)).pipe(Effect.map(toImagesResult)),
 
         login: (providerId: string, type: AuthType, login: LoginOptions = {}) =>
           Effect.gen(function* () {
@@ -581,7 +453,7 @@ export function makeLlmPlugin(options: Options = {}) {
               );
             }
             const check = type === "api_key" ? keyCheck(provider, fetchImpl) : undefined;
-            const credential = yield* signIns
+            const { who } = yield* signIns
               .run(
                 providerId,
                 type,
@@ -598,11 +470,10 @@ export function makeLlmPlugin(options: Options = {}) {
                         return models.login(providerId, type, flow.interaction, { getDeviceId: () => deviceId(home), agentName: "Lemma" });
                       },
                       catch: (error) => loginError(error, provider),
-                    }).pipe(Effect.map((stored) => ({ stored, found: found?.() })));
+                    }).pipe(Effect.map((stored) => ({ who: accountOf(stored), found: found?.() })));
                   }),
-                ({ stored, found }) => {
-                  const { account } = accountOf(stored as Parameters<typeof accountOf>[0]);
-                  if (account !== undefined) return `Signed in as ${account}`;
+                ({ who, found }) => {
+                  if (who.account !== undefined) return `Signed in as ${who.account}`;
                   if (found?.models !== undefined) return `The key works: ${found.models} model${found.models === 1 ? "" : "s"} listed`;
                   return found === undefined ? undefined : "The key works";
                 },
@@ -610,19 +481,18 @@ export function makeLlmPlugin(options: Options = {}) {
               .pipe(Effect.ensuring(Effect.sync(() => returnTo.delete(providerId))));
             // Signed in afresh: whatever expired is gone, and who it is may have changed.
             expired.delete(providerId);
-            accounts.set(providerId, accountOf(credential.stored as Parameters<typeof accountOf>[0]));
+            accounts.set(providerId, who);
             // The credential is stored: the rest runs in the plugin's scope, so cancelling the login can no
             // longer report it cancelled. Its live catalog and `ModelsChanged` first, so clients that list
             // models on hearing of the login see all of them; every client learns of it, including one that
             // reloaded meanwhile.
-            const { account } = accountOf(credential.stored as Parameters<typeof accountOf>[0]);
             yield* Effect.forkIn(
               Effect.andThen(
                 authChanged(providerId),
                 events.publish(Notice, {
                   level: "info",
                   source: "llm.pi-ai",
-                  message: `Signed in to ${provider.name}${account === undefined ? "" : ` as ${account}`}`,
+                  message: `Signed in to ${provider.name}${who.account === undefined ? "" : ` as ${who.account}`}`,
                 }),
               ),
               scope,
@@ -633,6 +503,7 @@ export function makeLlmPlugin(options: Options = {}) {
 
         answerSignIn: signIns.answer,
 
+        // Signed out of a plan, the provider's own list returns; who it was, and why it expired, go with it.
         logout: (providerId) =>
           Effect.tryPromise({
             try: (signal) => models.logout(providerId, { signal }),
@@ -640,10 +511,9 @@ export function makeLlmPlugin(options: Options = {}) {
               new LlmError({
                 reason: "LoginFailed",
                 provider: providerId,
-                message: `Could not remove the ${providerId} credential: ${error instanceof Error ? error.message : String(error)}`,
+                message: `Could not remove the ${providerId} credential: ${errorMessage(error)}`,
                 cause: error,
               }),
-            // Signed out of a plan, the provider's own list returns; who it was, and why it expired, go with it.
           }).pipe(
             Effect.tap(() =>
               Effect.sync(() => {
@@ -677,6 +547,3 @@ export function makeLlmPlugin(options: Options = {}) {
 }
 
 export default makeLlmPlugin();
-
-export { credentialStore, runner } from "./auth.ts";
-export { makeEventMapper } from "./convert.ts";

@@ -46,7 +46,8 @@ export { makeSpanCollector } from "./trace.ts";
 export type { SpanCollector, SpanRecord } from "./trace.ts";
 export type { Unhandled } from "./unhandled.ts";
 export type { Awaitable } from "./awaitable.ts";
-export { configSchema } from "./config.ts";
+export { configSchema, firstIssue } from "./config.ts";
+export { builtinKeys, requiredBy } from "./internal/graph.ts";
 export type { ConfigDefaults, ConfigInput, ConfigOf, ConfigValue } from "./config.ts";
 export { definePlugin } from "./plugin.ts";
 export type {

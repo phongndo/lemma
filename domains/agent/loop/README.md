@@ -1,13 +1,12 @@
 # agent.loop
 
-Provides `Agent` (`@lemma/agent`): the turn loop. Requires `Sessions`, `Llm`,
-`ToolRunner`, `HostControl`, and `Paths`. Adds its `agent.base` and `agent.environment`
-sections to `PromptSections` (in its phases `base` and `environment`). Exclusive: a reload stops it, suspending
-its turns, before the new instance resumes them. Serves the `agent.*` channels
-(`AgentChannels`, through `serveAgent`): the calls clients make;
-`agent.activity`, each turn's and queue's change and its live output, which
-a client may leave out; and `agent.output`, one session's live output, for a
-client that shows it.
+Provides `Agent` (`@lemma/agent`): the turn loop. Adds its `agent.base` and
+`agent.environment` sections to `PromptSections` (in its phases `base` and
+`environment`). Exclusive: a reload stops it, suspending its turns, before the
+new instance resumes them. Serves the `agent.*` channels (`AgentChannels`,
+through `serveAgent`): the calls clients make; `agent.activity`, each turn's and
+queue's change and its live output, which a client may leave out; and
+`agent.output`, one session's live output, for a client that shows it.
 
 Its web half (`./web`) offers `maxSteps`, `maxRunning`, and `keepCancelled` in
 Settings › General › Agent, read from and written to its host half's row through
@@ -46,11 +45,11 @@ Effect.gen(function* () {
 
 ## Base prompt
 
-The `agent.base` section ([`kit/prompt.ts`](../contract/src/kit/prompt.ts)) says how the agent
-works, not how to use any tool: that is in each tool's own description, so a
-replaced or removed tool takes its advice with it, and the section's text is the
-same for every request. What a thread's agent is for (coding, writing) is its
-mode's ([`agent.modes`](../modes/README.md)).
+The `agent.base` section ([`kit/prompt.ts`](../contract/src/kit/prompt.ts)) says
+how the agent works, not how to use any tool: that is in each tool's own
+description, so a replaced or removed tool takes its advice with it, and the
+section's text is the same for every request. What a thread's agent is for
+(coding, writing) is its mode's ([`agent.modes`](../modes/README.md)).
 
 ## A turn
 
@@ -73,19 +72,20 @@ mode's ([`agent.modes`](../modes/README.md)).
 3. Each step: `step-start`; a `RequestDraft` with the sections `PromptSections`
    holds, in order, each written for the request and attributed to the plugin
    that added it (its own: the base prompt, and the environment: the harness,
-   the model asked, cwd, date, platform, session id, and the `cli` command when configured), `ToolRunner.list`, the turn's branch and
+   the model asked, cwd, date, platform, session id, and the `cli` command when
+   configured), `ToolRunner.list`, the turn's branch and
    `deriveMessages(branch)`, and `append`; `AgentRequestHook`, whose handlers
-   change what the model sees by appending events with `append` (a
-   `compaction`, whose `usage` the turn's then includes); the `request` event with
-   the hook's `handlers` (each one's own time, and what it changed: `+section
-   skills`, `-tool bash`, `model a → b`, `+compaction`), the
-   `HostControl.composition` id, and `system`, `tools`, and the per-section and
-   per-tool `contributions` only when they differ from `requestState(branch)`'s.
-   The request actually sent is built from the branch and request state the turn
-   keeps as it appends (`requestFrom`), which is `rebuildRequest` over the branch
-   ending at that event: where `Verify` is on (every simulated run), each request
-   is checked against a rebuild from the store's branch, and its contributions
-   against those the branch resolves for it.
+   change what the model sees by appending events with `append` (a `compaction`,
+   whose `usage` the turn's then includes); the `request` event with the hook's
+   `handlers` (each one's own time, and what it changed: `+section skills`,
+   `-tool bash`, `model a → b`, `+compaction`), the `HostControl.composition`
+   id, and `system`, `tools`, and the per-section and per-tool `contributions`
+   only when they differ from `requestState(branch)`'s. The request actually
+   sent is built from the branch and request state the turn keeps as it appends
+   (`requestFrom`), which is `rebuildRequest` over the branch ending at that
+   event: where `Verify` is on (every simulated run), each request is checked
+   against a rebuild from the store's branch, and its contributions against
+   those the branch resolves for it.
 
    A request extends the previous one on the branch (see [Append-only
    requests](#append-only-requests)): it sends that request's system prompt and
@@ -98,22 +98,21 @@ mode's ([`agent.modes`](../modes/README.md)).
    declaring a tool the previous did not, or one whose declaration changed
    (`tools`).
 
-4. `Llm.stream`: every event is published as `AssistantDelta`. `done` appends the
-   assistant `message` with timing (`firstTokenAt` = first text, thinking, or
-   tool-call delta). `error` appends an `attempt` with the call's `failure`, and
-   the call is asked again (see [Retries](#retries)) or the turn ends
+4. `Llm.stream`: every event is published as `AssistantDelta`. `done` appends
+   the assistant `message` with timing (`firstTokenAt` = first text, thinking,
+   or tool-call delta). `error` appends an `attempt` with the call's `failure`,
+   and the call is asked again (see [Retries](#retries)) or the turn ends
    (`cancelled` for an aborted stream, else `error`).
 5. Tool calls run through `Tools.execute` with the turn's signal, in order,
    except that a run of consecutive calls whose tools are `parallel: "safe"`
-   (`read` is) runs at once, `parallelTools` at a time. Before calls run, a `custom`
-   event (`agent.started`) names them; each result is appended as it arrives, with
-   timing, `details`, and its `credit` (who shaped it: `ToolExecuteHook`'s
-   handlers, the guards' decisions, the registry's cut), and the model reads the
-   results in call order. Unknown
-   tools and tool failures are error results the model reads. A response that
-   stopped at its output limit (`length`) runs none of its calls, whose
-   arguments may be cut off: each is answered with an error asking the model to
-   make it again.
+   (`read` is) runs at once, `parallelTools` at a time. Before calls run, a
+   `custom` event (`agent.started`) names them; each result is appended as it
+   arrives, with timing, `details`, and its `credit` (who shaped it:
+   `ToolExecuteHook`'s handlers, the guards' decisions, the registry's cut), and
+   the model reads the results in call order. Unknown tools and tool failures
+   are error results the model reads. A response that stopped at its output
+   limit (`length`) runs none of its calls, whose arguments may be cut off: each
+   is answered with an error asking the model to make it again.
 6. `AgentContinueHook` (default: continue while the model asked for tools, or
    has tool results to read whatever its stop reason), then `step-end`. Steers
    queued meanwhile are placed here as user messages, and the turn goes on to
@@ -133,9 +132,9 @@ assistant `message` it got as far as (its text, and thinking a provider can
 replay; no tool call), marked `aborted`, and the model sees it next as a reply
 that ended there, as the user read it (`keepCancelled`). It then answers every
 unanswered tool call with an error result (so the next request stays valid),
-then `step-end` and `turn-end`. `TurnStarted`/`TurnEnded` carry the summed usage.
-A turn the agent is closing under (the host stopping, the plugin reloading) is
-left open instead, to resume (see [Stopping](#stopping)).
+then `step-end` and `turn-end`. `TurnStarted`/`TurnEnded` carry the summed
+usage. A turn the agent is closing under (the host stopping, the plugin
+reloading) is left open instead, to resume (see [Stopping](#stopping)).
 
 ## Append-only requests
 
@@ -259,13 +258,13 @@ for the user's reply. A plugin could append a `context` event itself, but the
 model would read it only once a turn's next request did: a notice reaches it
 now.
 
-With no turn running, it starts one only if the last turn this instance saw
-ran to its end (`done` or `max-steps`) and nothing is queued, on the model and
-thinking that turn had (its `turn-start`), not the agent's default. After a turn the
-user cancelled, or one that failed, the notice waits in the queue, held, and
-goes with the user's next prompt: a command finishing does not restart work
-the user stopped, nor send the prompts held after it. A notice published while
-no agent runs (one reloading) is lost.
+With no turn running, it starts one only if the last turn this instance saw ran
+to its end (`done` or `max-steps`) and nothing is queued, on the model and
+thinking that turn had (its `turn-start`), not the agent's default. After a turn
+the user cancelled, or one that failed, the notice waits in the queue, held, and
+goes with the user's next prompt: a command finishing does not restart work the
+user stopped, nor send the prompts held after it. A notice published while no
+agent runs (one reloading) is lost.
 
 ## Durability
 
@@ -273,21 +272,22 @@ A host that crashes, restarts, or reloads the agent loses no turn and no queued
 prompt. Beside the log, under `<Paths.home>/agent`, the agent keeps per session:
 
 - `<session>.json`, the journal: the turn, running or suspended (the prompts it
-  was started with, whether it logs `agent.started` events, whether it is
-  being cancelled, and how it ended when its `turn-end` did not reach the log), the queue, and the request ids retracted lately (how many,
-  and what a prompt sent again with one gets: `Retracted` in the contract).
-  Written, and synced with its directory, before the log is, whenever the turn
-  or the queue changes. A change the log will not record (a turn starting, a
-  prompt queued, withdrawn, or promoted) is made only once the journal has it:
-  when the journal cannot be written (a full or failing disk), the call that
-  asked for it fails `Io` and this instance does not make it (`AgentError` in
-  the contract); a turn the agent starts itself, for the next queued prompt once
-  one ends, is not started, and the queue waits for the next prompt. A write
-  that failed may still have landed (renamed into place, its directory not
-  synced), so an instance started after it may find the change made (what a
-  client then does: `Io` in the contract). A change the log records already (a
-  steer placed, a turn ended, a cancel asked for) is made whatever the write
-  does, and checked against the log on the next start.
+  was started with, whether it logs `agent.started` events, whether it is being
+  cancelled, and how it ended when its `turn-end` did not reach the log), the
+  queue, and the request ids retracted lately (how many, and what a prompt sent
+  again with one gets: `Retracted` in the contract). Written, and synced with
+  its directory, before the log is, whenever the turn or the queue changes. A
+  change the log will not record (a turn starting, a prompt queued, withdrawn,
+  or promoted) is made only once the journal has it: when the journal cannot be
+  written (a full or failing disk), the call that asked for it fails `Io` and
+  this instance does not make it (`AgentError` in the contract); a turn the
+  agent starts itself, for the next queued prompt once one ends, is not started,
+  and the queue waits for the next prompt. A write that failed may still have
+  landed (renamed into place, its directory not synced), so an instance started
+  after it may find the change made (what a client then does: `Io` in the
+  contract). A change the log records already (a steer placed, a turn ended, a
+  cancel asked for) is made whatever the write does, and checked against the log
+  on the next start.
 - `<session>.live.json`: the running turn's model output and tool output so
   far, rewritten at most every 250 ms while it changes, and not synced.
 
@@ -334,19 +334,19 @@ The model is the one the turn was started with (`turn-start`), else the default.
 After the resumed turn, the queue runs on. Prompts a client sent before the
 restart can be awaited again with their `requestId`.
 
-Taking a session up changes nothing until all of that has been read, but for
-the queue's check. A session the store says does not exist (`NotFound`) goes,
+Taking a session up changes nothing until all of that has been read, but for the
+queue's check. A session the store says does not exist (`NotFound`) goes,
 journal and all. One that cannot be taken up otherwise (the store fails, or no
 model resolves) stays as it was, its queue checked if the log was read, with a
 warning in the log; it is taken up when it is next prompted, the prompt failing
 as the reading did if it still cannot be, or at the next start. Until then its
 turn stays suspended, and is not running: `busy`, `running` and `view` leave it
 out, and nothing holds the session for it, so the session can be deleted, which
-drops the turn. `queue`, `view`, `withdraw` and `promote` see the session's queue, checking
-it against the log first if that was not done, and fail as reading the log does
-if it still cannot be (see `Agent.queue`). `cancel` records the cancellation in
-the journal, then takes the session up at once if it can (see `Agent.cancel`
-for when it answers).
+drops the turn. `queue`, `view`, `withdraw` and `promote` see the session's
+queue, checking it against the log first if that was not done, and fail as
+reading the log does if it still cannot be (see `Agent.queue`). `cancel` records
+the cancellation in the journal, then takes the session up at once if it can
+(see `Agent.cancel` for when it answers).
 
 ## Stopping
 
@@ -382,34 +382,35 @@ asked again, or run (or reported interrupted) when the turn resumes.
   the branch would hold them alone, then beside the copy the store reads back.
   Where `Verify` is on (a simulation), each request is checked against a
   rebuild from the store.
-- **Explicit parents.** After `turn-start`, every append names the previous event
-  as its parent, so a `checkout` during a turn cannot splice the turn into another
-  branch. Request handlers append through the turn too (`RequestDraft.append`),
-  so their events chain the same way, and one appended before a later handler
-  fails or the turn is cancelled stays on the turn's branch.
+- **Explicit parents.** After `turn-start`, every append names the previous
+  event as its parent, so a `checkout` during a turn cannot splice the turn into
+  another branch. Request handlers append through the turn too
+  (`RequestDraft.append`), so their events chain the same way, and one appended
+  before a later handler fails or the turn is cancelled stays on the turn's
+  branch.
 - **Branch points in the log.** A provider needs a result for every tool call,
   and pi-ai would make one up for a call that has none, sending what the log
   does not hold. So a turn begun after a checkout into a turn logs those
   results first; `rebuildRequest` then rebuilds what was sent.
-- **Plugin-owned turns.** Turns are forked into the plugin's scope. `prompt` awaits
-  the turn, but interrupting the caller does not cancel it; only `cancel` does
-  (abort the signal, then interrupt, which a caller interrupted meanwhile does
-  not split: the cancel goes on), and it returns after `turn-end` is logged
+- **Plugin-owned turns.** Turns are forked into the plugin's scope. `prompt`
+  awaits the turn, but interrupting the caller does not cancel it; only `cancel`
+  does (abort the signal, then interrupt, which a caller interrupted meanwhile
+  does not split: the cancel goes on), and it returns after `turn-end` is logged
   (or, for a turn still waiting for a slot, once it has ended without logging).
   Closing the plugin suspends running turns (see [Stopping](#stopping)).
 - **Intent before effect.** `agent.started` is synced before a tool call runs,
   so a restart tells a call that may have run from one that never did, and runs
   the latter rather than reporting it interrupted.
 - **Journal before log.** A turn is in the journal before its first event is in
-  the log, and leaves it after its `turn-end`; a steer leaves the queue after its
-  message is logged. Whichever write a crash falls between, the restart finds
-  enough to resume, and the log settles any disagreement.
+  the log, and leaves it after its `turn-end`; a steer leaves the queue after
+  its message is logged. Whichever write a crash falls between, the restart
+  finds enough to resume, and the log settles any disagreement.
 - **Uninterruptible appends.** Each append and the bookkeeping that follows it
   complete together, so a cancel can never leave an event in the log that the
   closing sequence does not know about (which would duplicate tool results).
 - **Errors.** LLM failures are recorded in the log (`attempt`, `turn-end` with
-  `error`) and `prompt` resolves; `Session` and `Hook` failures also fail `prompt`.
-  A cancelled turn resolves normally.
+  `error`) and `prompt` resolves; `Session` and `Hook` failures also fail
+  `prompt`. A cancelled turn resolves normally.
 
 ## Testing
 
@@ -419,9 +420,9 @@ The plugin is `makeAgentPlugin(options)` with the defaults filled in, as
 and prompt ids' random bytes come from (`ids`, an `IdSource`), and the platform
 the environment section names (`platform`). Time comes from Effect's `Clock`
 (`scripts/check-boundaries.ts` keeps the plugin from reaching the wall clock, a
-timer, or the disk any other way), so one seed fixes a run.
-`tests/disk.test.ts` crashes a `SimDisk` right after the queue changes and
-checks the journal kept the change.
+timer, or the disk any other way), so one seed fixes a run. `tests/disk.test.ts`
+crashes a `SimDisk` right after the queue changes and checks the journal kept
+the change.
 
 ## Inspector
 

@@ -132,7 +132,7 @@ export function PromptRail(props: {
         <Show when={shown()}>
           {(preview) => (
             <div class="prompt-card" ref={card} aria-hidden="true">
-              <div class="prompt-card-prompt">{preview().prompt}</div>
+              <div class="prompt-card-prompt tw:truncate">{preview().prompt}</div>
               <Show when={preview().reply}>
                 <div class="prompt-card-reply">{preview().reply}</div>
               </Show>

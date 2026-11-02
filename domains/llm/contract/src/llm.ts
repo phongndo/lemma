@@ -164,20 +164,27 @@ export const parseModelRef = (ref: ModelRef): { readonly provider: string; reado
   return { provider: ref.slice(0, slash), model: ref.slice(slash + 1) };
 };
 
-export const ModelInfo = Schema.Struct({
+/** What the info of every kind of model says: which model it is, its wire API, and what it takes in. */
+const ModelBase = Schema.Struct({
   /** `<provider>/<model>` */
   ref: ModelRef,
   provider: Schema.String,
   id: Schema.String,
   name: Schema.String,
   api: Schema.String,
+  input: Schema.Array(Schema.Literals(["text", "image"])),
+});
+
+/** USD per million tokens. */
+const Cost = Schema.Struct({ input: Schema.Number, output: Schema.Number });
+
+export const ModelInfo = Schema.Struct({
+  ...ModelBase.fields,
   reasoning: Schema.Boolean,
   thinkingLevels: Schema.Array(ThinkingLevel),
-  input: Schema.Array(Schema.Literals(["text", "image"])),
   contextWindow: Schema.Number,
   maxTokens: Schema.Number,
-  /** USD per million tokens. */
-  cost: Schema.Struct({ input: Schema.Number, output: Schema.Number, cacheRead: Schema.Number, cacheWrite: Schema.Number }),
+  cost: Schema.Struct({ ...Cost.fields, cacheRead: Schema.Number, cacheWrite: Schema.Number }),
 });
 export type ModelInfo = typeof ModelInfo.Type;
 
@@ -186,16 +193,9 @@ export type ModelInfo = typeof ModelInfo.Type;
  * includes `"image"`, images) with probabilities, such as TypeSafe's Jev. `Llm.classify` runs it.
  */
 export const ClassifierInfo = Schema.Struct({
-  /** `<provider>/<model>` */
-  ref: ModelRef,
-  provider: Schema.String,
-  id: Schema.String,
-  name: Schema.String,
-  api: Schema.String,
-  input: Schema.Array(Schema.Literals(["text", "image"])),
+  ...ModelBase.fields,
   contextWindow: Schema.Number,
-  /** USD per million tokens. */
-  cost: Schema.Struct({ input: Schema.Number, output: Schema.Number }),
+  cost: Cost,
 });
 export type ClassifierInfo = typeof ClassifierInfo.Type;
 
@@ -247,17 +247,10 @@ export type ClassifierResult = typeof ClassifierResult.Type;
 
 /** An image model: one that makes images from text and images, such as Gemini's image models. `Llm.generateImages` runs it. */
 export const ImageModelInfo = Schema.Struct({
-  /** `<provider>/<model>` */
-  ref: ModelRef,
-  provider: Schema.String,
-  id: Schema.String,
-  name: Schema.String,
-  api: Schema.String,
-  input: Schema.Array(Schema.Literals(["text", "image"])),
+  ...ModelBase.fields,
   /** Always includes `"image"`; `"text"`: it may answer with text blocks too. */
   output: Schema.Array(Schema.Literals(["text", "image"])),
-  /** USD per million tokens. */
-  cost: Schema.Struct({ input: Schema.Number, output: Schema.Number }),
+  cost: Cost,
 });
 export type ImageModelInfo = typeof ImageModelInfo.Type;
 
@@ -697,18 +690,14 @@ export const LlmChannels = {
     repeatable: true,
   }),
   /**
-   * Runs a provider's login flow, as `Llm.login`; what it asks of the person
-   * is its `SignIn`, which `llm.sign-ins` lists and `llm.answer-sign-in`
-   * answers. The login belongs to the provider, not to the call: it runs in
-   * the provider's scope, so a client that drops its connection leaves it
-   * running, its step waiting for a client to answer, and a second call for the
-   * same provider and type waits for the same login (its options are the
-   * first's). Fails `Busy` while a login of the other type to that provider
-   * runs, `Cancelled` when `llm.cancel-login` stops it, and as `Llm.login` does
-   * (`UnknownProvider`, `LoginFailed`). When the provider stops or reloads, the
-   * call fails `Withdrawn` at once, and the login ends with the provider:
-   * calling again starts one on the replacement. It is not `repeatable`, since
-   * a new login asks the person again: whether to is the client's to decide.
+   * `Llm.login` for a client. The login belongs to the provider, not to the
+   * call: a client that drops its connection leaves it running, and a second
+   * call for the same provider and type waits for the same login (with the
+   * first's options). Fails `Busy` while a login of the other type to that
+   * provider runs, and `Cancelled` when `llm.cancel-login` stops it. When the
+   * provider stops or reloads, the call fails `Withdrawn` at once, and the
+   * login ends with the provider: calling again starts one on the replacement.
+   * Not `repeatable`, since a new login asks the person again.
    */
   login: defineChannel({
     kind: "call",

@@ -13,6 +13,15 @@ export const ageOf = (at: number, now: number = Date.now()): { readonly count: n
   return { count: Math.round(h / 24), unit: "d" };
 };
 
+/** How long since `since` (epoch ms), shortly: `12s`, `3m`, `1h 5m`. What a running turn or agent shows. */
+export const elapsed = (since: number, now: number): string => {
+  const seconds = Math.max(0, Math.floor((now - since) / 1000));
+  if (seconds < 60) return `${seconds}s`;
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes}m`;
+  return `${Math.floor(minutes / 60)}h ${minutes % 60}m`;
+};
+
 /** How long ago `at` was, in words: `just now`, `36m ago`, `4h ago`, `2d ago`; from a week, its date. */
 export const relativeTime = (at: number, now: number = Date.now()): string => {
   const age = ageOf(at, now);
@@ -20,6 +29,13 @@ export const relativeTime = (at: number, now: number = Date.now()): string => {
   if (age.unit !== "d" || age.count < 7) return `${age.count}${age.unit} ago`;
   return new Date(at).toLocaleDateString(undefined, { month: "short", day: "numeric", ...(age.count > 300 ? { year: "numeric" } : {}) });
 };
+
+/**
+ * A count with its noun, the noun plural unless the count is 1: `plural(3, "tool")` is `3 tools`. `many` is the plural
+ * where adding `s` would be wrong (`plural(2, "match", "matches")`). The noun may be several words
+ * (`plural(2, "queued prompt")`).
+ */
+export const plural = (count: number, one: string, many = `${one}s`): string => `${count} ${count === 1 ? one : many}`;
 
 /** The time of day of `at` (epoch ms) to the millisecond: `14:03:07.042`. */
 export const clockTime = (at: number): string => {

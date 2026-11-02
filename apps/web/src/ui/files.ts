@@ -1,6 +1,7 @@
 import type { WebFile } from "@lemma/contracts";
 import type { Plugin } from "@lemma/core";
 import type { LocalPlugin } from "@lemma/composition";
+import { errorMessage } from "@lemma/contracts";
 import { extractCandidates } from "../model/candidates.ts";
 
 interface LoadedFiles {
@@ -73,7 +74,7 @@ export function createFileLoader(token: string | undefined, api: () => Promise<u
       utilities.textContent = css;
       return [];
     } catch (error) {
-      return [`Web halves' Tailwind classes: cannot compile: ${error instanceof Error ? error.message : String(error)}`];
+      return [`Web halves' Tailwind classes: cannot compile: ${errorMessage(error)}`];
     }
   };
 
@@ -113,7 +114,7 @@ export function createFileLoader(token: string | undefined, api: () => Promise<u
       }
       return { plugins: [{ plugin: made, source: file.source }], problems: [] };
     } catch (error) {
-      return { plugins: [], problems: [`${where}: cannot load: ${error instanceof Error ? error.message : String(error)}`] };
+      return { plugins: [], problems: [`${where}: cannot load: ${errorMessage(error)}`] };
     }
   };
 

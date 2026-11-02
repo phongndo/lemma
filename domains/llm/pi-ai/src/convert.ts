@@ -18,6 +18,7 @@ import type {
   ToolCall,
   Usage,
 } from "@lemma/llm";
+import { errorMessage } from "@lemma/contracts";
 
 // Pure mappings between pi-ai values and the contract shapes. Contract messages
 // are pi-ai-shaped, so requests pass through; results are rebuilt field by field
@@ -363,7 +364,7 @@ export function makeEventMapper(model: Pi.Model<Pi.Api>, provider: { readonly id
     /** Call when pi's stream ends or throws; closes a stream that ended without a terminal. `failure` overrides the classification. */
     end(cause?: unknown, failure?: LlmFailure): StreamEvent[] {
       if (finished) return [];
-      const reason = cause === undefined ? "The provider stream ended without a result" : cause instanceof Error ? cause.message : String(cause);
+      const reason = cause === undefined ? "The provider stream ended without a result" : errorMessage(cause);
       return terminal(
         { ...(latest ?? emptyMessage(model)), stopReason: "error", errorMessage: reason },
         undefined,

@@ -9,7 +9,6 @@ import type { SessionEvent } from "@lemma/sessions";
 import sessionsPlugin from "@lemma/sessions-files";
 import { projectionOf } from "@lemma/testing";
 import type { Projection } from "@lemma/testing";
-import { HOME } from "./host.ts";
 import { World } from "./world.ts";
 
 /**
@@ -19,120 +18,110 @@ import { World } from "./world.ts";
  * a version already committed.
  */
 
-/** The whole lines of a file's text: a torn last line (no newline) is a write the store does not serve. */
-const wholeLines = (text: string): string => {
-  const end = text.lastIndexOf("\n");
-  return end === -1 ? "" : text.slice(0, end + 1);
-};
-
-/** Loads each file with the real store, in a home of its own; returns the events of those that load, by file name. */
-async function loadable(files: ReadonlyMap<string, string>): Promise<Map<string, readonly SessionEvent[]>> {
+/** Runs `use` in a home of its own, removed once it is done. */
+async function inHome<A>(use: (home: string) => Promise<A>): Promise<A> {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "lemma-fixtures-"));
   try {
+    return await use(home);
+  } finally {
+    await fs.rm(home, { recursive: true, force: true });
+  }
+}
+
+/** Runs `effect` with the real store on `home`, `cwd` its project. */
+const withStore = <A>(home: string, cwd: string, effect: Effect.Effect<A, unknown, Sessions>): Promise<A> =>
+  Effect.runPromise(Effect.scoped(Effect.flatMap(makeCore([pathsPlugin(home, { cwd }), sessionsPlugin]), (core) => core.run(effect))));
+
+/** Loads each file with the real store, in a home of its own; returns the events of those that load, by file name. */
+const loadable = (files: ReadonlyMap<string, string>): Promise<Map<string, readonly SessionEvent[]>> =>
+  inHome(async (home) => {
     for (const [relative, text] of files) {
       const target = path.join(home, "sessions", relative);
       await fs.mkdir(path.dirname(target), { recursive: true });
       await fs.writeFile(target, text);
     }
-    return await Effect.runPromise(
-      Effect.scoped(
-        Effect.gen(function* () {
-          const core = yield* makeCore([pathsPlugin(home, { cwd: "/fixtures" }), sessionsPlugin]);
-          return yield* core.run(
-            Effect.gen(function* () {
-              const store = yield* Sessions;
-              const out = new Map<string, readonly SessionEvent[]>();
-              for (const relative of files.keys()) {
-                const id = /_([A-Za-z0-9_-]+)\.jsonl$/.exec(relative)?.[1];
-                if (id === undefined) continue;
-                const events = yield* Effect.option(store.events(id));
-                if (events._tag === "Some" && events.value.length > 0) out.set(relative, events.value);
-              }
-              return out;
-            }),
-          );
-        }),
-      ),
+    return withStore(
+      home,
+      "/fixtures",
+      Effect.gen(function* () {
+        const store = yield* Sessions;
+        const out = new Map<string, readonly SessionEvent[]>();
+        for (const relative of files.keys()) {
+          const id = /_([A-Za-z0-9_-]+)\.jsonl$/.exec(relative)?.[1];
+          if (id === undefined) continue;
+          const events = yield* Effect.option(store.events(id));
+          if (events._tag === "Some" && events.value.length > 0) out.set(relative, events.value);
+        }
+        return out;
+      }),
     );
-  } finally {
-    await fs.rm(home, { recursive: true, force: true });
-  }
-}
+  });
 
 /** A session the workload does not make: marks, a relocation while empty, a checkout record, and a second branch. */
-async function handMade(): Promise<Map<string, string>> {
-  const home = await fs.mkdtemp(path.join(os.tmpdir(), "lemma-fixtures-"));
-  try {
-    await Effect.runPromise(
-      Effect.scoped(
-        Effect.gen(function* () {
-          const core = yield* makeCore([pathsPlugin(home, { cwd: "/fixtures/app" }), sessionsPlugin]);
-          yield* core.run(
-            Effect.gen(function* () {
-              const store = yield* Sessions;
-              const { id } = yield* store.create({ cwd: "/fixtures/first" });
-              yield* store.relocate(id, "/fixtures/app");
-              const user = yield* store.append(id, {
-                type: "message",
-                message: { role: "user", content: [{ type: "text", text: "Hello" }], timestamp: 1 },
-                requestId: "fixture-1",
-              });
-              yield* store.append(id, { type: "title", title: "Hello" });
-              yield* store.append(id, {
-                type: "message",
-                message: {
-                  role: "assistant",
-                  content: [{ type: "text", text: "Hi." }],
-                  api: "openai-completions",
-                  provider: "fixture",
-                  model: "fixture-model",
-                  usage: {
-                    input: 1,
-                    output: 1,
-                    cacheRead: 0,
-                    cacheWrite: 0,
-                    totalTokens: 2,
-                    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-                  },
-                  stopReason: "stop",
-                  timestamp: 2,
-                },
-              });
-              yield* store.mark(id, { pinned: true });
-              const second = yield* store.append(id, {
-                type: "message",
-                message: { role: "user", content: [{ type: "text", text: "Again" }], timestamp: 3 },
-                requestId: "fixture-2",
-              });
-              // A compaction keeping the second prompt, then a request after it: the summary replaces what came before.
-              yield* store.append(id, { type: "compaction", summary: "The user said hello.", firstKeptId: second.id, tokensBefore: 10, source: "fixture" });
-              yield* store.append(id, { type: "turn-start", turnId: "t1", model: "fixture/fixture-model" });
-              yield* store.append(id, { type: "step-start", turnId: "t1", stepId: "s1" });
-              yield* store.append(id, {
-                type: "request",
-                turnId: "t1",
-                stepId: "s1",
-                model: "fixture/fixture-model",
-                composition: "fixture",
-                system: "You are a fixture.",
-                tools: [],
-                contributions: [{ source: "agent.loop", kind: "system", label: "agent.base", chars: 18 }],
-              });
-              yield* store.append(id, { type: "step-end", turnId: "t1", stepId: "s1" });
-              yield* store.append(id, { type: "turn-end", turnId: "t1", reason: "done" });
-              yield* store.checkout(id, user.id);
-              yield* store.append(id, { type: "custom", kind: "fixture.note", data: { branch: 2 } });
-              yield* store.mark(id, { archived: true, pinned: false });
-            }),
-          );
-        }),
-      ),
+const handMade = (): Promise<Map<string, string>> =>
+  inHome(async (home) => {
+    await withStore(
+      home,
+      "/fixtures/app",
+      Effect.gen(function* () {
+        const store = yield* Sessions;
+        const { id } = yield* store.create({ cwd: "/fixtures/first" });
+        yield* store.relocate(id, "/fixtures/app");
+        const user = yield* store.append(id, {
+          type: "message",
+          message: { role: "user", content: [{ type: "text", text: "Hello" }], timestamp: 1 },
+          requestId: "fixture-1",
+        });
+        yield* store.append(id, { type: "title", title: "Hello" });
+        yield* store.append(id, {
+          type: "message",
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text: "Hi." }],
+            api: "openai-completions",
+            provider: "fixture",
+            model: "fixture-model",
+            usage: {
+              input: 1,
+              output: 1,
+              cacheRead: 0,
+              cacheWrite: 0,
+              totalTokens: 2,
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+            },
+            stopReason: "stop",
+            timestamp: 2,
+          },
+        });
+        yield* store.mark(id, { pinned: true });
+        const second = yield* store.append(id, {
+          type: "message",
+          message: { role: "user", content: [{ type: "text", text: "Again" }], timestamp: 3 },
+          requestId: "fixture-2",
+        });
+        // A compaction keeping the second prompt, then a request after it: the summary replaces what came before.
+        yield* store.append(id, { type: "compaction", summary: "The user said hello.", firstKeptId: second.id, tokensBefore: 10, source: "fixture" });
+        yield* store.append(id, { type: "turn-start", turnId: "t1", model: "fixture/fixture-model" });
+        yield* store.append(id, { type: "step-start", turnId: "t1", stepId: "s1" });
+        yield* store.append(id, {
+          type: "request",
+          turnId: "t1",
+          stepId: "s1",
+          model: "fixture/fixture-model",
+          composition: "fixture",
+          system: "You are a fixture.",
+          tools: [],
+          contributions: [{ source: "agent.loop", kind: "system", label: "agent.base", chars: 18 }],
+        });
+        yield* store.append(id, { type: "step-end", turnId: "t1", stepId: "s1" });
+        yield* store.append(id, { type: "turn-end", turnId: "t1", reason: "done" });
+        yield* store.checkout(id, user.id);
+        yield* store.append(id, { type: "custom", kind: "fixture.note", data: { branch: 2 } });
+        yield* store.mark(id, { archived: true, pinned: false });
+      }),
     );
-    return await readTree(path.join(home, "sessions"));
-  } finally {
-    await fs.rm(home, { recursive: true, force: true });
-  }
-}
+    return readTree(path.join(home, "sessions"));
+  });
 
 /** Every `.jsonl` under `root`, by its path relative to it. */
 async function readTree(root: string): Promise<Map<string, string>> {
@@ -155,11 +144,7 @@ export async function writeSessionFixtures(dir: string, seeds: readonly number[]
   for (const seed of seeds) {
     const world = new World({ seed, ticks });
     await world.run();
-    const left = new Map<string, string>();
-    for (const file of world.disk.list()) {
-      if (!file.startsWith(`${HOME}/sessions/`) || !file.endsWith(".jsonl")) continue;
-      left.set(file.slice(`${HOME}/sessions/`.length), wholeLines(world.disk.read(file) ?? ""));
-    }
+    const left = world.sessionFiles();
     const served = await loadable(left);
     // The longest sessions say the most.
     const chosen = [...served].sort(([, a], [, b]) => b.length - a.length).slice(0, perSeed);

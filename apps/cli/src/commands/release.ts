@@ -6,6 +6,7 @@ import { Effect } from "effect";
 import { readDiscovery } from "@lemma/contracts/discovery";
 import { CHANNELS, compareVersions, INSTALLER_TITLES, UPDATABLE } from "@lemma/release";
 import type { Build, Channel, Installer } from "@lemma/release";
+import { errorMessage } from "@lemma/contracts";
 import { CliError, defineBuiltin, ExitCode, usage } from "../command.ts";
 import type { Builtin, Io } from "../command.ts";
 import { homeOf } from "../connect.ts";
@@ -263,7 +264,7 @@ export const updateRelease = (
             catch: (error) =>
               new CliError({
                 code: "Unreachable",
-                message: `Could not ask ${api} which release is newest: ${error instanceof Error ? error.message : String(error)}`,
+                message: `Could not ask ${api} which release is newest: ${errorMessage(error)}`,
                 exit: ExitCode.unavailable,
               }),
           }));

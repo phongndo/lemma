@@ -4,7 +4,7 @@ import { Show, createEffect, createRoot, createSignal, on } from "solid-js";
 import { render } from "solid-js/web";
 import { runPromise } from "@lemma/client";
 import type { Host } from "@lemma/client";
-import { faultMessage, toPluginStatus } from "@lemma/contracts";
+import { errorMessage, faultMessage, toPluginStatus } from "@lemma/contracts";
 import type { PluginStatus, ReloadResult, WebComposition, WebFile } from "@lemma/contracts";
 import { Diagnostic, makeLoader, ReloadError, reportUnhandled } from "@lemma/core";
 import { settlePaint } from "@lemma/web/paint";
@@ -52,6 +52,18 @@ export interface BootOptions {
   readonly element: HTMLElement;
   /** `?safe`: ignore the rows and the plugin directories' files, running the app as shipped. */
   readonly safe: boolean;
+}
+
+/** What a development build puts on `window.lemma`: the running composition, for DevTools and the UI check (`scripts/check-ui.ts`). */
+export interface DevApi {
+  /** The page's slots, the running core's. */
+  readonly slots: () => SlotsService;
+  /** The plugins, as the Plugins page lists and switches them. */
+  readonly plugins: WebPluginsService;
+  /** The recent faults of each plugin. */
+  readonly faults: ReturnType<typeof faultHistory>;
+  /** A capability of the running composition (the runtime's, or a plugin's), or undefined when nothing provides it. */
+  readonly service: <I, S>(tag: Context.Key<I, S>) => Promise<S | undefined>;
 }
 
 const toResult = (report: ReloadReport | undefined): ReloadResult => ({
@@ -358,7 +370,7 @@ export async function boot(options: BootOptions): Promise<void> {
                 <main class="boot-failed" role="alert">
                   <p>
                     The app's frame{failed.pluginId === undefined ? "" : `, from the “${failed.pluginId}” plugin,`} failed:{" "}
-                    <code>{failed.error instanceof Error ? failed.error.message : String(failed.error)}</code>
+                    <code>{errorMessage(failed.error)}</code>
                   </p>
                   <p>
                     <a href="?safe">Open the app as shipped</a>, without your plugins and rows, to fix it.

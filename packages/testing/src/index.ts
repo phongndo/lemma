@@ -1,4 +1,4 @@
-export { seededRandom, SimDisk } from "./disk.ts";
+export { errno, seededRandom, SimDisk } from "./disk.ts";
 export type { Faults } from "./disk.ts";
 // The conformance suites live with their contracts, where a replacement finds them; re-exported for this repo's tests.
 export { sessionsConformance } from "@lemma/sessions/testing";

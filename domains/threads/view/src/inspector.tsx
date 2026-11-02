@@ -409,7 +409,7 @@ export function createInspector(deps: {
           <span class="thread-inspector-kind">
             <Contained slot={Views} item={props.view} component={props.view.icon} />
           </span>
-          <span class="thread-inspector-label">{label()}</span>
+          <span class="thread-inspector-label tw:truncate">{label()}</span>
         </button>
         <button
           class="thread-inspector-close"

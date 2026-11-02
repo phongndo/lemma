@@ -333,9 +333,6 @@
   font: inherit;
   text-align: inherit;
   cursor: pointer;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 .trj-sort-button:focus-visible {
@@ -386,9 +383,6 @@
 .trj-text {
   display: block;
   min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 .trj-call-name {
@@ -491,9 +485,6 @@
 .trj-group-prompt {
   flex: 1;
   min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
   color: var(--text-2);
 }
 
@@ -562,9 +553,6 @@
 
 .trj-details-where {
   color: var(--text-3);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 .trj-mono {
@@ -718,9 +706,6 @@
   grid-column: 2 / 4;
   color: var(--text-3);
   font-size: var(--font-size-xs);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 .trj-thinking summary {

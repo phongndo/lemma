@@ -1,6 +1,7 @@
 import { For, Match, Show, Switch, createSignal } from "solid-js";
+import type { JSX } from "solid-js";
 import type { InteractionRequest } from "@lemma/contracts";
-import { stepFor } from "@lemma/web/keys";
+import { focusStep } from "@lemma/web/keys";
 import { Layers } from "@lemma/frame";
 import { ThreadWaits } from "@lemma/threads";
 import { Interactions, Slots, defineWebPlugin } from "@lemma/web";
@@ -10,8 +11,15 @@ import styles from "./interaction-dialog.css?inline";
 
 type Of<T extends InteractionRequest["type"]> = Extract<InteractionRequest, { type: T }>;
 
-function Ask(props: { interactions: InteractionsService; request: Of<"ask"> }) {
-  const [value, setValue] = createSignal("");
+/** A question's dialog with Cancel, which dismisses it, and Submit, disabled while it cannot be sent (`blocked`, its tip saying why). */
+function SubmitDialog(props: {
+  interactions: InteractionsService;
+  request: InteractionRequest;
+  blocked: boolean;
+  why?: string | undefined;
+  submit: () => void;
+  children: JSX.Element;
+}) {
   return (
     <Dialog
       title={props.request.title}
@@ -21,17 +29,22 @@ function Ask(props: { interactions: InteractionsService; request: Of<"ask"> }) {
           <button type="button" class="button" onClick={() => props.interactions.dismiss(props.request.id)}>
             Cancel
           </button>
-          <button
-            type="button"
-            class="button button-primary"
-            disabled={value() === ""}
-            onClick={() => props.interactions.answer(props.request.id, { type: "ask", value: value() })}
-          >
+          <button type="button" class="button button-primary" disabled={props.blocked} data-tip={props.why} onClick={() => props.submit()}>
             Submit
           </button>
         </>
       }
     >
+      {props.children}
+    </Dialog>
+  );
+}
+
+function Ask(props: { interactions: InteractionsService; request: Of<"ask"> }) {
+  const [value, setValue] = createSignal("");
+  const submit = () => props.interactions.answer(props.request.id, { type: "ask", value: value() });
+  return (
+    <SubmitDialog interactions={props.interactions} request={props.request} blocked={value() === ""} submit={submit}>
       <input
         class="field"
         data-autofocus
@@ -43,14 +56,14 @@ function Ask(props: { interactions: InteractionsService; request: Of<"ask"> }) {
         onKeyDown={(event) => {
           if (event.key === "Enter" && value() !== "") {
             event.preventDefault();
-            props.interactions.answer(props.request.id, { type: "ask", value: value() });
+            submit();
           }
         }}
       />
       <Show when={props.request.secret}>
         <p class="muted small">Sent to the host and stored in its credential store; never shown again.</p>
       </Show>
-    </Dialog>
+    </SubmitDialog>
   );
 }
 
@@ -80,11 +93,7 @@ function Confirm(props: { interactions: InteractionsService; request: Of<"confir
 function Select(props: { interactions: InteractionsService; request: Of<"select"> }) {
   const pick = (value: string) => props.interactions.answer(props.request.id, { type: "select", value });
   const onKey = (event: KeyboardEvent) => {
-    const items = [...(event.currentTarget as HTMLElement).querySelectorAll<HTMLElement>(".choice")];
-    const next = stepFor(event.key, items.indexOf(document.activeElement as HTMLElement), items.length);
-    if (next === undefined) return;
-    event.preventDefault();
-    items[next]?.focus();
+    if (focusStep(event.currentTarget as HTMLElement, ".choice", event.key) !== undefined) event.preventDefault();
   };
   return (
     <Dialog title={props.request.title} onClose={() => props.interactions.dismiss(props.request.id)}>
@@ -122,33 +131,19 @@ function Form(props: { interactions: InteractionsService; request: Of<"form"> })
   const initial = defaults(props.request.fields);
   const [values, setValues] = createSignal(initial);
   const missing = () => props.request.fields.filter((field) => !field.optional && values()[field.key] === undefined);
-  const submit = () => props.interactions.answer(props.request.id, { type: "form", value: values() });
   return (
-    <Dialog
-      title={props.request.title}
-      onClose={() => props.interactions.dismiss(props.request.id)}
-      footer={
-        <>
-          <button type="button" class="button" onClick={() => props.interactions.dismiss(props.request.id)}>
-            Cancel
-          </button>
-          <button
-            type="button"
-            class="button button-primary"
-            disabled={missing().length > 0}
-            data-tip={
-              missing().length > 0
-                ? `Needs ${missing()
-                    .map((field) => field.title)
-                    .join(", ")}`
-                : undefined
-            }
-            onClick={submit}
-          >
-            Submit
-          </button>
-        </>
+    <SubmitDialog
+      interactions={props.interactions}
+      request={props.request}
+      blocked={missing().length > 0}
+      why={
+        missing().length > 0
+          ? `Needs ${missing()
+              .map((field) => field.title)
+              .join(", ")}`
+          : undefined
       }
+      submit={() => props.interactions.answer(props.request.id, { type: "form", value: values() })}
     >
       <Show when={props.request.detail}>
         <p class="dialog-detail">{props.request.detail}</p>
@@ -171,7 +166,7 @@ function Form(props: { interactions: InteractionsService; request: Of<"form"> })
           }}
         />
       </div>
-    </Dialog>
+    </SubmitDialog>
   );
 }
 

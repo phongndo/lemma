@@ -15,7 +15,7 @@ import type { Simulation } from "./simulation.ts";
 
 /** Where a simulated host keeps its state on the simulated disk, and the platform its prompt names. */
 export const HOME = "/lemma";
-export const PLATFORM = "sim (x64)";
+const PLATFORM = "sim (x64)";
 
 /** `HostControl` for a host with no plugins of its own to control. */
 const hostControl = definePlugin({

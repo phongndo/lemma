@@ -134,8 +134,6 @@ class InvocationImpl implements Invocation {
   }
 }
 
-export const makeInvocation = (): Invocation => new InvocationImpl();
-
 const noop = () => {};
 
 /** Aborts what `invocation` started, now or when its signal is first asked for. */

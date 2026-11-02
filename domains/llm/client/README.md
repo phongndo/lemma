@@ -6,37 +6,32 @@ choices among them (the model, a reasoning level for each model, and
 favorites), which the composer sends with each turn (`turnOptions`). What it
 changes on the host (logins, logouts, custom providers and their logos) it
 asks of the provider of `Llm` through the `llm.*` channels (`LlmChannels`).
-Requires `Client` and `Notify`. No config.
+No config.
 
 ## Behavior
 
-- **Kept current.** It lists the providers, and the models whose provider is
-  configured, as `llm.changes` opens and on each change it reports, a login
-  in another client included. An answer to an earlier listing that arrives
-  after a later one is dropped, and a listing that fails is reported.
-- **Choices are this browser's.** The model, the levels, and the favorites
-  are kept in `localStorage` (`lemma.model`, `lemma.thinkingByModel`,
-  `lemma.favoriteModels`), not on the host, so another browser keeps its own.
-  A model with no level chosen uses `DEFAULT_THINKING`, and a level the model
-  does not offer is clamped (`clampThinking`).
-- **One login at a time.** `login` while another login this page started is
-  running resolves false at once, and `loggingIn` names only a login this
-  page started. A failed login is reported and resolves false. `logout`
-  reports a failure rather than rejecting, and its message says the provider
-  honors the key or sign-in until it is revoked there.
-- **Sign-ins from any client.** `signIns` is what `llm.sign-ins` lists, the
-  sign-ins running on the host whoever started them, followed again after a
-  reconnect; `answerSignIn` answers one's open step. A login says where this
-  page's browser is (`browserPlace`: on the host's machine when the page came
-  from `localhost`, which lets a flow offering a device code use it only when
-  elsewhere). In the desktop app's window, its sign-in page offers the way
-  back to the app (`signInReturn`: `lemma://settings/providers`); a browser
-  tab's offers none, as a tab it opened would have no copy of the host's token.
-- **Custom providers settle.** `addCustom`, `removeCustom`, and `setLogo`
-  change the llm plugin's config, whose reload can finish after the call
-  returns, so each waits up to five seconds for `llm.providers` to list the
-  change: `addCustom` rejects if the provider is not listed by then, and the
-  other two resolve regardless. Their other failures reach the caller.
+- **Kept current.** It lists again on each `llm.changes`, a login in another
+  client included. An answer to an earlier listing that arrives after a later
+  one is dropped. A listing that fails is reported.
+- **Choices are this browser's.** `localStorage` keeps the model
+  (`lemma.model`), the levels (`lemma.thinkingByModel`), and the favorites
+  (`lemma.favoriteModels`), so another browser keeps its own. A model with no
+  level chosen uses `DEFAULT_THINKING`. A level the model does not offer is
+  clamped (`clampThinking`).
+- **One login at a time.** `login` resolves false at once while another login
+  this page started runs. A failed login is reported and resolves false.
+  `logout` reports a failure rather than rejecting.
+- **Sign-ins from any client.** `signIns` lists every sign-in running on the
+  host (`llm.sign-ins`), and follows them again after a reconnect.
+  `browserPlace` is the host's machine when the page came from `localhost`, so
+  a flow uses a device code only elsewhere. In the desktop app, the sign-in page
+  links back to the app (`signInReturn`: `lemma://settings/providers`). A
+  browser tab gets no link back, as a tab it opened would have no copy of the
+  host's token.
+- **Custom providers settle.** `addCustom`, `removeCustom`, and `setLogo` wait
+  up to five seconds for `llm.providers` to list the change, since the llm
+  plugin's reload can finish after the call returns. `addCustom` rejects if the
+  provider is not listed by then. The other two resolve regardless.
 
 ## Rationale
 

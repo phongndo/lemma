@@ -7,6 +7,8 @@
  * and the page's default, with no plugin applying one, is the system theme.
  */
 
+import { loadJson, save } from "./storage.ts";
+
 type Theme = "light" | "dark";
 interface Look {
   readonly theme: Theme;
@@ -15,6 +17,8 @@ interface Look {
 }
 
 const KEY = "lemma.paint";
+const isLook = (value: unknown): value is Look =>
+  typeof value === "object" && value !== null && ((value as Look).theme === "light" || (value as Look).theme === "dark");
 const root = () => document.documentElement;
 
 const systemTheme = (): Theme => (window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
@@ -38,13 +42,8 @@ const put = (look: Look, owner: string | undefined) => {
  * that broke the page), the system theme alone.
  */
 export const preloadPaint = (remembered = true): void => {
-  let look: Look | undefined;
-  try {
-    look = remembered ? (JSON.parse(localStorage.getItem(KEY) ?? "null") ?? undefined) : undefined;
-  } catch {
-    look = undefined;
-  }
-  put(look?.theme === "light" || look?.theme === "dark" ? look : { theme: systemTheme() }, undefined);
+  const look = remembered ? loadJson<Look | undefined>(KEY, undefined, isLook) : undefined;
+  put(look ?? { theme: systemTheme() }, undefined);
 };
 
 /**
@@ -55,21 +54,14 @@ export const preloadPaint = (remembered = true): void => {
 export const settlePaint = (): void => {
   if (root().dataset.paintedBy !== undefined) return;
   put({ theme: systemTheme() }, undefined);
-  try {
-    localStorage.removeItem(KEY);
-  } catch {
-    /* nothing remembered */
-  }
+  save(KEY, undefined);
 };
 
 /** Applies `look` for `owner` (a plugin instance's own token) and remembers it for the next load. */
 export const paint = (look: Look, owner: string): void => {
   put(look, owner);
-  try {
-    localStorage.setItem(KEY, JSON.stringify(look));
-  } catch {
-    /* storage disabled: the next load starts from the system theme */
-  }
+  // With storage disabled, the next load starts from the system theme.
+  save(KEY, JSON.stringify(look));
 };
 
 /**
@@ -80,11 +72,7 @@ export const paint = (look: Look, owner: string): void => {
 export const unpaint = (owner: string): void => {
   if (root().dataset.paintedBy !== owner) return;
   put({ theme: systemTheme() }, undefined);
-  try {
-    localStorage.removeItem(KEY);
-  } catch {
-    /* nothing remembered */
-  }
+  save(KEY, undefined);
 };
 
 /** The theme on the page now. */

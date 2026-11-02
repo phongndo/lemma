@@ -138,9 +138,11 @@ function Detail(props: { deps: Deps; cwd: string }) {
       <header class="project-head">
         <Mark name={name()} large />
         <div class="project-head-text">
-          <h2>{name()}</h2>
+          <h2 class="tw:truncate">{name()}</h2>
           <div class="project-head-path">
-            <code data-tip={props.cwd}>{deps.path(props.cwd)}</code>
+            <code class="tw:truncate" data-tip={props.cwd}>
+              {deps.path(props.cwd)}
+            </code>
             <CopyButton text={props.cwd} label="Copy path" />
           </div>
           <span class="project-head-stats">{statsLine(deps.stats(props.cwd), deps.now())}</span>
@@ -190,8 +192,8 @@ function ProjectsPage(props: { deps: Deps }) {
                 >
                   <Mark name={deps.workspace.projectName(cwd)} />
                   <span class="project-item-text">
-                    <span class="project-item-name">{deps.workspace.projectName(cwd)}</span>
-                    <span class="project-item-path">{deps.path(cwd)}</span>
+                    <span class="project-item-name tw:truncate">{deps.workspace.projectName(cwd)}</span>
+                    <span class="project-item-path tw:truncate">{deps.path(cwd)}</span>
                   </span>
                   <Show when={stats().running > 0}>
                     <span class="project-item-running" aria-label={`${stats().running} running`} />

@@ -1,3 +1,5 @@
+import { Predicate } from "effect";
+import type * as Pi from "@earendil-works/pi-ai";
 import type { Credential } from "@lemma/credentials";
 
 /** Who a sign-in is, as its credential says: the account (an email), and the plan it uses. */
@@ -13,7 +15,7 @@ export const claimsOf = (token: unknown): Record<string, unknown> | undefined =>
   if (parts.length !== 3) return undefined;
   try {
     const claims = JSON.parse(Buffer.from(parts[1]!, "base64url").toString("utf8")) as unknown;
-    return typeof claims === "object" && claims !== null && !Array.isArray(claims) ? (claims as Record<string, unknown>) : undefined;
+    return Predicate.isObject(claims) ? claims : undefined;
   } catch {
     return undefined;
   }
@@ -31,7 +33,7 @@ const OPENAI_AUTH = "https://api.openai.com/auth";
  * claims of its tokens (an ID token's, the access token's, where they are JWTs, as OpenAI's are). Nothing for an API key,
  * or for a credential that says neither.
  */
-export function accountOf(credential: Credential | undefined): Account {
+export function accountOf(credential: Credential | Pi.Credential | undefined): Account {
   if (credential?.type !== "oauth") return {};
   const tokens = [credential.idToken, credential.id_token, credential.access].map(claimsOf).filter((claims) => claims !== undefined);
   const account =

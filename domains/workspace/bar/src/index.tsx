@@ -14,17 +14,15 @@ import type { ClientService, NotifyService, SlotsService } from "@lemma/web";
 import type { WorkspaceService } from "@lemma/workspace/web";
 import {
   ChatIcon,
-  CheckIcon,
   ChevronDownIcon,
   CopyIcon,
   Dialog,
   FolderIcon,
-  FolderPlusIcon,
   GitBranchIcon,
   HistoryIcon,
-  LaptopIcon,
+  Icon,
+  MenuItem,
   PenSquareIcon,
-  PlusIcon,
   Popover,
   RefreshIcon,
   SettingRow,
@@ -32,7 +30,8 @@ import {
   TrashIcon,
   WorktreeIcon,
 } from "@lemma/look";
-import type { Placement } from "@lemma/look";
+import type { IconName, Placement } from "@lemma/look";
+import { plural } from "@lemma/web/format";
 import styles from "./workspace-bar.css?inline";
 
 const REMOVE_DIALOG = "workspace-bar.remove-worktree";
@@ -67,10 +66,10 @@ const whereOf = (deps: { readonly threads: ThreadsService; readonly workspace: W
 };
 
 /** How each place is shown: its icon and name, on the start line and in the thread card. */
-const WHERE: Record<Where, { readonly label: string; readonly icon: () => ReturnType<typeof LaptopIcon> }> = {
-  local: { label: "Local", icon: LaptopIcon },
-  new: { label: "New worktree", icon: WorktreeIcon },
-  worktree: { label: "Worktree", icon: WorktreeIcon },
+const WHERE: Record<Where, { readonly label: string; readonly icon: IconName }> = {
+  local: { label: "Local", icon: "laptop" },
+  new: { label: "New worktree", icon: "worktree" },
+  worktree: { label: "Worktree", icon: "worktree" },
 };
 
 /** The worktrees of `project` its threads work in, most recently used first, with how many threads each has. */
@@ -146,6 +145,7 @@ function WhereRow(props: { deps: Deps }) {
   const where = () => whereOf(props.deps);
   const gone = () => workspace.status()?.exists === false || workspace.place(dir())?.exists === false;
   const actions = () => slots.list(WorktreeActions).filter((action) => action.when?.(dir()) ?? true);
+  const copyPath = usePlugin().action("copy the path", () => copyAndTell(notify, dir()));
   return (
     <Show when={where()}>
       {(at) => (
@@ -156,7 +156,9 @@ function WhereRow(props: { deps: Deps }) {
           placement="bottom-end"
           trigger={
             <>
-              <span class="menu-check">{WHERE[at()].icon()}</span>
+              <span class="menu-check">
+                <Icon name={WHERE[at()].icon} />
+              </span>
               <span class="menu-label">{at() === "worktree" ? "Worktree" : "Local checkout"}</span>
               <span class="menu-hint" classList={{ "workspace-warning": gone() }}>
                 {gone() ? (at() === "worktree" ? "removed" : "folder not found") : ""}
@@ -165,24 +167,7 @@ function WhereRow(props: { deps: Deps }) {
           }
         >
           {(close) => (
-            <Show
-              when={at() === "worktree"}
-              fallback={
-                <button
-                  class="menu-item"
-                  role="menuitem"
-                  onClick={usePlugin().action("copy the path", () => {
-                    close();
-                    return copyAndTell(notify, dir());
-                  })}
-                >
-                  <span class="menu-check">
-                    <CopyIcon />
-                  </span>
-                  <span class="menu-label">Copy path</span>
-                </button>
-              }
-            >
+            <Show when={at() === "worktree"} fallback={<MenuItem label="Copy path" icon="copy" close={close} run={copyPath} />}>
               <ActionMenu subject={dir()} control={undefined} slot={WorktreeActions} actions={actions()} close={close} />
             </Show>
           )}
@@ -260,60 +245,20 @@ function ProjectPicker(props: { deps: Deps }) {
             <div class="menu-section">Project</div>
             <For each={workspace.projects()}>
               {(path) => (
-                <button
-                  class="menu-item"
-                  role="menuitemradio"
-                  aria-checked={path === current()}
-                  onClick={() => {
+                <MenuItem
+                  label={workspace.projectName(path)}
+                  hint={path.slice(0, path.length - folderName(path).length - 1)}
+                  checked={path === current()}
+                  close={close}
+                  run={() => {
                     // Picked again from one of its worktrees, it goes back to the project's own checkout.
                     if (path !== workspace.workingDir()) pick(path);
-                    close();
                   }}
-                >
-                  <span class="menu-check">
-                    <Show when={path === current()}>
-                      <CheckIcon />
-                    </Show>
-                  </span>
-                  <span class="menu-label">{workspace.projectName(path)}</span>
-                  <span class="menu-hint">{path.slice(0, path.length - folderName(path).length - 1)}</span>
-                </button>
+                />
               )}
             </For>
-            <button
-              class="menu-item"
-              role="menuitemradio"
-              aria-checked={standalone()}
-              onClick={() => {
-                close();
-                newStandalone();
-              }}
-            >
-              <span class="menu-check">
-                <Show when={standalone()} fallback={<ChatIcon />}>
-                  <CheckIcon />
-                </Show>
-              </span>
-              <span class="menu-label">No project</span>
-              <span class="menu-hint">a thread of its own</span>
-            </button>
-            <Show when={addProject()}>
-              {(action) => (
-                <button
-                  class="menu-item"
-                  role="menuitem"
-                  onClick={() => {
-                    close();
-                    action().run();
-                  }}
-                >
-                  <span class="menu-check">
-                    <FolderPlusIcon />
-                  </span>
-                  <span class="menu-label">Add project…</span>
-                </button>
-              )}
-            </Show>
+            <MenuItem label="No project" hint="a thread of its own" icon="chat" checked={standalone()} close={close} run={newStandalone} />
+            <Show when={addProject()}>{(action) => <MenuItem label="Add project…" icon="folder-plus" close={close} run={() => action().run()} />}</Show>
           </>
         )}
       </Popover>
@@ -355,7 +300,7 @@ function WherePicker(props: { deps: Deps }) {
           }
           trigger={
             <>
-              {WHERE[at()].icon()}
+              <Icon name={WHERE[at()].icon} />
               {/* Which worktree, its branch says beside it. */}
               <span class="strip-label">{WHERE[at()].label}</span>
               <ChevronDownIcon />
@@ -369,66 +314,39 @@ function WherePicker(props: { deps: Deps }) {
           {(close) => (
             <>
               <div class="menu-section">Work in</div>
-              <button
-                class="menu-item"
-                role="menuitemradio"
-                aria-checked={at() === "local"}
-                data-tip={`The project's own checkout, ${project()}, as it is: changes there are the ones you see`}
-                onClick={() => {
-                  close();
-                  go(project(), false);
-                }}
-              >
-                <span class="menu-check">
-                  <Show when={at() === "local"} fallback={<LaptopIcon />}>
-                    <CheckIcon />
-                  </Show>
-                </span>
-                <span class="menu-label">Local</span>
-                <span class="menu-hint">{localBranch()}</span>
-              </button>
-              <button
-                class="menu-item"
-                role="menuitemradio"
-                aria-checked={at() === "new"}
-                data-tip="A checkout of its own, on a new branch named from your first message, so this thread's changes stay apart"
-                onClick={() => {
-                  close();
-                  go(project(), true);
-                }}
-              >
-                <span class="menu-check">
-                  <Show when={at() === "new"} fallback={<WorktreeIcon />}>
-                    <CheckIcon />
-                  </Show>
-                </span>
-                <span class="menu-label">New worktree</span>
-                <span class="menu-hint">new branch</span>
-              </button>
+              <MenuItem
+                label={WHERE.local.label}
+                hint={localBranch()}
+                icon={WHERE.local.icon}
+                checked={at() === "local"}
+                tip={`The project's own checkout, ${project()}, as it is: changes there are the ones you see`}
+                close={close}
+                run={() => go(project(), false)}
+              />
+              <MenuItem
+                label={WHERE.new.label}
+                hint="new branch"
+                icon={WHERE.new.icon}
+                checked={at() === "new"}
+                tip="A checkout of its own, on a new branch named from your first message, so this thread's changes stay apart"
+                close={close}
+                run={() => go(project(), true)}
+              />
               <Show when={worktrees().length > 0}>
                 <div class="menu-sep" />
                 <div class="menu-section">Worktrees</div>
                 <div class="menu-list where-list">
                   <For each={worktrees()}>
                     {(tree) => (
-                      <button
-                        class="menu-item"
-                        role="menuitemradio"
-                        aria-checked={tree.path === dir()}
-                        data-tip={`Go on in ${tree.path}`}
-                        onClick={() => {
-                          close();
-                          go(tree.path);
-                        }}
-                      >
-                        <span class="menu-check">
-                          <Show when={tree.path === dir()} fallback={<GitBranchIcon />}>
-                            <CheckIcon />
-                          </Show>
-                        </span>
-                        <span class="menu-label branch-name">{shortened(tree.branch)}</span>
-                        <span class="menu-hint">{threadCount(tree.threads)}</span>
-                      </button>
+                      <MenuItem
+                        label={shortened(tree.branch)}
+                        hint={threadCount(tree.threads)}
+                        icon="git-branch"
+                        checked={tree.path === dir()}
+                        tip={`Go on in ${tree.path}`}
+                        close={close}
+                        run={() => go(tree.path)}
+                      />
                     )}
                   </For>
                 </div>
@@ -482,10 +400,9 @@ function BranchPicker(props: {
     return name !== "" && !branches().some((branch) => branch.name === name || (branch.remote && branch.name.slice(branch.name.indexOf("/") + 1) === name));
   };
 
-  const checkout = async (branch: string, create: boolean, close: () => void) => {
+  const checkout = async (branch: string, create: boolean) => {
     const path = workingDir();
     if (path === undefined) return;
-    close();
     setSwitching(true);
     try {
       props.onChanged(await client.channel.call(WorkspaceChannels.checkout, create ? { path, branch, create: true } : { path, branch }));
@@ -505,24 +422,14 @@ function BranchPicker(props: {
     return workspace.fromRemote() && !branch.startsWith(`${remote()}/`) ? `${remote()}/${branch}` : branch;
   };
   const label = () => (baseMode() ? `from ${from()}` : here());
-  const choose = (branch: GitBranch, close: () => void) => {
-    if (baseMode()) {
-      workspace.setWorktreeBase(branch.current ? undefined : branch.name);
-      close();
-      return;
-    }
-    if (branch.current) {
-      close();
-      return;
-    }
-    if (branch.worktree !== undefined) {
-      close();
-      // git keeps a branch in one worktree at a time; go to where it is instead.
-      if (threads.blank()) void threads.newThread(branch.worktree, { inPlace: true });
-      else notify.toast({ level: "info", message: `${branch.name} is checked out in the worktree at ${branch.worktree}` });
-      return;
-    }
-    void checkout(branch.name, false, close);
+  /** A branch picked in the menu, which has closed. */
+  const choose = (branch: GitBranch) => {
+    if (baseMode()) return workspace.setWorktreeBase(branch.current ? undefined : branch.name);
+    if (branch.current) return;
+    if (branch.worktree === undefined) return void checkout(branch.name, false);
+    // git keeps a branch in one worktree at a time; go to where it is instead.
+    if (threads.blank()) void threads.newThread(branch.worktree, { inPlace: true });
+    else notify.toast({ level: "info", message: `${branch.name} is checked out in the worktree at ${branch.worktree}` });
   };
   /** The row's hint: uncommitted changes, and how far it is ahead of and behind its upstream. */
   const counts = () =>
@@ -537,7 +444,7 @@ function BranchPicker(props: {
   const title = () =>
     [
       props.git.branch === null ? "Detached HEAD" : `On ${props.git.branch}`,
-      props.git.changes > 0 ? `${props.git.changes} uncommitted change${props.git.changes === 1 ? "" : "s"}` : "clean",
+      props.git.changes > 0 ? plural(props.git.changes, "uncommitted change") : "clean",
       props.git.upstream === undefined ? undefined : `${props.git.ahead} ahead, ${props.git.behind} behind ${props.git.upstream}`,
       busyHere() ? "Branch switching waits for the running turn" : undefined,
     ]
@@ -598,39 +505,30 @@ function BranchPicker(props: {
           />
           <div class="menu-list">
             <Show when={canCreate()}>
-              <button class="menu-item" role="menuitem" onClick={plugin.action("create branch", () => checkout(query().trim(), true, close))}>
-                <span class="menu-check">
-                  <PlusIcon />
-                </span>
-                <span class="menu-label">Create “{query().trim()}”</span>
-                <span class="menu-hint">from {here()}</span>
-              </button>
+              <MenuItem
+                label={`Create “${query().trim()}”`}
+                hint={`from ${here()}`}
+                icon="plus"
+                close={close}
+                run={plugin.action("create branch", () => checkout(query().trim(), true))}
+              />
             </Show>
             <For each={filtered()}>
               {(branch) => (
-                <button
-                  class="menu-item"
-                  role="menuitemradio"
-                  aria-checked={checked(branch)}
-                  data-tip={
+                <MenuItem
+                  label={shortened(branch.name)}
+                  hint={baseMode() && branch.current ? "current" : branch.worktree !== undefined ? "worktree" : branch.remote ? "remote" : ""}
+                  checked={checked(branch)}
+                  tip={
                     !baseMode() && branch.worktree !== undefined
                       ? `Checked out in ${branch.worktree}`
                       : shortened(branch.name) === branch.name
                         ? undefined
                         : branch.name
                   }
-                  onClick={() => choose(branch, close)}
-                >
-                  <span class="menu-check">
-                    <Show when={checked(branch)}>
-                      <CheckIcon />
-                    </Show>
-                  </span>
-                  <span class="menu-label branch-name">{shortened(branch.name)}</span>
-                  <span class="menu-hint">
-                    {baseMode() && branch.current ? "current" : branch.worktree !== undefined ? "worktree" : branch.remote ? "remote" : ""}
-                  </span>
-                </button>
+                  close={close}
+                  run={() => choose(branch)}
+                />
               )}
             </For>
             <Show when={filtered().length === 0 && !canCreate()}>
@@ -709,9 +607,7 @@ function RemoveWorktreeDialog(props: { deps: Deps; path: string; close: () => vo
         {inIt().length > 0 ? `, and so do its ${threadCount(inIt().length)}, from which you can make it again` : ""}.
       </p>
       <Show when={changes() > 0}>
-        <p class="workspace-warning-text">
-          It has {changes()} uncommitted change{changes() === 1 ? "" : "s"}, which would be lost: commit them first to keep them.
-        </p>
+        <p class="workspace-warning-text">It has {plural(changes(), "uncommitted change")}, which would be lost: commit them first to keep them.</p>
       </Show>
       <Show when={running()}>
         <p class="workspace-warning-text">A turn is running in it; stop it first.</p>

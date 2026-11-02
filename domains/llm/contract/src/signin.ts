@@ -1,5 +1,6 @@
 import { Cause, Deferred, Effect, Exit, PubSub, Stream } from "effect";
 import type { Scope } from "effect";
+import { causeMessage } from "@lemma/contracts";
 import { asksAnswer, LlmError } from "./llm.ts";
 import type { AuthType, SignIn, SignInEnd, SignInStep } from "./llm.ts";
 
@@ -66,11 +67,6 @@ interface Entry {
   signIn: SignIn;
   pending?: { readonly seq: number; readonly answer: Deferred.Deferred<string>; readonly answered: SignInStep } | undefined;
 }
-
-const messageOf = (cause: Cause.Cause<unknown>): string => {
-  const error = Cause.squash(cause);
-  return error instanceof Error ? error.message : String(error);
-};
 
 /**
  * The sign-ins of a provider of `Llm`, kept for its lifetime (the scope): one a provider at a time. Steps are numbered
@@ -149,7 +145,7 @@ export const makeSignIns = (options: { readonly endedListedMs?: number } = {}): 
               const said = detail?.(exit.value);
               return end({ outcome: "signed-in", ...(said === undefined ? {} : { detail: said }) });
             }
-            return end(Cause.hasInterruptsOnly(exit.cause) ? { outcome: "cancelled" } : { outcome: "failed", message: messageOf(exit.cause) });
+            return end(Cause.hasInterruptsOnly(exit.cause) ? { outcome: "cancelled" } : { outcome: "failed", message: causeMessage(exit.cause) });
           }),
         );
       });

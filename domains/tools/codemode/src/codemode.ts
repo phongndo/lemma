@@ -3,15 +3,24 @@ import { randomInt } from "node:crypto";
 import { writeFile } from "node:fs/promises";
 import { renderToolSample, renderToolSignature, toCodemodeIdentifier } from "@earendil-works/pi-codemode/declarations";
 import { parseCodemodeSource } from "@earendil-works/pi-codemode/source";
-import type { CodemodeDeclaredGlobal, CodemodeDeclaredTool, CodemodeError, CodemodeHostCall, CodemodeOutcome, CodemodeRun } from "@earendil-works/pi-codemode";
+import type {
+  CodemodeDeclaredGlobal,
+  CodemodeDeclaredTool,
+  CodemodeError,
+  CodemodeHostCall,
+  CodemodeOutcome,
+  CodemodeResult,
+  CodemodeRun,
+} from "@earendil-works/pi-codemode";
 import { Effect, Result, Schema, Semaphore } from "effect";
 import type { Context } from "effect";
 import { CoreClosed } from "@lemma/core";
 import { addUsage, ClassifierContext, contentText, ImagesContext } from "@lemma/llm";
-import type { Llm, Usage } from "@lemma/llm";
+import type { Llm, LlmError, Usage } from "@lemma/llm";
 import { outputBudget, ToolInvocation, ToolResult } from "@lemma/tools";
 import type { ImageBlock, Tool, ToolContribution, ToolNamespace, ToolRunner } from "@lemma/tools";
 import { boundOutput, outputFile } from "@lemma/tools/files";
+import { errorMessage } from "@lemma/contracts";
 import type { CodemodeCallRecord, CodemodeDetails, CodemodeDisplay } from "./details.ts";
 import type { Journal, JournalHeader, Journals } from "./journal.ts";
 import { namespaceKey, rank } from "./search.ts";
@@ -160,9 +169,6 @@ const refOf = (model: unknown): string | undefined => {
   return typeof provider === "string" && typeof id === "string" ? `${provider}/${id}` : undefined;
 };
 
-type ModelType = "chat" | "image" | "classifier";
-const MODEL_TYPES: readonly ModelType[] = ["chat", "image", "classifier"];
-
 function formatError(error: CodemodeError, calls: readonly CodemodeCallRecord[]): string {
   const head =
     error.kind === "script"
@@ -192,7 +198,7 @@ async function savedImage(image: { readonly data: string; readonly mimeType: str
     await writeFile(file.path, Buffer.from(image.data, "base64"));
     return `[Image saved to ${file.path}]`;
   } catch (cause) {
-    return `[Image could not be saved: ${cause instanceof Error ? cause.message : String(cause)}]`;
+    return `[Image could not be saved: ${errorMessage(cause)}]`;
   } finally {
     file.release();
   }
@@ -203,6 +209,224 @@ interface Callable {
   readonly contribution: ToolContribution;
   readonly jsName: string;
   readonly sample: string;
+}
+
+/**
+ * The tools of `listed` a script may call, by their own names, and the namespaces they belong to: those the request
+ * offered, but not codemode itself, nor a tool only the model calls (`direct`), whose result must be logged as its own.
+ */
+const catalogOf = (listed: readonly ToolContribution[], offered: readonly string[] | undefined, namespaces: readonly ToolNamespace[]) => {
+  const tools = new Map<string, Callable>();
+  for (const contribution of listed) {
+    const { spec } = contribution;
+    if (spec.name === "codemode" || contribution.direct === true || (offered !== undefined && !offered.includes(spec.name))) continue;
+    tools.set(spec.name, {
+      contribution,
+      jsName: toCodemodeIdentifier(spec.name),
+      sample: renderToolSample({
+        name: spec.name,
+        description: spec.description,
+        inputSchema: spec.parameters,
+        outputSchema: contribution.output ?? TEXT_OUTPUT,
+      }),
+    });
+  }
+  const byJsName = new Map([...tools.values()].map((tool) => [tool.jsName, tool] as const));
+  return {
+    tools: tools as ReadonlyMap<string, Callable>,
+    /** A tool by its name in scripts, or its own. */
+    find: (name: string) => byJsName.get(toCodemodeIdentifier(name)) ?? tools.get(name),
+    /** A namespace by its name or one of its aliases. */
+    namespaceOf: (name: string) =>
+      namespaces.find((namespace) => [namespace.name, ...(namespace.aliases ?? [])].some((alias) => namespaceKey(alias) === namespaceKey(name))),
+    inNamespace: (name: string) => [...tools.values()].filter((tool) => tool.contribution.namespace === name),
+  };
+};
+type Catalog = ReturnType<typeof catalogOf>;
+
+/** What a global reads of the script calling it. */
+interface Script {
+  readonly catalog: Catalog;
+  readonly llm: Context.Service.Shape<typeof Llm>;
+  /** Runs `effect` in the codemode call's context; `abort` interrupts it. */
+  readonly run: <A, E>(effect: Effect.Effect<A, E>, abort?: AbortSignal) => Promise<A>;
+  /** Runs a model call once one of the script's `MAX_MODEL_CALLS` is free, adding what it used to the script's usage. */
+  readonly modelCall: <A extends { readonly usage?: Usage | undefined }>(effect: Effect.Effect<A, LlmError>, abort: AbortSignal) => Promise<A>;
+}
+
+/** A function a script calls besides its tools: what it resolves to, or throws for the script to catch. */
+type Global = (script: Script, args: readonly unknown[], abort: AbortSignal) => unknown;
+
+/** How `Llm` lists each type of model a script names. */
+const MODEL_LISTS: Readonly<
+  Record<string, (llm: Context.Service.Shape<typeof Llm>, query: { readonly available: boolean }) => Effect.Effect<readonly ModelEntry[]>>
+> = {
+  chat: (llm, query) => llm.models(query),
+  image: (llm, query) => llm.imageModels(query),
+  classifier: (llm, query) => llm.classifiers(query),
+};
+
+interface ModelEntry {
+  readonly provider: string;
+  readonly id: string;
+}
+
+/** The models of `type` the script lists (`available`: those it can use), each with its type; those of `provider` when it names one. */
+const listModels = async (script: Script, type: unknown, available: boolean, provider?: unknown): Promise<readonly ModelEntry[]> => {
+  const list = typeof type === "string" && Object.hasOwn(MODEL_LISTS, type) ? MODEL_LISTS[type] : undefined;
+  if (list === undefined)
+    throw new Error(
+      `models: the type is one of ${Object.keys(MODEL_LISTS)
+        .map((name) => `"${name}"`)
+        .join(", ")}, not ${JSON.stringify(type)}`,
+    );
+  const entries = (await script.run(list(script.llm, { available }))).map((model) => ({ type, ...model }));
+  return typeof provider === "string" ? entries.filter((entry) => entry.provider === provider) : entries;
+};
+
+const modelRef = (name: string, model: unknown, type: string) => {
+  const ref = refOf(model);
+  if (ref === undefined)
+    throw new Error(`${name}() expects a ${type} model first: an entry of models.getAvailableOfType("${type}"), or a ref such as "provider/model"`);
+  return ref;
+};
+
+/**
+ * The functions a script calls besides its tools, by name: searching and describing tools, and `models.*`, the models
+ * `Llm` lists, with `classify` and `generateImages` run through it with the session's credentials. A script is declared
+ * them in this order; a resumed one keeps those its journal declared.
+ */
+const GLOBALS: Readonly<Record<string, Global>> = {
+  searchTools: ({ catalog }, args) => {
+    const [query, options] = args as [unknown, { readonly limit?: unknown; readonly namespace?: unknown } | null | undefined];
+    if (typeof query !== "string") throw new Error("searchTools() expects a query string");
+    const limitTo = options?.limit ?? SEARCH_LIMIT;
+    if (typeof limitTo !== "number" || !Number.isInteger(limitTo) || limitTo <= 0) throw new Error("searchTools() limit must be a positive integer");
+    const within = options?.namespace;
+    if (within !== undefined && within !== null && typeof within !== "string") throw new Error("searchTools() namespace must be a name");
+    const space = typeof within === "string" ? catalog.namespaceOf(within) : undefined;
+    if (typeof within === "string" && space === undefined) throw new Error(`searchTools(): no namespace "${within}"; the system prompt names them`);
+    const documents = (space === undefined ? [...catalog.tools.values()] : catalog.inNamespace(space.name)).map((tool) => ({
+      tool,
+      name: tool.contribution.spec.name,
+      description: tool.contribution.spec.description,
+      ...(tool.contribution.namespace === undefined ? {} : { context: catalog.namespaceOf(tool.contribution.namespace)?.description ?? "" }),
+    }));
+    return rank(documents, query)
+      .slice(0, limitTo)
+      .map(({ tool }) => ({ name: tool.jsName, description: tool.sample }));
+  },
+  describeTool: ({ catalog }, [toolName]) => {
+    if (typeof toolName !== "string") throw new Error("describeTool() expects a tool's name");
+    const tool = catalog.find(toolName);
+    if (tool === undefined) return undefined;
+    const { spec, namespace, output } = tool.contribution;
+    return {
+      name: tool.jsName,
+      ...(namespace === undefined ? {} : { namespace }),
+      description: spec.description,
+      declaration: renderToolSignature({ name: spec.name, inputSchema: spec.parameters, outputSchema: output ?? TEXT_OUTPUT }),
+    };
+  },
+  describeNamespace: ({ catalog }, [spaceName]) => {
+    if (typeof spaceName !== "string") throw new Error("describeNamespace() expects a namespace's name");
+    const space = catalog.namespaceOf(spaceName);
+    if (space === undefined) return undefined;
+    return {
+      name: space.name,
+      description: space.description,
+      ...(space.instructions === undefined ? {} : { instructions: space.instructions }),
+      tools: catalog.inNamespace(space.name).map((tool) => tool.jsName),
+    };
+  },
+  "models.getModelsOfType": (script, [type, provider]) => listModels(script, type, false, provider),
+  "models.getAvailableOfType": (script, [type, provider]) => listModels(script, type, true, provider),
+  "models.getModelOfType": async (script, [type, provider, id]) => {
+    if (typeof provider !== "string" || typeof id !== "string") throw new Error("models.getModelOfType() expects a type, a provider, and an id");
+    return (await listModels(script, type, false)).find((entry) => entry.provider === provider && entry.id === id);
+  },
+  "models.classifiers": ({ llm, run }, [options]) =>
+    run(llm.classifiers({ available: (options as { readonly available?: unknown } | null | undefined)?.available === true })),
+  "models.classify": ({ llm, modelCall }, [model, context], abort) => {
+    const ref = modelRef("models.classify", model, "classifier");
+    const decoded = decodeClassifierContext(plainImages(context));
+    if (Result.isFailure(decoded)) throw new Error(`models.classify() got a context it cannot use: ${decoded.failure.message}`);
+    // Aborted when the script ends, times out, or is stopped: that interrupts the request, or its wait for a turn.
+    return modelCall(llm.classify(ref, decoded.success), abort);
+  },
+  "models.generateImages": ({ llm, modelCall }, [model, context], abort) => {
+    const ref = modelRef("models.generateImages", model, "image");
+    const decoded = decodeImagesContext(plainImages(context));
+    if (Result.isFailure(decoded)) throw new Error(`models.generateImages() got a context it cannot use: ${decoded.failure.message}`);
+    return modelCall(llm.generateImages(ref, decoded.success), abort);
+  },
+};
+
+const DECLARED_GLOBALS: readonly CodemodeDeclaredGlobal[] = Object.keys(GLOBALS).map((name) => ({ name, spread: true }));
+
+/** A script cut off by a host restart that this version of the sandbox cannot resume. */
+const CANNOT_RESUME = new ToolResult({
+  content: [
+    {
+      type: "text",
+      text: "Script failed\nA host restart cut this script off, and it cannot resume on this version of the sandbox, which would not make the same calls. Calls it made before the restart are not undone; run it again only if that is safe.",
+    },
+  ],
+  isError: true,
+  details: { calls: [] } satisfies CodemodeDetails,
+});
+
+/** What a script that ran to its end leaves for its result. */
+interface Ending {
+  readonly result: CodemodeResult;
+  /** Its calls, what they showed, and those not shown, each in the order the script made them. */
+  readonly calls: readonly CodemodeCallRecord[];
+  readonly displays: readonly CodemodeDisplay[];
+  readonly unshown: readonly string[];
+  readonly usage: Usage | undefined;
+  readonly resumed: boolean;
+  /** When the codemode call started, by `performance.now()`. */
+  readonly started: number;
+  readonly maxResultChars: number | undefined;
+}
+
+/**
+ * The codemode call's result: what the script output and returned, or its error, and what it showed the person,
+ * bounded to the call's budget.
+ */
+async function scriptResult({ result, calls, displays, unshown, usage, resumed, started, maxResultChars }: Ending): Promise<ToolResult> {
+  const items: Content[] = [];
+  for (const item of result.output) {
+    if (item.type === "image") items.push({ type: "text", text: await savedImage(item) });
+    items.push(item.type === "text" ? { type: "text", text: item.text } : { type: "image", data: item.data, mimeType: item.mimeType });
+  }
+  if (result.ok && result.value !== undefined) items.push({ type: "text", text: valueText(result.value) });
+  if (!result.ok) items.push({ type: "text", text: `Script error:\n${formatError(result.error, calls)}` });
+  // The model does not see what its script showed the person: it is told, so its reply neither repeats nor misses it.
+  if (displays.length > 0)
+    items.push({ type: "text", text: `[Shown to the person outside your reply: ${displays.map(named).join(", ")}. Don't describe it again.]` });
+  if (unshown.length > 0) {
+    const limit = `one script shows at most ${MAX_DISPLAYS} pages, ${MAX_DISPLAY_BYTES / (1024 * 1024)} MiB together`;
+    items.push({
+      type: "text",
+      text: `[Not shown to the person, though they ran: ${unshown.join(", ")} (${limit}). Show what matters from another script.]`,
+    });
+  }
+  // Under the call's budget with room for the header, so the note naming the full output survives the registry's cut.
+  const { content, fullOutputPath } = await boundOutput(items, { budget: outputBudget(maxResultChars), name: "codemode" });
+  const wallTime = ((performance.now() - started) / 1000).toFixed(1);
+  const head = `${result.ok ? "Script completed" : "Script failed"}${resumed ? " (resumed after a host restart)" : ""}\nWall time ${wallTime} seconds\nOutput:\n`;
+  const writes = result.ok && (Object.keys(result.storeWrites.set).length > 0 || result.storeWrites.delete.length > 0) ? result.storeWrites : undefined;
+  const details: CodemodeDetails = {
+    calls: calls.slice(0, MAX_KEPT_CALLS),
+    ...(calls.length > MAX_KEPT_CALLS ? { callsOmitted: calls.length - MAX_KEPT_CALLS } : {}),
+    ...(fullOutputPath === undefined ? {} : { truncated: true, fullOutputPath }),
+    ...(usage === undefined ? {} : { usage }),
+    ...(writes === undefined ? {} : { storeWrites: writes }),
+    ...(displays.length === 0 ? {} : { displays }),
+    ...(resumed ? { resumed: true } : {}),
+  };
+  return new ToolResult({ content: [{ type: "text", text: head }, ...content], ...(result.ok ? {} : { isError: true }), details });
 }
 
 /**
@@ -235,43 +459,13 @@ export const codemodeTool = (deps: CodemodeDeps): Tool<CodemodeInput> => ({
       // Finished before the host stopped, its result unlogged: the agent asks again, and gets it.
       if (earlier.kind === "done") return yield* Schema.decodeUnknownEffect(ToolResult)(earlier.result).pipe(Effect.orDie);
 
-      const listed = yield* deps.registry.list;
-      const callable = new Map<string, Callable>();
-      for (const contribution of listed) {
-        const { spec } = contribution;
-        // Not itself, nor a tool only the model calls (`direct`): its result must be logged as its own.
-        if (spec.name === "codemode" || contribution.direct === true || (offered !== undefined && !offered.includes(spec.name))) continue;
-        callable.set(spec.name, {
-          contribution,
-          jsName: toCodemodeIdentifier(spec.name),
-          sample: renderToolSample({
-            name: spec.name,
-            description: spec.description,
-            inputSchema: spec.parameters,
-            outputSchema: contribution.output ?? TEXT_OUTPUT,
-          }),
-        });
-      }
-      const byJsName = new Map([...callable.values()].map((tool) => [tool.jsName, tool] as const));
-      const namespaces = deps.namespaces();
-      const namespaceOf = (name: string) =>
-        namespaces.find((namespace) => [namespace.name, ...(namespace.aliases ?? [])].some((alias) => namespaceKey(alias) === namespaceKey(name)));
-
+      const catalog = catalogOf(yield* deps.registry.list, offered, deps.namespaces());
       const resumed = earlier.kind === "cut" ? earlier : undefined;
       const store = resumed?.header.store ?? branch.store;
       const declared: readonly CodemodeDeclaredTool[] =
-        resumed?.header.tools ?? [...callable.values()].map((tool) => ({ name: tool.contribution.spec.name, jsName: tool.jsName, description: tool.sample }));
-      const globals: readonly CodemodeDeclaredGlobal[] = resumed?.header.globals ?? [
-        { name: "searchTools", spread: true },
-        { name: "describeTool", spread: true },
-        { name: "describeNamespace", spread: true },
-        { name: "models.getModelsOfType", spread: true },
-        { name: "models.getAvailableOfType", spread: true },
-        { name: "models.getModelOfType", spread: true },
-        { name: "models.classifiers", spread: true },
-        { name: "models.classify", spread: true },
-        { name: "models.generateImages", spread: true },
-      ];
+        resumed?.header.tools ??
+        [...catalog.tools.values()].map((tool) => ({ name: tool.contribution.spec.name, jsName: tool.jsName, description: tool.sample }));
+      const globals = resumed?.header.globals ?? DECLARED_GLOBALS;
       const header: JournalHeader = resumed?.header ?? {
         type: "header",
         version: 1,
@@ -311,109 +505,16 @@ export const codemodeTool = (deps: CodemodeDeps): Tool<CodemodeInput> => ({
         );
       };
 
-      // `models.*`: the models `Llm` lists, and `classify` and `generateImages` through it with the session's credentials.
       const modelCalls = Semaphore.makeUnsafe(MAX_MODEL_CALLS);
-      const listOf = async (type: unknown, available: boolean, provider?: unknown): Promise<unknown[]> => {
-        if (!MODEL_TYPES.includes(type as ModelType))
-          throw new Error(`models: the type is one of ${MODEL_TYPES.map((name) => `"${name}"`).join(", ")}, not ${JSON.stringify(type)}`);
-        const query = { available };
-        const entries: readonly { readonly provider: string }[] =
-          type === "classifier"
-            ? (await runEffect(deps.llm.classifiers(query))).map((model) => ({ type, ...model }))
-            : type === "image"
-              ? (await runEffect(deps.llm.imageModels(query))).map((model) => ({ type, ...model }))
-              : (await runEffect(deps.llm.models(query))).map((model) => ({ type, ...model }));
-        return typeof provider === "string" ? entries.filter((entry) => entry.provider === provider) : [...entries];
-      };
-      const modelRef = (name: string, model: unknown, type: string) => {
-        const ref = refOf(model);
-        if (ref === undefined)
-          throw new Error(`${name}() expects a ${type} model first: an entry of models.getAvailableOfType("${type}"), or a ref such as "provider/model"`);
-        return ref;
-      };
-      const runGlobal = async (name: string, args: readonly unknown[], abort: AbortSignal): Promise<unknown> => {
-        switch (name) {
-          case "searchTools": {
-            const [query, options] = args as [unknown, { readonly limit?: unknown; readonly namespace?: unknown } | null | undefined];
-            if (typeof query !== "string") throw new Error("searchTools() expects a query string");
-            const limitTo = options?.limit ?? SEARCH_LIMIT;
-            if (typeof limitTo !== "number" || !Number.isInteger(limitTo) || limitTo <= 0) throw new Error("searchTools() limit must be a positive integer");
-            const within = options?.namespace;
-            if (within !== undefined && within !== null && typeof within !== "string") throw new Error("searchTools() namespace must be a name");
-            const space = typeof within === "string" ? namespaceOf(within) : undefined;
-            if (typeof within === "string" && space === undefined) throw new Error(`searchTools(): no namespace "${within}"; the system prompt names them`);
-            const documents = [...callable.values()]
-              .filter((tool) => space === undefined || tool.contribution.namespace === space.name)
-              .map((tool) => ({
-                tool,
-                name: tool.contribution.spec.name,
-                description: tool.contribution.spec.description,
-                ...(tool.contribution.namespace === undefined ? {} : { context: namespaceOf(tool.contribution.namespace)?.description ?? "" }),
-              }));
-            return rank(documents, query)
-              .slice(0, limitTo)
-              .map(({ tool }) => ({ name: tool.jsName, description: tool.sample }));
-          }
-          case "describeTool": {
-            const [toolName] = args;
-            if (typeof toolName !== "string") throw new Error("describeTool() expects a tool's name");
-            const tool = byJsName.get(toCodemodeIdentifier(toolName)) ?? callable.get(toolName);
-            if (tool === undefined) return undefined;
-            const { spec, namespace, output } = tool.contribution;
-            return {
-              name: tool.jsName,
-              ...(namespace === undefined ? {} : { namespace }),
-              description: spec.description,
-              declaration: renderToolSignature({ name: spec.name, inputSchema: spec.parameters, outputSchema: output ?? TEXT_OUTPUT }),
-            };
-          }
-          case "describeNamespace": {
-            const [spaceName] = args;
-            if (typeof spaceName !== "string") throw new Error("describeNamespace() expects a namespace's name");
-            const space = namespaceOf(spaceName);
-            if (space === undefined) return undefined;
-            return {
-              name: space.name,
-              description: space.description,
-              ...(space.instructions === undefined ? {} : { instructions: space.instructions }),
-              tools: [...callable.values()].filter((tool) => tool.contribution.namespace === space.name).map((tool) => tool.jsName),
-            };
-          }
-          case "models.getModelsOfType":
-            return listOf(args[0], false, args[1]);
-          case "models.getAvailableOfType":
-            return listOf(args[0], true, args[1]);
-          case "models.getModelOfType": {
-            const [type, provider, id] = args;
-            if (typeof provider !== "string" || typeof id !== "string") throw new Error("models.getModelOfType() expects a type, a provider, and an id");
-            return (await listOf(type, false)).find(
-              (entry) => (entry as { provider: string; id: string }).provider === provider && (entry as { id: string }).id === id,
-            );
-          }
-          case "models.classifiers": {
-            const [options] = args as [{ readonly available?: unknown } | null | undefined];
-            return runEffect(deps.llm.classifiers({ available: options?.available === true }));
-          }
-          case "models.classify": {
-            const ref = modelRef("models.classify", args[0], "classifier");
-            const decoded = decodeClassifierContext(plainImages(args[1]));
-            if (Result.isFailure(decoded)) throw new Error(`models.classify() got a context it cannot use: ${decoded.failure.message}`);
-            // Aborted when the script ends, times out, or is stopped: that interrupts the request, or its wait for a turn.
-            const result = await runEffect(modelCalls.withPermits(1)(deps.llm.classify(ref, decoded.success)), abort);
-            used(result.usage);
-            return result;
-          }
-          case "models.generateImages": {
-            const ref = modelRef("models.generateImages", args[0], "image");
-            const decoded = decodeImagesContext(plainImages(args[1]));
-            if (Result.isFailure(decoded)) throw new Error(`models.generateImages() got a context it cannot use: ${decoded.failure.message}`);
-            const result = await runEffect(modelCalls.withPermits(1)(deps.llm.generateImages(ref, decoded.success)), abort);
-            used(result.usage);
-            return result;
-          }
-          default:
-            throw new Error(`${name} is not a function`);
-        }
+      const script: Script = {
+        catalog,
+        llm: deps.llm,
+        run: runEffect,
+        modelCall: async (effect, abort) => {
+          const result = await runEffect(modelCalls.withPermits(1)(effect), abort);
+          used(result.usage);
+          return result;
+        },
       };
 
       // Asked once a call has failed, never on the way to one; a core shutting down stays so.
@@ -490,8 +591,7 @@ export const codemodeTool = (deps: CodemodeDeps): Tool<CodemodeInput> => ({
           // The script ended meanwhile; the call is cancelled.
         }
       };
-      const nameOf = (call: CodemodeHostCall) =>
-        call.target === "tool" ? (byJsName.get(toCodemodeIdentifier(call.name))?.contribution.spec.name ?? call.name) : call.name;
+      const nameOf = (call: CodemodeHostCall) => (call.target === "tool" ? (catalog.find(call.name)?.contribution.spec.name ?? call.name) : call.name);
       // Stops the run when the call is cancelled, or when it cannot resume.
       const stopping = new AbortController();
       // Cancels the calls still running when the run ends (the script returned, threw, exited, or timed out) or stops.
@@ -528,7 +628,7 @@ export const codemodeTool = (deps: CodemodeDeps): Tool<CodemodeInput> => ({
         const abort = ending.signal;
         void (async (): Promise<Settled | Held> => {
           try {
-            const tool = call.target === "tool" ? (byJsName.get(toCodemodeIdentifier(call.name)) ?? callable.get(call.name)) : undefined;
+            const tool = call.target === "tool" ? catalog.find(call.name) : undefined;
             // Cut off while it ran: it may have had its effect, so it runs again only when that is safe.
             if (resumed?.started.has(call.id) === true && call.target === "tool" && tool?.contribution.replay !== "safe")
               return {
@@ -539,15 +639,18 @@ export const codemodeTool = (deps: CodemodeDeps): Tool<CodemodeInput> => ({
               };
             await journal?.append({ type: "start", id: call.id });
             let settled: Settled;
-            if (call.target === "global") settled = { outcome: { ok: true, value: await runGlobal(call.name, call.args as readonly unknown[], abort) } };
-            else if (tool === undefined) settled = { outcome: { ok: false, message: `Tool "${call.name}" is not available` } };
+            if (call.target === "global") {
+              const global = Object.hasOwn(GLOBALS, call.name) ? GLOBALS[call.name] : undefined;
+              if (global === undefined) throw new Error(`${call.name} is not a function`);
+              settled = { outcome: { ok: true, value: await global(script, call.args as readonly unknown[], abort) } };
+            } else if (tool === undefined) settled = { outcome: { ok: false, message: `Tool "${call.name}" is not available` } };
             else settled = await runTool(tool, call.args, call.id, abort);
             // Failed as the core shuts down: perhaps for that alone, so the script does not hear it; the journal keeps it begun.
             return !settled.outcome.ok && (await isClosing()) ? new Held(false) : settled;
           } catch (cause) {
             if (cause instanceof Held) return cause;
             if (await isClosing()) return new Held(false);
-            return { outcome: { ok: false, message: cause instanceof Error ? cause.message : String(cause) } };
+            return { outcome: { ok: false, message: errorMessage(cause) } };
           }
         })().then(async (settled) => {
           // Held: never answered. The script waits on it until the turn is interrupted, as the core goes on shutting down.
@@ -613,18 +716,7 @@ export const codemodeTool = (deps: CodemodeDeps): Tool<CodemodeInput> => ({
           }),
         ),
       );
-      if (mismatched) {
-        return new ToolResult({
-          content: [
-            {
-              type: "text",
-              text: "Script failed\nA host restart cut this script off, and it cannot resume on this version of the sandbox, which would not make the same calls. Calls it made before the restart are not undone; run it again only if that is safe.",
-            },
-          ],
-          isError: true,
-          details: { calls: [] } satisfies CodemodeDetails,
-        });
-      }
+      if (mismatched) return CANNOT_RESUME;
       for (const [id, call] of pending)
         record(id, {
           name: call.name,
@@ -634,41 +726,18 @@ export const codemodeTool = (deps: CodemodeDeps): Tool<CodemodeInput> => ({
         });
       pending.clear();
 
-      const calls = [...records].sort((a, b) => a.id - b.id).map(({ call }) => call);
-      const items: Content[] = [];
-      for (const item of result.output) {
-        if (item.type === "image") items.push({ type: "text", text: yield* Effect.promise(() => savedImage(item)) });
-        items.push(item.type === "text" ? { type: "text", text: item.text } : { type: "image", data: item.data, mimeType: item.mimeType });
-      }
-      if (result.ok && result.value !== undefined) items.push({ type: "text", text: valueText(result.value) });
-      if (!result.ok) items.push({ type: "text", text: `Script error:\n${formatError(result.error, calls)}` });
-      // The model does not see what its script showed the person: it is told, so its reply neither repeats nor misses it.
-      const showed = [...displays].sort((a, b) => a.id - b.id).map(({ display }) => display);
-      if (showed.length > 0)
-        items.push({ type: "text", text: `[Shown to the person outside your reply: ${showed.map(named).join(", ")}. Don't describe it again.]` });
-      if (unshown.length > 0) {
-        const limit = `one script shows at most ${MAX_DISPLAYS} pages, ${MAX_DISPLAY_BYTES / (1024 * 1024)} MiB together`;
-        const names = [...unshown].sort((a, b) => a.id - b.id).map(({ name }) => name);
-        items.push({
-          type: "text",
-          text: `[Not shown to the person, though they ran: ${names.join(", ")} (${limit}). Show what matters from another script.]`,
-        });
-      }
-      // Under the call's budget with room for the header, so the note naming the full output survives the registry's cut.
-      const { content, fullOutputPath } = yield* Effect.promise(() => boundOutput(items, { budget: outputBudget(maxResultChars), name: "codemode" }));
-      const wallTime = ((performance.now() - started) / 1000).toFixed(1);
-      const head = `${result.ok ? "Script completed" : "Script failed"}${resumed === undefined ? "" : " (resumed after a host restart)"}\nWall time ${wallTime} seconds\nOutput:\n`;
-      const writes = result.ok && (Object.keys(result.storeWrites.set).length > 0 || result.storeWrites.delete.length > 0) ? result.storeWrites : undefined;
-      const details: CodemodeDetails = {
-        calls: calls.slice(0, MAX_KEPT_CALLS),
-        ...(calls.length > MAX_KEPT_CALLS ? { callsOmitted: calls.length - MAX_KEPT_CALLS } : {}),
-        ...(fullOutputPath === undefined ? {} : { truncated: true, fullOutputPath }),
-        ...(usage === undefined ? {} : { usage }),
-        ...(writes === undefined ? {} : { storeWrites: writes }),
-        ...(showed.length === 0 ? {} : { displays: showed }),
-        ...(resumed === undefined ? {} : { resumed: true }),
-      };
-      const done = new ToolResult({ content: [{ type: "text", text: head }, ...content], ...(result.ok ? {} : { isError: true }), details });
+      const done = yield* Effect.promise(() =>
+        scriptResult({
+          result,
+          calls: [...records].sort((a, b) => a.id - b.id).map(({ call }) => call),
+          displays: [...displays].sort((a, b) => a.id - b.id).map(({ display }) => display),
+          unshown: [...unshown].sort((a, b) => a.id - b.id).map(({ name }) => name),
+          usage,
+          resumed: resumed !== undefined,
+          started,
+          maxResultChars,
+        }),
+      );
       if (journal !== undefined) {
         const encoded = yield* Schema.encodeEffect(ToolResult)(done).pipe(Effect.orDie);
         yield* Effect.promise(() => journal.append({ type: "done", result: encoded }));

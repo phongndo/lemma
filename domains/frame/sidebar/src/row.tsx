@@ -1,6 +1,6 @@
 import { Match, Show, Switch, createEffect, createSignal, onCleanup } from "solid-js";
 import { ThreadActions, sessionTitle } from "@lemma/threads";
-import type { SidebarRowProps, ThreadDraft } from "@lemma/threads";
+import type { SidebarRowProps, ThreadAttention, ThreadDraft } from "@lemma/threads";
 import type { SessionInfo } from "@lemma/sessions";
 import { ActionMenu } from "@lemma/frame";
 import { usePlugin } from "@lemma/web";
@@ -19,7 +19,8 @@ import {
   WorktreeIcon,
   XIcon,
 } from "@lemma/look";
-import { runTime, shortAge } from "./list.ts";
+import { elapsed, plural } from "@lemma/web/format";
+import { shortAge } from "./list.ts";
 
 /** How long the pointer rests on a row before its details show, and how soon after one closes the next opens at once. */
 const CARD_DELAY = 150;
@@ -30,11 +31,21 @@ let cardClosedAt = 0;
 /** Where the pointer last moved over a row: one moved under a still pointer (a thread made or archived above it) shows no details. */
 let pointerAt = { x: Number.NaN, y: Number.NaN };
 
+/** What a row shows of what its thread asks of the person (`Threads.attention`). */
+export const attentionProps = (attention: ThreadAttention | undefined) => ({
+  attention,
+  runningSince: attention?.state === "working" ? attention.since : undefined,
+  unread: attention?.state === "done" || attention?.state === "failed",
+  waiting: attention?.state === "waiting" ? attention.label : undefined,
+});
+
 /**
  * Its state where the time goes, as T3 Code shows it, the most pressing first: what it waits on the person for, a
  * running turn and its time, a turn that failed or finished and is not yet seen; else how long ago it was used.
  */
-export const Status = (props: SidebarRowProps & { readonly since?: number }) => (
+export const Status = (
+  props: Pick<SidebarRowProps, "session" | "now" | "running" | "runningSince" | "unread" | "attention" | "waiting"> & { readonly since?: number },
+) => (
   <Switch fallback={<span class="thread-when">{shortAge(props.since ?? props.session.updatedAt, props.now)}</span>}>
     <Match when={props.waiting}>
       {(label) => (
@@ -48,7 +59,7 @@ export const Status = (props: SidebarRowProps & { readonly since?: number }) => 
       <span class="thread-when thread-state" data-state="working">
         <Spinner />
         <span role="status">Working</span>
-        <Show when={props.runningSince}>{(since) => <span aria-hidden="true">{runTime(since(), props.now)}</span>}</Show>
+        <Show when={props.runningSince}>{(since) => <span aria-hidden="true">{elapsed(since(), props.now)}</span>}</Show>
       </span>
     </Match>
     <Match when={props.attention?.state === "failed" ? props.attention.label : undefined}>
@@ -114,7 +125,7 @@ function Details(props: SidebarRowProps & { readonly at: DOMRect; readonly archi
       <Show when={props.waiting}>{(label) => <div class="thread-details-line waiting">{label()}</div>}</Show>
       <div class="thread-details-line muted">
         {stateWords(props, props.archived)}
-        {props.running && props.runningSince !== undefined ? ` for ${runTime(props.runningSince, props.now)}` : ""}
+        {props.running && props.runningSince !== undefined ? ` for ${elapsed(props.runningSince, props.now)}` : ""}
         {props.running ? "" : ` ${shortAge(props.since, props.now) === "now" ? "just now" : `${shortAge(props.since, props.now)} ago`}`}
       </div>
     </div>
@@ -352,7 +363,7 @@ export function DraftRow(props: {
   const preview = () => {
     const line = props.draft?.text.trim().split("\n", 1)[0] ?? "";
     const images = props.draft?.images.length ?? 0;
-    return line !== "" ? line : images > 0 ? `${images} image${images === 1 ? "" : "s"}` : "New thread";
+    return line !== "" ? line : images > 0 ? plural(images, "image") : "New thread";
   };
   return (
     <div class="thread-row draft" classList={{ active: props.active }} style={{ "--hover-room": `${DISCARD_ROOM}px` }}>

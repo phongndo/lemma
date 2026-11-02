@@ -2,7 +2,7 @@ import { Effect } from "effect";
 import type { Context } from "effect";
 import { awaitable } from "@lemma/core";
 import type { Registries } from "@lemma/core";
-import { withContribution } from "@lemma/contracts";
+import { errorMessage, withContribution } from "@lemma/contracts";
 import { AgentError, PromptSections } from "../../agent.ts";
 import type { SectionRequest, SystemSection } from "../../agent.ts";
 
@@ -47,9 +47,7 @@ export const makeSections =
               (error) => error === GONE,
               () => Effect.succeed([]),
             ),
-            Effect.mapError((cause) =>
-              cause instanceof AgentError ? cause : failed(`failed: ${cause instanceof Error ? cause.message : String(cause)}`, cause),
-            ),
+            Effect.mapError((cause) => (cause instanceof AgentError ? cause : failed(`failed: ${errorMessage(cause)}`, cause))),
           );
         },
         { concurrency: "unbounded" },

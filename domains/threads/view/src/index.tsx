@@ -195,7 +195,7 @@ export default defineWebPlugin({
       ),
     });
 
-    // A thread's menu (its header's ⋯, a right-click on its row) goes through the slot other plugins add theirs to.
+    // A thread's menu: its header's ⋯, and a right-click on its row.
     const menuItem = (id: string, order: number, action: ThreadAction) => slots.add(ThreadActions, { id, order, ...action });
     menuItem("thread.menu.rename", 10, { label: () => "Rename", icon: PencilIcon, run: (_, row) => row.rename() });
     menuItem("thread.menu.pin", 20, {
@@ -292,7 +292,6 @@ export default defineWebPlugin({
       }
     });
 
-    // Its header's items go through the slot other plugins add theirs to.
     const header = (id: string, order: number, side: "start" | "end", component: () => JSX.Element) => slots.add(ThreadHeader, { id, order, side, component });
     // While the sidebar shows, its own head has the toggle, with the same tooltip: the shell's action, and its keys.
     header("thread.sidebar-toggle", 0, "start", () => (
@@ -318,7 +317,7 @@ export default defineWebPlugin({
               const path = () => tildePath(dir(), client.info()?.home);
               return (
                 <>
-                  <span class="main-project" data-tip={path()}>
+                  <span class="main-project tw:truncate" data-tip={path()}>
                     {workspace.projectName(dir())}
                   </span>
                   <span class="main-sep" aria-hidden="true">
@@ -332,7 +331,7 @@ export default defineWebPlugin({
             when={renaming() && threads.active()}
             keyed
             fallback={
-              <h1 onDblClick={() => threads.active() !== undefined && setRenaming(true)}>
+              <h1 class="tw:truncate" onDblClick={() => threads.active() !== undefined && setRenaming(true)}>
                 {unknown() !== undefined ? "No thread here" : threads.activeId() === undefined ? "Thread" : sessionTitle(threads.active())}
               </h1>
             }

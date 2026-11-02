@@ -6,6 +6,8 @@
 
 /** A jump to a turn stops this far above its start. */
 export const JUMP_MARGIN = 8;
+/** The prompt rail's key for a steer sent and not yet placed. */
+export const pendingMark = (requestId: string) => `steer:${requestId}`;
 /**
  * A turn whose jump stop is this little above or below where the view is counts as where it is: a step goes on to the
  * one after, as a step of a few pixels would seem to do nothing.

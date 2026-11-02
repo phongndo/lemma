@@ -1,13 +1,13 @@
 # @lemma/core
 
 An Effect-native, domain-neutral plugin kernel. It composes typed capabilities,
-plugin-defined hooks and events, configuration, and scoped lifetimes. Applications
-and plugin authors define their own contracts and behavior.
+plugin-defined hooks and events, configuration, and scoped lifetimes.
+Applications and plugin authors define their own contracts and behavior.
 [`DESIGN.md`](DESIGN.md) holds the design rationale.
 
 Only `effect` is a runtime dependency. Plugins are trusted, in-process modules;
 there is no security sandbox. The package exports ESM JavaScript and TypeScript
-declarations and targets Node.js 24 and browsers.
+declarations, and targets Node.js 24 and browsers.
 
 ## Use
 
@@ -38,46 +38,102 @@ await Effect.runPromise(
 );
 ```
 
-See [`examples/hello.ts`](examples/hello.ts) for a capability implementation extended by a separate plugin through its own hook (`nix develop -c pnpm example` runs it).
+[`examples/hello.ts`](examples/hello.ts) has a capability implementation that a
+separate plugin extends through its own hook. `nix develop -c pnpm example` runs
+it.
 
 ## Plugin contract
 
-`definePlugin({ id, version?, config?, provides?, requires?, exclusive?, deadlines?, setup })` declares a composition member, as does the same with a `layer` in place of `setup` (below):
+`definePlugin({ id, version?, uses?, implements?, config?, provides?, requires?, exclusive?, deadlines?, setup })`
+declares a composition member, as does the same with a `layer` in place of
+`setup` (below).
 
-- `id` uniquely identifies an instance within one core. `version` is optional diagnostic metadata, not a dependency constraint.
-- `uses` and `implements` name the versions of contracts it is written against and implements, each `name@version` with a whole-number version (`"example/store@2"`; `ContractVersions`). Planning refuses a plugin that uses another version of a contract than a plugin in the composition implements, as a `CompositionError` (`IncompatibleContract`) naming both versions and the implementer; a contract no plugin implements constrains nothing, so `uses` is not a dependency and starts nothing. A malformed entry is refused the same way. Write `uses` as a literal: a version read at run time from the contract's own module would always match.
-- `config` is an Effect Schema or, with `setup`, the defaults one is derived from (`configSchema`: each field takes its default's type and decodes to it when absent; nested objects default field by field). `makeCore(plugins, { configs })` decodes every plugin's config before any activation; a missing value decodes as `{}`; an invalid one is a `CompositionError` (`InvalidConfig`) naming the plugin and the failing path. Write the Schema for titles, descriptions, or constraints.
-- `exclusive` marks a plugin that cannot coexist with its replacement (a port, a lock, a unique registration in a retained registry); a reload stops it before starting the new instance. `deadlines` bound activation and disposal (defaults 30s and 10s, overridable per core).
-- Capabilities are ordinary Effect `Context.Service` keys. Share the keys between consumers and providers; use namespaced key names. Effect identifies capabilities by their key names.
-- `provides` declares exports; `requires` declares dependencies supplied by other plugins or by the application ([below](#capabilities-the-application-provides)): with `setup`, by name (`{ store: Store }`), the names under which `setup` receives and returns them; with `layer`, as a list of tags. `PluginContext`, `Hooks`, `Events`, and `Registries` are available without declaration. The runtime rejects attempts to provide these built-ins or `Scope`.
-- `setup(services, plugin)` runs when the plugin activates, in its scope: an Effect, or a generator function yielding Effects as `Effect.gen` takes. `plugin` is the `PluginContext` with the decoded `config` and a `signal` that aborts when the plugin stops, before its own finalizers run. It returns the provided services by name. TypeScript checks that it uses only what it requires and the built-ins, and returns what it provides.
-- `layer` is an ordinary Effect `Layer`, the form `setup` is built on. Use `Layer.effect` (its Effect may use the layer's `Scope`), `Effect.acquireRelease`, and `Effect.forkScoped` for resources and background work. Dependencies constructed privately inside a Layer need not be declared. `layer` may be a function of the decoded config.
-- The manifest is needed for runtime graph inspection and validation: Effect's type-level requirements alone cannot describe a dynamically supplied composition. Construction and cleanup still belong to Effect, not a second dependency-injection system.
+- `id` identifies an instance uniquely within one core. `version` is
+  diagnostic metadata, not a dependency constraint.
+- `uses` and `implements` name the contract versions it is written against
+  and implements, each `name@version` with a whole-number version
+  (`"example/store@2"`; `ContractVersions`). Planning refuses a malformed
+  entry, or a plugin using another version of a contract than its implementer,
+  with a `CompositionError` (`IncompatibleContract`) naming both versions and
+  the implementer. A contract no plugin implements constrains nothing: `uses`
+  is not a dependency, and starts nothing. Write `uses` as a literal, since a
+  version read from the contract's own module would always match.
+- `config` is an Effect Schema, for titles, descriptions, or constraints. With
+  `setup` it may be the defaults instead, from which `configSchema` derives the
+  Schema. Each field takes its default's type and decodes to it when absent;
+  nested objects default field by field.
+- `exclusive` marks a plugin that cannot coexist with its replacement, such as
+  one holding a port, a lock, or a unique registration in a retained registry.
+  A reload stops it before starting the new instance.
+- `deadlines` bound activation and disposal: 30s and 10s by default, which a
+  core can override.
+- `provides` declares exports, and `requires` dependencies, supplied by other
+  plugins or by the application
+  ([below](#capabilities-the-application-provides)). With `setup` both are by
+  name (`{ store: Store }`), the names `setup` receives and returns them under.
+  With `layer` both are lists of tags.
+- `PluginContext`, `Hooks`, `Events`, and `Registries` are available without
+  declaration; `builtinKeys` holds their keys. The runtime refuses a plugin
+  that provides one of them, or `Scope`.
+- Capabilities are Effect `Context.Service` keys, shared between consumers and
+  providers. Namespace their names: Effect identifies capabilities by them.
+- `setup(services, plugin)` runs in the plugin's scope as it activates. It is
+  an Effect, or a generator function yielding Effects as `Effect.gen` takes,
+  and returns the provided services by name. `plugin` is the `PluginContext`,
+  with the decoded `config` and a `signal` that aborts when the plugin stops,
+  before its own finalizers run. TypeScript checks that it uses only what it
+  requires and the built-ins, and returns what it provides.
+- `layer` is an Effect `Layer`, the form `setup` is built on, or a function of
+  the decoded config. Use `Layer.effect` (its Effect may use the layer's
+  `Scope`), `Effect.acquireRelease`, and `Effect.forkScoped` for resources and
+  background work. Dependencies it constructs privately need no declaration.
 
-The complete graph is validated before any plugin's Layer executes; the application's services (below) are built first, and released if validation fails. Missing dependencies, duplicate ids, competing providers, and cycles produce `CompositionError`, as does a plugin providing what the runtime or the application provides (`ReservedCapability`); what the application provides is present for every plugin. `checkComposition(plugins, configs, { provided })` returns the same errors without running anything, `provided` being the application's `provide.provides`, so an application can decide what to leave out first. There is no implicit last-writer-wins override: replace a provider by supplying a different composition. Dependencies activate before consumers; independent plugins are ordered by code-unit id comparison. Activation receives only declared capabilities and the runtime context, not incidental capabilities from the host or unrelated plugins.
+The whole graph is validated before any plugin's Layer runs, after the
+application's services (below) are built; they are released if it fails.
 
-Each Layer's actual exports must exactly match `provides`. A mismatch, startup failure, defect, or deadline produces a `PluginFault` (phase `activate`) with the plugin id and original Effect cause. Pure interruption stays interruption. TypeScript checks declared inputs and outputs; runtime validation also covers untyped plugins.
+- `makeCore(plugins, { configs })` decodes every plugin's config first, a
+  missing one as `{}`. An invalid one is a `CompositionError` (`InvalidConfig`)
+  naming the plugin and the failing path.
+- Missing dependencies, duplicate ids, competing providers, cycles, and a
+  plugin providing what the runtime or the application provides
+  (`ReservedCapability`) are `CompositionError`s too. No provider overrides
+  another: replace one by supplying a different composition.
+- `checkComposition(plugins, configs, { provided })` returns the same errors
+  without running anything, so an application can decide what to leave out
+  first. `provided` is the application's `provide.provides`.
+- An application that plans for itself uses the core's pieces:
+  `requiredBy(plugins, providers, roots)` says what must run for `roots` to
+  run, and `firstIssue(issue)` where a failed decode went wrong (its path and
+  message).
+- Dependencies activate before consumers, independent plugins in code-unit
+  order of their ids. An activation receives only declared capabilities and the
+  runtime context.
 
-Separate cores have independent capability environments and hook registrations, even when created from the same definitions. This is composition isolation, not isolation from shared module globals or operating-system access.
+Each Layer's actual exports must match `provides` exactly: the core checks them
+as it activates, so untyped plugins are held to it too. A mismatch, startup failure, defect, or deadline is a
+`PluginFault` (phase `activate`), with the plugin id and the original Effect
+cause; pure interruption stays interruption.
 
-Contracts belong to the application or a shared plugin package. Consumers import
-the contract, not the provider implementation. A capability can contain ordinary
-values, functions, promises, or Effects. Effect owns setup and cleanup; a
-promise-based operation must cooperate with cancellation, for example by accepting
-an `AbortSignal` passed through `Effect.tryPromise`. The core does not intercept arbitrary
-capability functions or automatically cancel the work they start.
+Separate cores have independent capability environments and hook
+registrations, even when made from the same definitions. That isolates
+compositions, not shared module globals or access to the operating system.
 
-Contributions to another plugin's collection belong in a core registry (below):
-they are released with the contributor's scope and swapped with it on reload. A
-collection a plugin keeps in its own data structure must be released with the
-contributor's scope too; if it rejects duplicate names, mark the contributor
-`exclusive: true` so reload can unregister the old value before installing the
-new one, which incurs the same interruption gap as any exclusive resource.
+Contracts belong to the application or a shared plugin package; consumers
+import the contract, not the provider. A capability holds values, functions,
+promises, or Effects, and Effect owns its setup and cleanup. The core neither
+intercepts capability functions nor cancels the work they start, so a
+promise-based operation cooperates with cancellation itself (accepting the
+`AbortSignal` that `Effect.tryPromise` passes, say).
+
+A collection a plugin keeps in its own data structure, rather than in a core
+registry (below), must release a contribution with the contributor's scope. If
+it refuses duplicate names, its contributors are `exclusive`, so a reload
+unregisters the old value before installing the new one.
 
 ## Capabilities the application provides
 
 The application that embeds the core is the runtime its plugins are written
-against, and provides capabilities of its own with `provide`, on `makeCore` and
+against. It provides capabilities of its own with `provide`, on `makeCore` and
 `makeLoader` alike:
 
 ```ts
@@ -87,44 +143,43 @@ const provide = { provides: [Clock], layer: Layer.succeed(Clock, { now: Date.now
 const core = makeCore(plugins, { provide }); // makeLoader({ source, composition, provide }) alike
 ```
 
-- `provides` lists what it provides, known without building anything, so
-  planning and `checkComposition` can count on it; each is listed once. `layer`
-  builds exactly those services: TypeScript catches a listed one it does not
-  build, and the core an unlisted extra when it builds them, as a defect from
-  `makeCore` or a `ReloadError` diagnostic from `makeLoader`, naming the missing
-  and undeclared keys. Several services are `Layer.mergeAll(…)`; what the layer
-  needs from the application is provided into it beforehand (`Layer.provide`).
+- `provides` lists them, each once, so planning and `checkComposition` count on
+  them without building anything.
+- `layer` builds exactly those services. TypeScript catches a listed one it
+  lacks. The core catches an unlisted extra as it builds, naming the missing
+  and undeclared keys, as a defect from `makeCore` or a `ReloadError`
+  diagnostic from `makeLoader`.
+- Several services are `Layer.mergeAll(…)`. Provide what the layer needs from
+  the application into it beforehand (`Layer.provide`).
 - Plugins require them as any other capability, and `core.run` supplies them.
-  A plugin that provides one is a `CompositionError` (`ReservedCapability`),
-  never an override; so is an application that provides a built-in or `Scope`,
-  or lists a capability twice (`DuplicateCapability`).
-- The layer may use `Hooks`, `Events`, and `Registries`: a service can invoke a
-  hook plugins handle, publish an event, or read a registry. It has no
-  `PluginContext`, because it uses extension points rather than contributing to
-  them; registering a handler or a registry item belongs in a plugin. Of the
-  caller's context it sees only runtime settings, as an activation does.
-- It is built once, before the first plugin activates, and released after the
-  last plugin is disposed, within the core's dispose deadline and
-  `shutdownTimeout`. Hooks, events, and registries have closed by the time its
-  finalizers run.
-- The services are fixed for the life of the core or loader: never stopped,
-  restarted, or replaced, never revoked by a plugin's failure, and never a
-  plugin's `haltedBy`. A service that reflects changing state is a stable handle
-  over that state; changing the services themselves takes a new core.
-- A build failure fails `makeCore` with the layer's error, and `makeLoader` with
-  a `ReloadError` whose diagnostic names no plugin; either leaves nothing
-  behind. The application's failures are not `PluginFault`s and nothing
-  supervises the work its layer starts, so the application reports its own.
+- A plugin providing one is a `CompositionError` (`ReservedCapability`), never
+  an override. So is an application that provides a built-in or `Scope`, and
+  one that lists a capability twice (`DuplicateCapability`).
+- The layer may use `Hooks`, `Events`, and `Registries`, to invoke a hook,
+  publish an event, or read a registry. It has no `PluginContext`: registering
+  a handler or an item belongs in a plugin. Of the caller's context it sees
+  only runtime settings, as an activation does.
+- It is built once, before the first plugin activates. It is released after
+  the last plugin is disposed and hooks, events, and registries have closed,
+  within the core's dispose deadline and `shutdownTimeout`.
+- The services are fixed for the life of the core or loader: no change,
+  restart, or plugin failure stops, replaces, or revokes them, and none is ever
+  a plugin's `haltedBy`. A service over changing state is a stable handle over
+  it; changing the services takes a new core.
+- A build failure fails `makeCore` with the layer's error, and `makeLoader`
+  with a `ReloadError` whose diagnostic names no plugin. Either leaves nothing
+  behind.
+- The application's failures are not `PluginFault`s, and nothing supervises the
+  work its layer starts: the application reports its own.
 
-A plugin written with promises receives such a service as its own `Plain<S>`
-view, like any other: the view refuses calls once that plugin stops, while the
-service goes on serving the rest.
+[`DESIGN.md`](DESIGN.md#the-applications-capabilities) says why they are fixed,
+take no `PluginContext`, and cannot be overridden.
 
 ## Plugins written with promises
 
 `@lemma/core/plain` defines plugins with promises instead of Effects. The
 plugin has the same shape, and the core plans, orders, supervises, and replaces
-it as it does any other:
+it as any other:
 
 ```ts
 import { definePlugin } from "@lemma/core/plain";
@@ -141,125 +196,133 @@ export default definePlugin({
 });
 ```
 
-- **Services** arrive as `Plain<S>`: a method returning an Effect returns a
+- **Services** arrive as `Plain<S>`. A method returning an Effect returns a
   promise of its value, one returning a stream an async iterable, and an Effect
   member becomes a method. A failure rejects with its error, marked so that
   rethrowing it keeps it a typed failure; a defect rejects with the defect. A
   generic or overloaded method keeps one signature through the mapping.
 - **Context.** A call runs in the context of the work that led to it (a hook's
-  operation, an event, the activation), so it keeps that work's references and
+  operation, an event, the activation): it keeps that work's references and
   trace, and stops when that work is interrupted. It always runs as the plugin
-  that makes it, with its own `PluginContext` and `Scope`, whoever's work called
-  the code (a guard another plugin runs). Where the runtime has
-  `AsyncLocalStorage` (Node.js, found without importing it, so browser bundles
-  are unaffected) this follows `await` and `.then`;
-  elsewhere it holds until the first one, and later calls run in the plugin's
-  own context, stopping when it stops. What a plugin registers (a handler, an
-  observer, an item, a background task) is its own, not the work's that was
-  running when it registered: a handler registered during one operation does
-  not keep that operation's references for the next.
-- **`setup`** may be `async`, and receives the `PluginContext` operations as
-  promise-based functions (`on`, `add`, `observe`, `publish`, `invoke`,
-  `items`, `changes`, `background`, `fault`, `run`, `trace`) plus `config`, `signal`,
-  `onCleanup`, and the helpers below. `trace(name, fn)` runs `fn` in a span
-  attributed to the plugin, under the span of the work that called it. The plugin is active once setup has returned and every call it
-  made before it returned has settled (calls a background task or a loop
-  makes later are not setup's). A call
-  that failed, which setup neither awaited nor caught, fails the activation, as
-  does a throw; neither is ever an unhandled rejection. Start long-running work
-  with `background`, not by leaving a promise behind.
-- **Hook handlers** return a value, a promise, or `next(input)`. Returned from a
-  function that is not `async`, `next(input)` runs the rest of the chain in
-  place, on the caller's fiber: a pass-through costs about 1.4 times an Effect
-  handler (`bench/budgets.ts`). Awaiting `next` costs a promise per handler. A
-  handler that declares a third parameter receives a signal, aborted if the
-  operation is interrupted; calls the handler made stop then too, as do calls
-  it makes later (a microtask it queued).
-- **Errors.** A throw nobody marked is a defect; `throw fail(error)` (or
-  returning an Effect) is a typed failure. A service call's failure is marked
-  already, so rethrowing it keeps it one. A value that is not an object (a
-  string) cannot carry a mark, so it is marked for the operation it was thrown
-  in: rethrown there it is that failure, and elsewhere a defect, so an Effect
-  typed as unable to fail never fails with a stray string.
+  making it, with its `PluginContext` and `Scope`, whoever's work called the
+  code (a guard another plugin runs).
+  - With `AsyncLocalStorage`, which the core finds without importing it (so
+    browser bundles are unaffected), the context follows `await` and `.then`.
+    Elsewhere it holds until the first `await`, and later calls run in the
+    plugin's own context, stopping when it stops.
+  - What a plugin registers (a handler, an observer, an item, a background
+    task) is its own: a handler registered during one operation keeps none of
+    that operation's references for the next.
+- **`setup`** may be `async`. It receives `config`, `signal`, `onCleanup`, the
+  helpers below, and the `PluginContext` operations as promise-based
+  functions: `on`, `add`, `observe`, `publish`, `invoke`, `items`, `changes`,
+  `background`, `fault`, `run`, and `trace`. `trace(name, fn)` runs `fn` in a
+  span attributed to the plugin, under the span of the work that called it.
+  - The plugin is active once setup has returned and every call it made before
+    returning has settled. Calls a background task or a loop makes later are
+    not setup's.
+  - A call that failed, which setup neither awaited nor caught, fails the
+    activation, as a throw does. Neither is ever an unhandled rejection.
+  - Start long-running work with `background`, not by leaving a promise behind.
+- **Hook handlers** return a value, a promise, or `next(input)`.
+  - Returned from a function that is not `async`, `next(input)` runs the rest
+    of the chain in place, on the caller's fiber: a pass-through costs about
+    1.4 times an Effect handler (`bench/budgets.ts`). Awaiting `next` costs a
+    promise per handler.
+  - A handler that declares a third parameter receives a signal, aborted if
+    the operation is interrupted. The calls the handler made stop then too, as
+    do calls it makes later (a microtask it queued).
+- **Errors.** A throw nobody marked is a defect. `throw fail(error)`, or
+  returning an Effect, is a typed failure. A value that is not an object (a string) cannot carry a mark, so it
+  is marked for the operation it was thrown in: rethrown there it is that
+  failure, and elsewhere a defect. So an Effect typed as unable to fail never
+  fails with a stray string.
 - **Streams** read as async iterables fail as calls do, with their typed error.
-  They end when the work that started reading them is interrupted, or the
-  plugin stops; what the stream had buffered then is not read.
+  They end when the work reading them is interrupted, or the plugin stops; what
+  they had buffered then is not read.
 - **Stopping.** When the plugin stops, its signal aborts, then its cleanups run
-  (`onCleanup`, last first, each even if another throws). Its services still
-  work for them: what a cleanup calls runs until cleanup is over, however long
-  it takes within the dispose deadline, and what it acquires (a scoped
-  resource) is released only once every cleanup is done. Then its services
-  refuse calls with `PluginStopped`, so a timer or promise it left behind
-  cannot act through them. A method that has returned plain values throws where
-  it is called; any other (one that returned Effects, streams, or promises, or
-  one never called) returns a refusal that rejects whether it is awaited or
-  read as a stream, so leaked work that catches never throws (a refusal nobody
-  awaits is logged as a warning). `items` throws, and `publish` drops the
-  event. A setup that fails aborts its signal before its cleanups run.
-- **Unawaited failures.** A call that fails with nothing awaiting or chaining its
-  promise is reported as the plugin's fault (`unawaited <operation>`), not as an
-  unhandled rejection that would end a Node.js process.
-- **Timers, listeners, and callbacks.** What a plugin would start with
-  `setTimeout`, `setInterval`, `addEventListener`, a promise left running, or a
-  function handed to a library, it starts with `after(ms, fn)`, `every(ms, fn)`,
-  `listen(target, type, fn)` (an `EventTarget` or an `on`/`off` emitter),
-  `task(name, fn)`, and `action(name, fn)`. Each ends when the plugin stops, or
-  when the cancel or removal it returns runs, and what throws or rejects in it is
-  the plugin's fault, named for it, rather than an error nobody hears. `every`
-  waits for a run to end before the next, and goes on after one fails. Once the
-  plugin is stopping (its signal aborted, its cleanups running), nothing would
-  end what starts, so `after`, `every`, and `listen` start nothing and an
-  `action` does nothing; a `task` asked then (a cleanup's flush) runs at once,
-  as part of stopping. An `action` runs as its plugin's own work wherever it is
-  called (another plugin's emit), and one that rejects with `PluginStopped`, a
-  call refused as a plugin stopped, is no fault. `task` resolves with what its
-  work resolves with, or `undefined` when it failed or the plugin had stopped.
+  (`onCleanup`), last first, each even if another throws. A setup that fails
+  aborts its signal before its cleanups run.
+  - Its services still work for the cleanups: what a cleanup calls runs until
+    cleanup is over, within the dispose deadline. What a cleanup acquires (a
+    scoped resource) is released once every cleanup is done.
+  - Then its services, the application's among them, refuse its calls with
+    `PluginStopped` (they go on serving the rest), so a timer or promise it
+    left behind cannot act through them. A method that has returned plain
+    values throws where it is called. Any other method (one that returned
+    Effects, streams, or promises, or one never called) returns a refusal,
+    which rejects whether awaited or read as a stream, so leaked work that
+    catches never throws. A refusal nobody awaits is logged as a warning.
+    `items` throws, and `publish` drops the event.
+- **Unawaited failures.** A call that fails with nothing awaiting or chaining
+  its promise is the plugin's fault (`unawaited <operation>`), not an unhandled
+  rejection, which would end a Node.js process.
+- **Timers, listeners, and callbacks.** Start them through the plugin's
+  helpers. Each ends when the plugin stops, or when the cancel or removal it
+  returns runs. What throws or rejects in one is the plugin's fault.
+  - `after(ms, fn)` replaces `setTimeout`. `every(ms, fn)` replaces
+    `setInterval`, waiting for a run to end before the next, and going on after
+    one fails.
+  - `listen(target, type, fn)` replaces `addEventListener`, on an
+    `EventTarget` or an `on`/`off` emitter.
+  - `task(name, fn)` replaces a promise left running. It resolves with what its
+    work resolves with, or `undefined` when it failed or the plugin had
+    stopped.
+  - `action(name, fn)` wraps a function handed to a library, so it runs as its
+    plugin's own work wherever it is called (another plugin's emit). One that
+    rejects with `PluginStopped`, a call refused because a plugin stopped, is
+    no fault.
+  - Once the plugin is stopping (its signal aborted, its cleanups running),
+    nothing would end what starts: `after`, `every`, and `listen` start
+    nothing, and an `action` does nothing. A `task` asked then (a cleanup's
+    flush) runs at once, as part of stopping.
 - **Errors nothing handled.** `reportUnhandled(error)` (from `@lemma/core`) is
   for an application's last-resort handlers: a process's `unhandledRejection`
-  and `uncaughtException`, a page's `unhandledrejection`. An error raised by a
-  plugin's work becomes that plugin's fault (`unhandled`), which does not stop
-  it; a `PluginStopped` is expected, a call a stopped plugin made; anything else
-  is nobody's that can be told. With `AsyncLocalStorage`, work follows the
-  timers and promises it starts, so a plugin's stray `setTimeout` is still its
-  own; in a browser only refusals are told apart. Effect work a promise-based
-  plugin starts (a call through a service, the rest of a hook's chain, an event
-  it publishes) runs outside its async-local context, with the context it needs
-  passed explicitly: Effect code carries none, so an error that work leaves
-  behind (an Effect-written plugin's stray timer) is nobody's that can be told,
-  rather than the fault of the promise-based plugin that called it, which did
-  nothing wrong. A plugin that has stopped
-  records no fault, so a caller logs what is not a refusal. The host installs
-  it: a plugin's stray error does not end the process, and one that is
-  nobody's does, as Node.js would end it, since the host's state may be broken.
+  and `uncaughtException`, and a page's `unhandledrejection`. The host
+  installs it.
+  - An error a plugin's work raised becomes that plugin's fault (`unhandled`),
+    which neither stops it nor ends the host. A `PluginStopped` is expected: a
+    call a stopped plugin made. A stopped plugin records no fault, so the
+    caller logs what is not a refusal.
+  - Anything else is nobody's that can be told, and ends the host, as Node.js
+    would, since its state may be broken.
+  - With `AsyncLocalStorage`, work follows the timers and promises it starts,
+    so a plugin's stray `setTimeout` is still its own. In a browser, only
+    refusals are told apart.
+  - Effect work a promise-based plugin starts (a service call, the rest of a
+    hook's chain, an event it publishes) runs outside its async-local context,
+    as Effect code carries none; it is passed the context it needs. An error
+    it leaves behind (an Effect-written plugin's stray timer) is nobody's that
+    can be told, not the calling plugin's.
 - **Nested services.** Objects inside a service are converted as the service
-  is, down to four levels below it, and read through: what a view shows is what
-  the object holds now. A plain object becomes an object with its keys; a class
+  is, down to four levels below it, and read through: a view shows what the
+  object holds now. A plain object becomes an object with its keys. A class
   instance goes behind a proxy that keeps its prototype, getters, and private
-  fields (a frozen one too). An object is one view however it is reached, so
+  fields, a frozen one too. An object is one view however it is reached, so
   `===` holds between reads, though not with the object itself. Built-in data
   (a `Map`, a `Date`, an `Error`, a typed array), arrays, tokens (a Hook, an
   Event, a Registry), and anything deeper are left as they are. `Plain<S>`
   types them the same way.
-- **Providing.** `setup` returns services as their contracts declare them; it does
-  not convert them. A method a contract types as returning an Effect can return
+- **Providing.** `setup` returns services as their contracts declare them,
+  unconverted. A method a contract types as returning an Effect can return
   `awaitable(async () => …)`.
 
 An application with its own way of writing plugins (a UI framework's) builds on
-`definePlugin(definition, { services, run })`. `services` is a function that
-gives its own view of the services. `run` wraps the call to setup in a reactive
-root or an error boundary.
+`definePlugin(definition, { services, run })`. `services` gives its own view of
+the services, and `run` wraps the call to setup in a reactive root or an error
+boundary.
 
 ### Callbacks a contract takes
 
 A contract that takes callbacks (a guard, a handler a library calls) types them
 as `Awaitable<A, E, R>`: a value, a promise, or an Effect. Its provider runs
-each with `awaitable(() => callback(…))`. That way plugins written either way
-can supply them, and promise code runs in the caller's context. A value
-succeeds at once with no promise or extra turn. A callback that declares a
-parameter receives a signal, aborted when the Effect is interrupted.
+each with `awaitable(() => callback(…))`, so plugins written either way can
+supply them, and promise code runs in the caller's context. A value succeeds at
+once, with no promise or extra turn. A callback that declares a parameter
+receives a signal, aborted when the Effect is interrupted.
 
-The other direction is left as it is: a function a contract hands _to_ a
-callback (in a hook's input, say) returns what its contract says, and a handler
+The other direction is left as it is. A function a contract hands _to_ a
+callback (in a hook's input, say) returns what its contract says. A handler
 written with promises runs an Effect it returns with `run`.
 
 ## Testing a plugin
@@ -276,208 +339,415 @@ const fault = await tested.waitForFault((fault) => fault.phase === "background")
 await tested.close();
 ```
 
-It fails as `makeCore` does: a `CompositionError` when the plugin cannot plan, a
-`PluginFault` when it cannot start. `faults` holds what is reported while it
-runs, including each plugin's latest fault from its start. `with` runs other
-plugins beside it. The `provide` stand-ins are provided as the application
-provides capabilities, so they have no plugin rows (`inspect().provided` lists
-them), and a plugin that provides one is refused (`ReservedCapability`).
+- It fails as `makeCore` does: a `CompositionError` when the plugin cannot
+  plan, and a `PluginFault` when it cannot start.
+- `faults` holds what is reported while it runs, including each plugin's latest
+  fault from its start. `with` runs other plugins beside it.
+- The `provide` stand-ins are provided as the application provides
+  capabilities (above): they have no plugin rows, `inspect().provided` lists
+  them, and a plugin that provides one is refused (`ReservedCapability`).
 
 ## Plugin-defined hooks
 
-The core does not enumerate application extension points. A plugin exports a token such as:
+The core does not enumerate application extension points. A plugin exports a
+token, contributors register around middleware, and the owning operation
+supplies its terminal behavior (all from `@lemma/core`):
 
 ```ts
 const Render = Hook.make<string, string>("example/render");
-```
 
-Contributors obtain `PluginContext` and register around middleware:
-
-```ts
+// A contributor, with its PluginContext:
 Effect.gen(function* () {
   const owner = yield* PluginContext;
   yield* owner.on(Render, (input, next) => Effect.map(next(input), (output) => output.toUpperCase()), { order: 10 });
 });
-```
 
-The owning operation obtains `Hooks` and supplies its terminal behavior:
-
-```ts
+// The owning operation, with Hooks:
 Effect.gen(function* () {
   const hooks = yield* Hooks;
   const result = yield* hooks.invoke(Render, "hello", Effect.succeed);
 });
 ```
 
-These snippets assume the exports are imported from `@lemma/core`; the complete runnable example shows the wiring.
+A hook is one mechanism: awaited, sequential, around middleware. A handler can
+change the input it passes to `next`, wrap its result, or short-circuit by not
+calling it. A side-effect observer calls `next` and keeps the result. Plugins
+that need fan-out or streams provide those as capabilities, with Effect: the
+core detaches no listeners and creates no queues silently.
 
-The hook contract is one mechanism: awaited, sequential around middleware. A handler can modify the input passed to `next`, wrap its result, or short-circuit by not calling it. Side-effect observers can call `next` and preserve the result. Plugins needing fan-out or streams can provide those capabilities using Effect; the core does not silently detach event listeners or create queues.
-
-- Lower `order` runs first; ties use plugin id, then that plugin's registration order.
-- A hook whose order means something declares **phases**: named places in order, `Hook.make(name, { phases: ["shape", "fit"], defaultPhase: "shape" })`. A handler names the one it belongs in (`{ phase: "fit" }`, or the `defaultPhase` when it names none) and runs after every handler of an earlier phase and before every one of a later phase, whatever their `order`, which orders it within its phase. Two plugins that must both run after the rest say so by phase, rather than guessing a number above everyone else's. A phase the hook does not declare fails `on` with `HookError` (`InvalidOrder`, naming the phases), and a declaration that orders nothing (no phases, one twice, or a default not among them) throws at `Hook.make`. Phases cost dispatch nothing: a handler's place is worked out when it registers. Snapshots, `onStep`, and the `hook.phase` span attribute name a handler's phase where the hook declares phases.
-- A call snapshots its handler array. New registrations affect subsequent calls.
-- A handler runs in its caller's context with its **plugin's own services** laid over it: what the plugin requires, its `PluginContext` and `Scope`, and what its layers provided to the registrations it made while activating. That holds whenever it registers: one registered later, during some operation or from another plugin's call, keeps none of that work's references or plugin. A service provided only around such a registration is not kept; provide it in the plugin's layer, or capture it as a value. Registration keeps **no activation span** either. The terminal retains its caller's dependencies, and trace ancestry follows the current invocation.
-- A handler may execute `next` at most once, and only before the handler finishes. Await or join that work; do not detach continuations.
-- A hook may **check** its handlers at run time, for those TypeScript never saw (a plugin written in JavaScript): `Hook.make(name, { check: { input, output } })`, each answering a one-line problem or `undefined`. `input` sees what a handler hands `next`, `output` what it returns; a problem fails the operation with `HookError` (`InvalidInput`, `InvalidOutput`) naming that handler's plugin, so a wrong shape is the plugin's fault where it was made rather than a crash further on. The caller's own input and the terminal's result are not checked, and a hook without a check costs nothing for it.
-- Typed hook failures and defects propagate through the same Effect channels; interruption runs finalizers. `HookError` reports invalid ordering, token collisions, continuation misuse, or a handler's value its hook's check refused.
-- The core shuts its hooks as it shuts down, before it disposes any plugin: every `invoke` fails `CoreClosed` from then on. `hooks.closed` says whether it has, so work that failed can tell a failure of the shutdown from its own.
-- A name identifies one shared hook token within a core. Creating another token with the same name is rejected rather than risking an incompatible handler signature.
-- Registrations are owned by the plugin scope and removed on disposal.
+- Lower `order` runs first. Ties go by plugin id, then by that plugin's
+  registration order.
+- A hook whose order means something declares **phases**: named places, in
+  order (`Hook.make(name, { phases: ["shape", "fit"], defaultPhase: "shape" })`).
+  - A handler names its phase (`{ phase: "fit" }`), or gets the
+    `defaultPhase`. It runs after every handler of an earlier phase and before
+    every handler of a later one, whatever their `order`, which places it
+    within its phase. So plugins that must run after the rest say so by phase,
+    not by a large `order`.
+  - A phase the hook does not declare fails `on` with `HookError`
+    (`InvalidOrder`, naming the phases). A declaration that orders nothing (no
+    phases, one twice, or a default not among them) throws at `Hook.make`.
+  - Phases cost dispatch nothing: a handler's place is worked out when it
+    registers. Snapshots, `onStep`, and the `hook.phase` span attribute name a
+    handler's phase, where the hook declares phases.
+- A call snapshots its handler array, so new registrations affect later calls.
+- A handler runs in its caller's context, with its **plugin's own services**
+  laid over it: what the plugin requires, its `PluginContext` and `Scope`, and
+  what its layers provided to the registrations it made while activating.
+  - That holds whenever it registers. One registered later, during some
+    operation or from another plugin's call, keeps none of that work's
+    references or plugin. Registration keeps **no activation span** either.
+  - A service provided only around such a registration is not kept. Provide it
+    in the plugin's layer, or capture it as a value.
+  - The terminal keeps its caller's dependencies, and trace ancestry follows
+    the current invocation.
+- A handler may run `next` at most once, and only before the handler finishes
+  (else `HookError`). Await or join that work; do not detach continuations.
+- A hook may **check** its handlers at run time, for those TypeScript never
+  saw (a plugin written in JavaScript):
+  `Hook.make(name, { check: { input, output } })`. Each check answers a
+  one-line problem, or `undefined`: `input` sees what a handler hands `next`,
+  and `output` what it returns. A problem fails the operation with `HookError`
+  (`InvalidInput`, `InvalidOutput`) naming that handler's plugin, so a wrong
+  shape is its fault where it was made. The caller's own input and the
+  terminal's result are not checked, and a hook without a check costs nothing.
+- Typed hook failures and defects propagate through the same Effect channels.
+  Interruption runs finalizers.
+- The core shuts its hooks as it shuts down, before it disposes any plugin.
+  From then on every `invoke` fails `CoreClosed`. `hooks.closed` says whether
+  it has, so work that failed can tell a failure of the shutdown from its own.
+- A name identifies one shared hook token within a core. Another token with
+  the same name is refused (`HookError`), rather than risking an incompatible
+  handler signature.
+- The plugin's scope owns its registrations, and removes them on disposal.
 
 ## Events
 
-Hooks are for the critical path and fail closed. `Event.make<Payload>(name)`
-declares a notification. `Events.publish` does not propagate observer failures;
-`PluginContext.observe` subscribes with a bounded queue (default 64) and an
-`overflow` policy. The default `dropOldest` and optional `dropNewest` never wait
-for observers. Explicit `suspend` applies backpressure until queue space is
-available or the subscription closes. An observer runs with its plugin's own
-services, as a handler does, and with no trace parent or references of the
-work that registered it. An observer's failure becomes a
-`PluginFault` (phase `observe`) for its plugin and affects neither the publisher
-nor other observers. `Events.stream` subscribes from outside a plugin. Use events
-only for information that is safe to lose; applications own authoritative state
-and any persistence needed to recover missed notifications.
+`Event.make<Payload>(name)` declares a notification. Use events only for
+information that is safe to lose.
+
+- `Events.publish` does not propagate observer failures.
+- `PluginContext.observe` subscribes with a bounded queue (default 64) and an
+  `overflow` policy. The default `dropOldest`, and the optional `dropNewest`,
+  never wait for observers. An explicit `suspend` applies backpressure, until
+  the queue has space or the subscription closes.
+- An observer runs with its plugin's own services, as a handler does, without
+  the trace parent or references of the work that registered it.
+- An observer's failure is a `PluginFault` (phase `observe`) for its plugin.
+  It affects neither the publisher nor other observers, and leaves the plugin
+  active.
+- `Events.stream` subscribes from outside a plugin.
 
 ## Registries
 
-A registry collects what plugins offer: entries in a list other plugins read,
-as opposed to an operation they intercept (a hook) or news they report (an event).
-
-```ts
-const Menu = Registry.make<{ readonly label: string }>("example/menu");
-const Commands = Registry.make<Command>("example/commands", { key: (command) => command.id, unique: true });
-```
+A registry collects what plugins offer: entries in a list other plugins read.
 
 A plugin contributes with its `PluginContext`; readers use `Registries`:
 
 ```ts
+const Menu = Registry.make<{ readonly label: string }>("example/menu");
+const Commands = Registry.make<Command>("example/commands", { key: (command) => command.id, unique: true });
+
 Effect.gen(function* () {
   const owner = yield* PluginContext;
   const remove = yield* owner.add(Menu, { label: "Open" }, { order: 10 });
 
   const registries = yield* Registries;
-  const items = yield* registries.items(Menu); // [{ item, pluginId, order }], in order
+  const items = yield* registries.items(Menu); // in order, each with its pluginId
   const updates = registries.changes(Menu); // the items now, then after each change
   const result = yield* registries.run(items[0]!, (left) => work); // work with an item, inside its contributor's lifetime
   yield* registries.settled; // once no change to the composition is under way
 });
 ```
 
-- Items come in `order` (lower first), then by plugin id, then in the order that plugin added them. Each carries the contributing plugin's id; `core.inspect` lists who contributes what.
-- A registry declares phases as a hook does (`Registry.make(name, { phases, defaultPhase })`), and an item names its own (`{ phase }`): items come by phase, then as above, and each carries its `phase`. One whose first item wins declares `["replace", "default"]`, defaulting to `replace`: the bundled plugin adds in `default`, and any item that names no phase comes before it.
-- An item belongs to the plugin instance that added it. It is hidden while its plugin stages, appears when the plugin is published, and leaves when the plugin is retired or its scope closes. The effect `add` returns removes it sooner.
-- A contribution keeps its identity while it is there, so a reader can tell whether the one it holds is still offered (`items.includes(contribution)`); a replacement's item is another contribution, even with an equal value.
-- Work a reader does with an item (calling a function it carries, following a stream it opens) goes through `run`, which makes the work part of the contributor's lifetime. It is admitted only while the contribution is there, checked in the same step, or fails `RegistryError` (`Absent`). `left` completes when the contribution leaves: removed, its plugin replaced, failed, or stopped, or the core closing; it is heard once the change that removed the item is complete. When a reload replaced the plugin, its replacement is published by then, except an `exclusive` plugin's, which starts only once the old instance is disposed, after this work ends. Work that must not outlive it, such as a long-lived watch, stops then; other work may finish. Before the contributor's finalizers run, its disposal waits for admitted work, for at most the core's dispose deadline (the deadline drained `core.run` tasks get); work still running then is interrupted, `run` fails `RegistryError` (`Expired`), and a reload counts it in `ReloadReport.interrupted`. The work runs on its own fiber with the caller's context, and interrupting `run` interrupts it. Work done with an item outside `run` is not waited for and can outlive the plugin's resources.
-- `settled` completes once no change to the composition is under way: at once between changes, else once the one in progress has finished, its replacements published or failed and what it replaced disposed. Changes run one at a time, each bounded by the core's deadlines. Since an item leaves while the change that removes it runs, and what replaces it may come only later in that change (an `exclusive` plugin's replacement starts once its predecessor is disposed), work that `left` ended waits for `settled`, once `run` has returned, then looks again for what is offered. Never wait for it within a change (a plugin starting or stopping) or within work `run` admitted, which a change disposing its contributor waits for: each would wait on the other until a deadline.
-- Admitted work finds itself in `Admitted`: the work `run` admitted that it runs within, outermost first, each with the plugin whose item it runs with and `ended`, which completes once that work has ended. Since a contributor's disposal waits for its admitted work, that work must not wait for the disposal, or it waits on itself until the deadline: code that replaces plugins on request (an application's reload) reads `Admitted` to tell whose work is asking, and leaves a change that would replace one of them until its work has ended.
-- With `unique`, a key held by another plugin (visible or staged) fails `add` with `RegistryError` (`Conflict`, naming the `holder`). The plugin's own replacement may take the key over, so a reload swaps without an exclusive gap.
-- With `check`, `add` first asks it whether the value can be an item, typed or not, before `key` sees it: a value it refuses fails `add` with `RegistryError` (`Invalid`, with the reason) for the plugin adding it, and never reaches readers. It suits a registry that untyped plugin files contribute to.
-- `items` returns an immutable array that changes only when the registry does. `changes` never backs up: a slow reader gets the latest items, not every intermediate list.
+- Items come in `order` (lower first), then by plugin id, then in the order
+  that plugin added them. Each carries the contributing plugin's id, and
+  `core.inspect` lists who contributes what.
+- A registry declares phases as a hook does
+  (`Registry.make(name, { phases, defaultPhase })`), and an item names its own
+  (`{ phase }`). Items then come by phase first, each carrying its `phase`. A
+  registry whose first item wins declares `["replace", "default"]`, defaulting
+  to `replace`. The bundled plugin adds in `default`, so any item that names
+  no phase comes before it.
+- An item belongs to the plugin instance that added it. It is hidden while its
+  plugin stages, and appears when the plugin is published. It leaves when the
+  plugin is retired or its scope closes, or sooner through the effect `add`
+  returns.
+- A contribution keeps its identity while it is there, so a reader can tell
+  whether the one it holds is still offered (`items.includes(contribution)`).
+  A replacement's item is another contribution, even with an equal value.
+- Do work with an item (call a function it carries, follow a stream it opens)
+  through `run`, which makes the work part of the contributor's lifetime.
+  - `run` admits work only while the contribution is there, checked in the
+    same step. Otherwise it fails `RegistryError` (`Absent`). The work runs on
+    its own fiber, with the caller's context, and interrupting `run`
+    interrupts it.
+  - `left` completes when the contribution leaves (removed, its plugin
+    replaced, failed, or stopped, or the core closing), once the change that
+    removed the item is complete. When a reload replaced the plugin, its
+    replacement is published by then, unless it is `exclusive`: that one
+    starts only once the old instance is disposed, after this work ends. Stop
+    work that must not outlive the contribution (a long-lived watch) then;
+    other work may finish.
+  - Before the contributor's finalizers run, its disposal waits for admitted
+    work, for at most the core's dispose deadline (as for drained `core.run`
+    tasks). Work still running then is interrupted: `run` fails
+    `RegistryError` (`Expired`), and a reload counts it in
+    `ReloadReport.interrupted`.
+  - Work done with an item outside `run` is not waited for, and can outlive
+    the plugin's resources.
+- `settled` completes once no change to the composition is under way: at once
+  between changes, and otherwise once the change in progress has published or
+  failed its replacements and disposed what it replaced. Changes run one at a
+  time, each bounded by the core's deadlines. What replaces an item may come
+  only later in the change that removed it, so work that `left` ended waits for
+  `settled`, once `run` has returned, then looks again.
+- Never wait for `settled` within a change (a plugin starting or stopping), nor
+  within work `run` admitted, nor wait there for its contributor's disposal. A
+  change waits for its plugins to start and stop, and a disposal for its
+  contributor's admitted work, so each would wait on the other until a deadline.
+- `Admitted` holds the work `run` admitted that the current work runs within,
+  outermost first: each entry's plugin, and `ended`, which completes once that
+  work has ended. Code that replaces plugins on request (an application's
+  reload) reads it to tell whose work is asking, and holds back a change that
+  would replace one of them until that work has ended.
+- With `unique`, a key another plugin holds (visible or staged) fails `add`
+  with `RegistryError` (`Conflict`, naming the `holder`). The plugin's own
+  replacement may take the key over, so a reload swaps without an exclusive
+  gap.
+- With `check`, `add` first asks whether the value, typed or not, can be an
+  item, before `key` sees it. A refused value fails `add` with `RegistryError`
+  (`Invalid`, with the reason) for the plugin adding it, and never reaches
+  readers. It suits a registry that untyped plugin files contribute to.
+- `items` returns an immutable array, which changes only when the registry
+  does. `changes` never backs up: a slow reader gets the latest items, not
+  every list in between.
 - A name identifies one token per core, as for hooks.
 
 ## Supervision
 
-`PluginContext.background(name, work, { required })` runs work owned by the plugin's scope and reports its exit. An optional task's failure is a `PluginFault` (phase `background`) and nothing else changes. A required task's failure fails the plugin: it and every plugin depending on it stop, in reverse order, while unrelated plugins keep running. Dependents are `closed` with `haltedBy` naming the root; the root is `failed` with its fault. The runtime tracks capability resolutions by `core.run` tasks and drains only tasks that resolved an affected capability. Copying the whole context or resolving `Hooks` conservatively counts as using the composition. Unresolved failed capabilities are revoked from existing task contexts. Its capabilities disappear from new `core.run` environments, so callers that still ask for them get Effect's missing-service defect. What the application provides is never revoked: a task that resolved only such capabilities is neither drained nor interrupted, and `haltedBy` always names a plugin.
+`PluginContext.background(name, work, { required })` runs work owned by the
+plugin's scope, and reports its exit. An optional task's failure is a
+`PluginFault` (phase `background`), and nothing else changes. A required task's
+failure fails the plugin: it and every plugin depending on it stop, in reverse
+order, while unrelated plugins keep running. Dependents are `closed`, with
+`haltedBy` naming the root; the root is `failed`, with its fault.
 
-`PluginContext.fault(operation, cause, { fatal })` reports a failure of a plugin's own work that the core does not run, such as a callback another library calls or a view it draws: a `PluginFault` (phase `service`) attributed to the plugin, which with `fatal` fails as a required task's failure fails it, as soon as it is published when it is still starting. A stopped or retired plugin's reports are dropped: its replacement owns the faults.
+A failure drains only the `core.run` tasks that resolved an affected
+capability. Copying the whole context, or resolving `Hooks`, counts as using
+the composition.
 
-Recovery is explicit: a failed plugin stays failed until `core.restart(id)` reactivates it and retries the dependents it halted. The named plugin must activate; a dependent that cannot is left failed, and its own dependents halted, without blocking the rest. An active plugin is left alone unless `core.restart(id, { force: true })`, which replaces it and restarts its dependents as a config change would (an `exclusive` plugin stops first). It returns a `ReloadReport`: what it restarted (nothing, for an active plugin left alone) and which dependents it left failed.
+- A failed capability a task has not resolved is revoked from its context.
+- New `core.run` environments lack the failed capabilities, so a caller that
+  still asks for one gets Effect's missing-service defect.
+- What the application provides is never revoked. A task that resolved only
+  such capabilities is neither drained nor interrupted, and `haltedBy` always
+  names a plugin.
 
-`core.faults` streams `ReportedFault` values (`PluginFault` plus a core-wide,
-monotonically increasing `sequence`). Delivery retains at most 256 queued entries
-and drops the oldest without blocking supervision. A consumer may also hold its
-current entry. Sequence gaps reveal missed entries; `core.inspect.faultSequence`
-is the latest reported sequence, including faults from retired instances. A late
-subscriber receives future faults only. Durable fault history belongs to the host.
+`PluginContext.fault(operation, cause, { fatal })` reports a failure of a
+plugin's own work that the core does not run, such as a callback another
+library calls, or a view it draws. It is a `PluginFault` (phase `service`)
+attributed to the plugin. With `fatal`, it fails the plugin as a required
+task's failure does, and a plugin still starting fails as soon as it is
+published. A stopped or retired plugin's reports are dropped: its replacement
+owns the faults.
 
-Inspection records the latest fault before publishing it, even without subscribers.
-Faults belong to plugin instances: replacement/restart begins with no retained
-fault, removal drops its snapshot, and a retired or failed staged instance cannot
-overwrite its replacement's fault. Observer failures leave their plugin active.
+Recovery is explicit. A failed plugin stays failed until `core.restart(id)`
+reactivates it and retries the dependents it halted.
+
+- The named plugin must activate. A dependent that cannot is left failed, with
+  its own dependents halted, without blocking the rest.
+- An active plugin is left alone, unless `core.restart(id, { force: true })`.
+  That replaces it and restarts its dependents, as a config change would; an
+  `exclusive` plugin stops first.
+- It returns a `ReloadReport`: what it restarted (nothing, for an active plugin
+  left alone), and which dependents it left failed.
+
+`core.faults` streams `ReportedFault` values: a `PluginFault`, plus a
+core-wide, increasing `sequence`.
+
+- Delivery keeps at most 256 queued entries, and drops the oldest without
+  blocking supervision. A consumer may also hold its current entry.
+- Gaps in the sequence reveal missed entries. `core.inspect.faultSequence` is
+  the latest reported sequence, faults from retired instances included.
+- A late subscriber receives future faults only. Durable fault history belongs
+  to the host.
+
+Inspection records the latest fault before publishing it, even without
+subscribers. Faults belong to plugin instances: a replacement or restart begins
+with no fault kept, removal drops its snapshot, and a retired instance, or a
+staged one that failed, cannot overwrite its replacement's fault.
 
 ### Assertions
 
-`assert(condition, message)` checks what must hold where it is used (an
-argument, a result, an invariant between two states) and stays on in
-production: a broken one throws an `AssertionError`, a defect, which the core
-reports as the fault of the plugin whose work broke it, rather than letting it
-go on with state it can no longer trust. Assert a fact on both sides of a
-boundary (before a write, and after reading it back), and an implication as
-`if (a) assert(b, …)`. A check too costly for every call (rebuilding from
-scratch what was kept incrementally) runs only where `Verify` is true: off by
-default, and a runtime setting, so a caller that provides it (a simulation)
-turns it on for every plugin's work. Both come from `@lemma/core` and
-`@lemma/core/plain`.
+`assert(condition, message)` checks what must hold where it is used: an
+argument, a result, or an invariant between two states. Both `assert` and
+`Verify` (below) come from `@lemma/core` and `@lemma/core/plain`.
+
+- It stays on in production. A broken one throws an `AssertionError`, a
+  defect, which the core reports as the fault of the plugin whose work broke
+  it, rather than letting that plugin go on with state it can no longer trust.
+- Assert a fact on both sides of a boundary: before a write, and after reading
+  it back. Assert an implication as `if (a) assert(b, …)`.
+- Run a check too costly for every call (rebuilding from scratch what was kept
+  incrementally) only where `Verify` is true. It is off by default. It is a
+  runtime setting, so a caller that provides it (a simulation) turns it on for
+  every plugin's work.
 
 ## Loader and reload
 
-`makeLoader({ source, composition })` runs a composition described by data: plugin ids mapped to `{ enabled?, config? }`, resolved to definitions by a `PluginSource` the host supplies. `loader.apply(next)` changes it at runtime:
+`makeLoader({ source, composition })` runs a composition described by data:
+plugin ids mapped to `{ enabled?, config? }`, which a `PluginSource` the host
+supplies resolves to definitions. `loader.apply(next)` changes the composition
+at run time:
 
-1. Plan the whole target: resolve, decode config, validate the graph. Every problem is returned at once as `ReloadError.diagnostics`, each with a plugin id, config path where relevant, and a suggestion.
-2. Only plugins whose definition or config changed, plus their dependents, are touched. Replacements start in a staging scope, hidden from dispatch, while the old instances keep serving.
-3. Swap: new callers see the new environment, hooks, and observers in one step. Work already in flight finishes on the environment it entered with.
-4. Old instances drain, then close in reverse order, each after the work run with its registry items (`Registries.run`) has ended. Work that outlives the dispose deadline is interrupted and counted in `ReloadReport.interrupted`.
+1. Plan the whole target: resolve, decode config, and validate the graph. Every
+   problem comes back at once as `ReloadError.diagnostics`, each with a plugin
+   id, a config path where relevant, and a suggestion.
+2. Touch only the plugins whose definition or config changed, and their
+   dependents. Replacements start in a staging scope, hidden from dispatch,
+   while the old instances keep serving.
+3. Swap: new callers see the new environment, hooks, and observers in one
+   step. Work already in flight finishes on the environment it entered with.
+4. Drain the old instances, then close them in reverse order. Each closes
+   after the work run with its registry items (`Registries.run`) has ended.
+   Work that outlives the dispose deadline is interrupted, and counted in
+   `ReloadReport.interrupted`.
 
-`loader.affected(next)` answers, changing nothing, which plugins `apply(next)` would start, restart, or stop, by the same comparison step 2 makes (a definition that is not the same object, a config not structurally equal, a dependent of either); with `{ restart: ids }`, what a forced `core.restart` of those ids would restart too. An application that must know what a change touches before making it (whose work a restart would cut off) asks this rather than predicting the loader's answer. It answers for what runs when asked, so one that acts on it makes its changes one at a time.
+`loader.affected(next)` answers, changing nothing, which plugins `apply(next)`
+would start, restart, or stop. It compares as step 2 does: a definition that is
+not the same object, a config not structurally equal, or a dependent of either.
+With `{ restart: ids }`, it answers what a forced `core.restart` of those ids
+would restart too. Ask it before a change whose reach matters (whose work a
+restart would cut off), rather than predicting the loader's answer. It answers
+for what runs when asked, so act on it one change at a time.
 
-A replacement starts fresh: no in-memory state crosses a reload. A plugin that keeps something running through one (a process it started) holds it outside its instances, keyed by its core. `Hooks`, `Events`, and `Registries` are each one object for the life of the core, and another core's are other objects, so a replacement finds what its predecessor kept under them. Both instances run while the replacement stages, so both use what they share. Durable state belongs to the plugin's own storage.
+A replacement starts fresh: no in-memory state crosses a reload. A plugin that
+keeps something running through a reload (a process it started) holds it
+outside its instances, keyed by its core. `Hooks`, `Events`, and `Registries`
+are each one object for the life of a core, and another core's are other
+objects, so a replacement finds what its predecessor kept under them, while
+both run. Durable state belongs to the plugin's own storage.
 
-Caller cancellation rolls back staging. Once the swap or an exclusive resource interruption has begun, the supervised lifecycle operation finishes even if disposal interrupts its initiating `core.run` caller. A caller that lost the result must inspect the resulting state. Core shutdown still owns and interrupts lifecycle work.
+Caller cancellation rolls back staging. Once the swap, or an exclusive
+resource's interruption, has begun, the supervised lifecycle operation
+finishes, even if disposal interrupts the `core.run` caller that started it. A
+caller that lost the result must inspect the resulting state. Core shutdown
+still owns and interrupts lifecycle work.
 
-If any replacement fails to start, staged instances are disposed and the running composition is unchanged. `exclusive` plugins are the documented exception: they stop before the replacement starts, and if the replacement then fails they stay failed: the plugin whose replacement failed with that fault, and each other one stopped with it (its dependents, another exclusive plugin) with a fault of its own, reported on `core.faults`, whose cause is that failure. Re-applying an unchanged composition does not restart a failed plugin; that takes `restart` or a config change.
+If any replacement fails to start, the staged instances are disposed, and the
+running composition is unchanged. `exclusive` plugins are the exception: they
+stop before the replacement starts, so they stay failed if it then fails. The
+plugin whose replacement failed keeps that fault. Each other plugin stopped
+with it (its dependents, another exclusive plugin) gets a fault of its own,
+reported on `core.faults`, whose cause is that failure.
 
-`makeLoader({ partialStart: { required } })` starts the first composition with what can start. A plugin that fails to activate is left `failed`, with its fault in `core.inspect` (no `core.faults` subscriber exists yet to hear it), and its dependents are halted, as a restart leaves a dependent that cannot activate; `core.restart` retries it. The `required` plugins, and every plugin they need, must still activate, or the loader fails and leaves nothing behind. `apply` is never partial.
+Re-applying an unchanged composition does not restart a failed plugin: that
+takes `restart`, or a config change. `apply` changes plugins only, and the
+application's services stay as they are
+([above](#capabilities-the-application-provides)).
 
-`apply` changes plugins only. The application's services (`makeLoader({ provide })`) are fixed for the loader's life: a change, restart, or failure never touches them, so a plugin that requires nothing else is restarted only on its own account. Their build failure fails `makeLoader` with a `ReloadError` whose diagnostic names no plugin.
+`makeLoader({ partialStart: { required } })` starts the first composition with
+what can start; `apply` is never partial. A plugin that fails to activate is
+left `failed`, with its fault in `core.inspect`, as no `core.faults` subscriber
+exists yet to hear it. Its dependents are halted, as a restart leaves a
+dependent that cannot activate, and `core.restart` retries it. The `required`
+plugins, and every plugin they need, must still activate, or the loader fails
+and leaves nothing behind.
+
+[`DESIGN.md`](DESIGN.md#reload) says why a reload works this way.
 
 ## Lifetime and failure semantics
 
-`makeCore` mounts a fixed composition as a scoped resource: the same runtime as the loader without `apply`.
+`makeCore` mounts a fixed composition as a scoped resource: the loader's
+runtime, without `apply`.
 
-`core.run(effect)` supplies capabilities while preserving unrelated caller requirements. Enter it around a task, not around every internal function call. Each entry uses an owned Effect fiber—not a new runtime—so both caller cancellation and core shutdown interrupt and await that work. Capability calls and hook dispatch inside it do not create an extra runtime or fiber per call.
+`core.run(effect)` supplies capabilities, and keeps the caller's unrelated
+requirements. Enter it around a task, not around every internal function call.
+Each entry uses an owned Effect fiber, not a new runtime, so both caller
+cancellation and core shutdown interrupt and await that work. Capability calls
+and hook dispatch inside it create no extra runtime or fiber per call.
 
-Closing the owner scope stops new work, interrupts initialization and in-flight `core.run` tasks, then disposes plugins in reverse dependency order, and releases the application's services last. Cleanup defects remain visible, and remaining finalizers still run. Failed or interrupted activation rolls back immediately, even when caught inside a longer-lived caller scope. Closing an already-closed core scope cannot reactivate it.
+Closing the owner scope stops new work, interrupts initialization and in-flight
+`core.run` tasks, disposes plugins in reverse dependency order, and then
+releases the application's services. Cleanup defects stay visible, and the
+remaining finalizers still run. A failed or interrupted activation rolls back
+at once, even when caught inside a longer-lived caller scope. Closing an
+already-closed core scope cannot reactivate it.
 
-Both `makeCore` and `makeLoader` accept `shutdownTimeout`, a total limit on the
-closing caller's wait, including active tasks and lifecycle supervision. It
-defaults to the core's `deadlines.dispose` (10 seconds), independently of per-plugin
-deadlines. Expiry surfaces a `ShutdownTimeout` defect from scope closure and is
-retained as `core.inspect.shutdownFault`. A plugin disposal deadline may surface
-its attributed fault sooner, and the application's services outlasting the
-core's dispose deadline an unattributed defect. Scope finalizers use the defect
-channel because Effect finalizers cannot have typed failures.
+`shutdownTimeout`, on `makeCore` and `makeLoader`, limits the closing caller's
+whole wait, active tasks and lifecycle supervision included. It defaults to the
+core's `deadlines.dispose` (10 seconds), independently of per-plugin deadlines.
 
-Cleanup continues after a timeout. Inspection stays `closing` and new `core.run`
-work is rejected until cleanup finishes; it then becomes `closed`, retaining any
-shutdown timeout for inspection. During shutdown, resources remain alive until
-active work, lifecycle operations, and earlier disposals finish. Providers are
-kept until their dependents actually finish cleanup. A permanently stuck finalizer
-can therefore retain resources permanently. Returning a timeout never means that
-work was killed or resources were released. Reload disposal deadlines still allow
-the applied composition to proceed; shutdown also awaits those earlier disposals.
+- Expiry surfaces a `ShutdownTimeout` defect from scope closure, kept as
+  `core.inspect.shutdownFault`. A plugin's disposal deadline may surface its
+  attributed fault sooner. The application's services outlasting the core's
+  dispose deadline surface an unattributed defect.
+- Scope finalizers use the defect channel, because Effect finalizers cannot
+  have typed failures.
+- Cleanup continues after a timeout. Inspection stays `closing`, and new
+  `core.run` work is refused, until cleanup finishes; inspection then becomes
+  `closed`, and keeps any shutdown timeout.
+- During shutdown, resources stay alive until active work, lifecycle
+  operations, and earlier disposals finish, and providers until their
+  dependents finish cleanup. So a permanently stuck finalizer can keep
+  resources forever: a timeout never means that work was killed or resources
+  were released.
+- Reload disposal deadlines still let the applied composition proceed, and
+  shutdown also awaits those earlier disposals.
 
-Cancellation is cooperative. A synchronous loop blocking the event loop prevents
+Cancellation is cooperative: a synchronous loop blocking the event loop keeps
 deadline timers from running. Prefer `PluginContext.background` over raw
-`Effect.forkScoped` so failures are attributed. Detached fibers, raw timers, and
-other unmanaged work are outside these guarantees.
+`Effect.forkScoped`, so failures are attributed. Detached fibers, raw timers,
+and other unmanaged work are outside these guarantees.
 
-Rollback releases acquired resources and registrations. It cannot undo arbitrary external writes, network requests, or actions performed during module import. A retained capability value is also not revoked by magic: do not use capabilities outside their owner scope. `core.run` and hook dispatch reject use after closure.
+Rollback releases acquired resources and registrations. It cannot undo
+arbitrary external writes, network requests, or actions performed during
+module import. A capability value kept elsewhere is not revoked either, so do
+not use capabilities outside their owner scope. `core.run` and hook dispatch
+refuse use after closure.
 
 ## Inspection and tracing
 
-`core.inspect` returns a detached snapshot of plugin identities, lifecycle state, latest fault, provided/required capability keys, ordered hook ownership, and event observers. `provided` lists the keys the application provides, in declared order; they have no plugin row, and the plugins requiring one name it in their `requires`. It does not expose implementations or configuration secrets.
+`core.inspect` returns a detached snapshot (`CoreSnapshot`), with no
+implementations or configuration secrets. The keys the application provides
+have no plugin row: `provided` lists them, and the plugins requiring one name
+it in their `requires`.
 
-Activation, disposal, and each middleware execution emit native Effect spans with `plugin.id`, optional `plugin.version`, and hook name/order where applicable; building the application's services emits `core.provide`. With tracing turned off (`Effect.withTracerEnabled(false)`) a handler gets no span at all, which makes dispatch several times cheaper (`bench/budgets.ts`). `PluginContext.trace(name, effect)` attributes custom capability operations without proxying their implementations. Direct arbitrary function calls are not automatically intercepted. Install an Effect tracer around the host program to export spans; no telemetry destination is configured by the core.
+Activation, disposal, and each middleware run emit native Effect spans. They
+carry `plugin.id`, the optional `plugin.version`, and the hook's name and order
+where they apply. Building the application's services emits `core.provide`.
 
-`makeSpanCollector({ limit })` is one: it keeps the spans a program ends as plain data (`SpanRecord`: name, parent, start, duration, status, a failure's line, attributes), in memory and bounded to the last `limit`, and hears them in batches (`subscribe`). Install its `tracer` around the program (`Effect.withTracer`). Work marks every span inside it with `Effect.annotateSpans` (what it is for: a request, a job), so a reader can filter by it. Keeping a span as data costs about 0.8us over Effect's native span (`bench/budgets.ts`).
+- With tracing off (`Effect.withTracerEnabled(false)`), a handler gets no span
+  at all, which makes dispatch several times cheaper (`bench/budgets.ts`).
+- `PluginContext.trace(name, effect)` attributes custom capability operations,
+  without proxying their implementations. Direct calls of arbitrary functions
+  are not intercepted.
+- Install an Effect tracer around the host program to export spans. The core
+  configures no telemetry destination.
 
-A hook may say what a trace shows of each handler: `Hook.make(name, { summary: { input, output } })` returns a few plain values (counts, names, never the payload) for its span's `hook.in.*`, `hook.next.*` (what it passed on), and `hook.out.*`, asked only while tracing. And the caller of an operation may hear each handler's part as it ends, `hooks.invoke(hook, input, terminal, { onStep })`: what it was handed, what it passed on and got back, what it returned, and how long it took in all and on its own. That is what an application credits a result to, kept beside it.
+`makeSpanCollector({ limit })` is such a tracer. It keeps the last `limit`
+spans a program ends in memory, as plain data (`SpanRecord`), and hands them to
+listeners in batches (`subscribe`). Install its `tracer` around the program
+(`Effect.withTracer`), and mark every span of a piece of work with
+`Effect.annotateSpans` (a request, a job) so a reader can filter by it. Keeping
+a span as data costs about 0.8us over Effect's native span
+(`bench/budgets.ts`).
 
-These spans and composition snapshots describe runtime provenance. Applications
-own durable audit history, persistence, domain events, and payload redaction.
-Runtime-generated spans do not include hook arguments or results, only what a
-hook's summary says of them, nor plugin configuration.
+A hook may say what a trace shows of each handler, with
+`Hook.make(name, { summary: { input, output } })`. The summary returns a few
+plain values (counts, names, never the payload) for the span's `hook.in.*`,
+`hook.next.*` (what it passed on), and `hook.out.*`. It is asked only while
+tracing.
+
+The caller of an operation may hear each handler's part as it ends
+(`HandlerStep`), with `hooks.invoke(hook, input, terminal, { onStep })`. An
+application credits a result to these steps, and keeps them beside it.
+
+These spans and snapshots describe runtime provenance. Applications own
+durable audit history, persistence, domain events, and payload redaction.
+Runtime-generated spans include no plugin configuration, and no hook arguments
+or results beyond what a hook's summary says of them.
 
 ## Develop
 
@@ -492,55 +762,37 @@ nix develop -c pnpm perf:check                # build, then core:bench, core:str
 ```
 
 The package is private. `pnpm --filter @lemma/core pack` builds and packs it
-for installation into another application; Effect stays an external dependency.
-In this repository its `exports` also name a `lemma-source` condition that
-selects the TypeScript sources; `publishConfig.exports` leaves it out of the
-packed manifest, so a consumer sees only `types` and `import`.
+for another application, with Effect an external dependency. Its `exports`
+name a `lemma-source` condition, selecting the TypeScript sources here, which
+`publishConfig.exports` leaves out, so a consumer sees only `types` and
+`import`. `package:check` checks the emitted declarations, and runs a consumer
+through the package export outside this workspace (provider replacement,
+dependent reconstruction, cleanup, application-provided capabilities, and an
+HTTP listener); its install may need network access.
 
-`package:check` checks the emitted declarations and runs a consumer through the
-package export, outside this workspace: provider replacement, dependent
-reconstruction, cleanup, application-provided capabilities, and an HTTP
-listener. Its temporary install may need network access. `browser:check` also
-drives a DOM consumer in Chromium.
-
-The property test (`tests/sequences.test.ts`) runs random
-load/reload/fail/restart sequences against a fault-injecting fixture and checks
-resource, registration, and dependency invariants after every step.
-`LEMMA_SEQUENCE_RUNS` runs more cases, `LEMMA_SEQUENCE_SEED` fixes the seed, and
-a failing run prints the `LEMMA_SEQUENCE_PATH` that replays it.
+The property test (`tests/sequences.test.ts`) runs random load, reload, fail,
+and restart sequences against a fault-injecting fixture, and checks resource,
+registration, and dependency invariants after every step.
+`LEMMA_SEQUENCE_RUNS` runs more cases, and `LEMMA_SEQUENCE_SEED` fixes the
+seed. A failing run prints the `LEMMA_SEQUENCE_PATH` that replays it.
 
 `core:bench` reports warm microbenchmarks (direct Effects, hook dispatch at
-several chain lengths with tracing on and off, event publishing, alone and
-until every observer has heard, `core.run` entry, mounting and disposing,
-reloading one plugin) as median/min/max batch
-means, not per-request percentiles. `core:stress` measures a cold package
-import, operation latencies, and heap/RSS across 200
-mount/reload/fail/restart/dispose cycles after 20 warmup cycles, forcing GC
-every 20 and asserting resource ownership. The packed consumers also measure
-loopback request p99 and throughput, and the minified browser bundle's size.
-These synthetic workloads measure framework overhead, not an application's
-performance.
+several chain lengths with tracing on and off, event publishing, `core.run`
+entry, mounting and disposing, reloading one plugin) as median, min, and max
+batch means, not per-request percentiles. `core:stress` measures a cold
+import, operation latencies, and heap and RSS over 200 mount, reload, fail,
+restart, and dispose cycles after 20 warmup cycles, forcing GC every 20 and
+asserting resource ownership. The packed consumers measure loopback request
+p99 and throughput, and the minified browser bundle's size. These synthetic
+workloads measure framework overhead, not an application's performance.
 
-The budgets and their reference environment are in
-[`bench/budgets.ts`](bench/budgets.ts). Timing budgets are advisory:
-`LEMMA_PERF_ENFORCE=1` turns a miss into a failure (measure on an idle,
-comparable machine). Size budgets (the browser bundle) are the same on every
-machine and always fail. Each measurement names its unit and keeps the samples
-it summarizes; an average count keeps its exact total and number of samples,
-which its budget is held to. `LEMMA_BENCH_OUTPUT_DIR` writes the reports as
-JSON, each with the commit it measured and its workload's sizes.
-`core:test` runs both benchmarks with tiny counts (`LEMMA_BENCH_ITERATIONS`,
-`LEMMA_BENCH_SAMPLES`, `LEMMA_STRESS_CYCLES`), so they cannot rot unnoticed.
-
-A number from one machine says little; a change between two builds measured
-side by side does. `node scripts/bench-compare.ts [--base <ref>] [--runs <n>]`
-checks the base revision (default: the merge base with `origin/main`) out
-beside the working tree, alternates the microbenchmarks of the two, and reports
-a change only when a Mann-Whitney U test finds it significant across `--runs`
-pairs (default 10, at least 8), corrected for the number of benchmarks, and it is beyond
-`--threshold` (default 10%), as Go's benchstat does; a change beyond the
-threshold that the test cannot tell from noise is reported `unclear`, and each
-median shows its 95% interval. `--fail` exits non-zero on a slowdown. Every
-run's reports, and `comparison.json` with each benchmark's samples, are kept in
-`--output` (or `LEMMA_BENCH_OUTPUT_DIR`). In the Lemma repository, `--harness`
-compares the harness benchmark's step timings too.
+[`bench/budgets.ts`](bench/budgets.ts) holds the budgets, their reference
+environment, and how each measurement is summarized. Timing budgets are
+advisory (`LEMMA_PERF_ENFORCE=1` fails a miss), so measure on an idle,
+comparable machine; size budgets (the browser bundle) always fail.
+`LEMMA_BENCH_OUTPUT_DIR` writes the reports as JSON, each with the commit it
+measured. `core:test` runs both benchmarks with tiny counts
+(`LEMMA_BENCH_ITERATIONS`, `LEMMA_BENCH_SAMPLES`, `LEMMA_STRESS_CYCLES`), so
+they cannot rot unnoticed. `node scripts/bench-compare.ts`, from the
+repository root, compares them with a base revision's, telling a change from
+noise as its doc comment says.

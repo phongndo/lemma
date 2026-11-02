@@ -1,8 +1,14 @@
 # workspace.local
 
-Provides `Workspace` by reading the filesystem and running the `git` CLI: `status`, `places`, `browse`, `createDirectory`, `branches`, `createWorktree`, `worktrees`, `removeWorktree`, `restoreWorktree`, and `checkout`. Requires `Paths`. Keeps `<Lemma home>/worktrees.json`, the worktrees it made or removed.
+Provides `Workspace` by reading the filesystem and running the `git` CLI. It
+keeps `<Lemma home>/worktrees.json`, the worktrees it made or removed.
 
-Serves it to clients as the channels `WorkspaceChannels` declares (`workspace.status`, `workspace.branches`, …), and file search as `files.search` (`FileChannels`), with `serveWorkspace` and `serveFiles` from `@lemma/workspace`, which a replacement uses as well. File search is served here rather than by a file searcher so that the call stays while searchers come and go: it asks `FileSearchers` at each call, and with none fails `Unavailable`.
+It serves `Workspace` to clients as the channels `WorkspaceChannels` declares
+(`workspace.status`, `workspace.branches`, …), and file search as
+`files.search` (`FileChannels`). It uses `serveWorkspace` and `serveFiles` from
+`@lemma/workspace`, as a replacement does. File search is served here rather
+than by a file searcher so that the call stays while searchers come and go. It
+asks `FileSearchers` at each call, and with none fails `Unavailable`.
 
 ## Config
 
@@ -12,16 +18,38 @@ Serves it to clients as the channels `WorkspaceChannels` declares (`workspace.st
 
 ## Behavior
 
-- **Paths.** `~` and `~/…` expand against the OS home directory; absolute paths are normalized. A path that is still relative is treated as missing: there is no meaningful base to resolve it against. Errors and statuses report the expanded path.
-- **Running git.** `execFile` without a shell, with `GIT_TERMINAL_PROMPT=0`, `GIT_OPTIONAL_LOCKS=0` (so reads never refresh or lock the index), and `LC_ALL=C`; inherited `GIT_DIR`, `GIT_WORK_TREE`, `GIT_INDEX_FILE`, and `GIT_COMMON_DIR` are dropped. Reads time out after 5s, `checkout` after 15s; output is capped at 16 MiB.
-- **`status`** never fails. `exists` is false unless the path is a directory; `git` is absent outside a work tree (including when git fails or times out). It comes from `git status --porcelain=v2 --branch -z` plus `rev-parse --show-toplevel` and `rev-parse --short HEAD`: `branch` is null on a detached HEAD, `head` is absent before the first commit, and `changes` counts staged, unstaged, conflicted, and untracked entries (an untracked directory counts once).
-- **`browse`** lists the directories in what `partialPath` names (`~/code/`), or in its parent filtered by its last segment (`~/code/ba`): a prefix match first, then the segment anywhere in the name, then its letters in order; at most 200. Dot directories show only when the segment starts with `.`; a symlink counts when it points at a directory.
-- **`createDirectory`** makes the directory and its missing parents, and fails `Exists` when anything is already there.
-- **`branches`** lists `refs/heads` by committer date, newest first, then `refs/remotes` refs whose name after the remote (`origin/x` → `x`) has no local branch; `*/HEAD` symrefs are skipped. Fails `NotFound` (not a directory) or `NotRepository` (not in a work tree).
-- **`checkout`** first checks the name with `git check-ref-format --branch` and fails `InvalidName` for anything invalid, starting with `-`, or not literal (`@{-1}`). Then: `create` runs `git switch -c <name>`; an existing local branch runs `git switch <name>`; a remote-tracking ref `origin/x` switches to local `x`, creating it with `--track` if missing; anything else is left to `git switch <name>`. It never passes `--force` or `--discard-changes`, so git refuses rather than overwriting local changes; any git failure is `Failed` with git's trimmed stderr as the message. On success it returns a fresh `status`.
-- **`places`** asks `git rev-parse --show-toplevel --git-common-dir --show-prefix` and `git branch --show-current` per path, eight paths at a time (the HEAD file would not do: a reftable repository's names no branch). A folder in a work tree belongs to the same folder in its repository's main work tree, as git names it, symlinks resolved, so a repository reached through a symlink and its worktrees are one project; a bare repository's worktree is its own. A folder outside git is its own project. A path that is not a directory is its own project too, unless it is in a worktree this host made or removed (`worktrees.json`, by the path as given or with its symlinks resolved), which stays under its project, with its branch.
-- **`createWorktree`** checks the branch name as `checkout` does, then runs `git worktree add -b <branch>` from `base` (default `HEAD`) into `<worktrees>/<repository>/<branch>`, with `/` in the branch written `-`. A branch or folder that exists already takes the first free suffix, `-2`, `-3`, … for both. With `fromRemote`, it first fetches `base`'s remote version (its upstream, else `origin/<base>`; a remote branch is itself) with `git fetch <remote> <branch>`, up to 60 seconds, and starts from that with `--no-track`, so the new branch pushes as itself rather than to the branch it came from. A base with no remote branch is refused.
-- **`worktrees`** lists `git worktree list --porcelain -z` without its first entry, the main work tree; one whose folder is gone (`prunable`) is `missing`. A git before 2.36, which has no `-z`, is read line by line. Fails as `branches` does.
-- **`removeWorktree`** runs `git worktree remove` (with `--force` when asked) from the main work tree on the worktree's root, which a folder in it names too, so the branch and its commits stay. Without `force`, git refuses a worktree with uncommitted changes or untracked files (`Failed`, with git's reason). A path that is not a directory fails `NotFound`, and one that is not a linked worktree (the main work tree, a plain folder) `NotRepository`.
-- **`restoreWorktree`** makes a worktree this host made or removed again, where it was on its branch (`path` may be a folder in it). When git still lists it, its folder deleted by hand, it forgets that entry first with `git worktree remove`, rather than a prune, which would forget every worktree whose folder is missing at the moment (one on a drive not mounted). It fails `NotFound` for a path it has no record of, `Exists` while anything is at the path, and `Failed` once the branch is gone.
-- **`worktrees.json`** maps each worktree `createWorktree` made, or `removeWorktree` removed (one on a branch, whoever made it), by its root as git names it, to its repository's main work tree and its branch, and keeps the entry after the worktree is removed, so its threads stay under its project and it can be restored. It is written whole (`writeFileAtomic`), one write at a time; a failed write loses only the record, not the worktree.
+[`Workspace`](../contract/src/workspace.ts) documents what each operation
+returns and how it fails. This plugin adds:
+
+- **Paths.** `~` and `~/…` expand against the OS home directory. A path still
+  relative after that is treated as missing, since nothing meaningful resolves
+  it. Errors and statuses report the expanded path.
+- **Running git.** Git runs without a shell, with `GIT_TERMINAL_PROMPT=0`,
+  `GIT_OPTIONAL_LOCKS=0` (so reads never lock the index), and `LC_ALL=C`.
+  Inherited `GIT_DIR`, `GIT_WORK_TREE`, `GIT_INDEX_FILE`, and `GIT_COMMON_DIR`
+  are dropped. Reads time out after 5s, `checkout` after 15s, and a fetch after
+  60s. Output is capped at 16 MiB.
+- **`status`** never fails. `git` is absent outside a work tree, and when git
+  fails or times out. An untracked directory counts as one change.
+- **`checkout`** refuses a name `git check-ref-format --branch` rejects, one
+  starting with `-`, or one not literal (`@{-1}`), as `InvalidName`. It never
+  passes `--force` or `--discard-changes`, so git refuses rather than overwrite
+  local changes.
+- **`browse`** returns at most 200 directories. A symlink counts when it points
+  at a directory.
+- **`places`** asks git eight paths at a time, for the branch with
+  `git branch --show-current`: a reftable repository's HEAD file names none. A
+  bare repository's worktree is its own project.
+- **`createWorktree`** puts a worktree in `<worktrees>/<repository>/<branch>`,
+  with `/` in the branch written `-`. A branch or folder that exists already
+  takes the first free suffix, `-2`, `-3`, …, for both. With `fromRemote`, a
+  base with no remote branch is refused.
+- **`worktrees`** reads a git before 2.36, which has no `-z`, line by line.
+- **`restoreWorktree`** forgets a stale git entry with `git worktree remove`
+  rather than a prune, which would forget every worktree whose folder is
+  missing at the moment (one on a drive not mounted).
+- **`worktrees.json`** maps each worktree made or removed, by its root, to its
+  repository's main work tree and its branch. Entries outlive the worktree, so
+  its threads stay under its project and it can be restored. It is written
+  whole (`writeFileAtomic`), one write at a time. A failed write loses only the
+  record, not the worktree.

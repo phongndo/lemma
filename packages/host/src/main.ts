@@ -8,10 +8,10 @@ import { appUrl, faultMessage } from "@lemma/contracts";
 import { Diagnostic, makeLoader, makeSpanCollector, ReloadError } from "@lemma/core";
 import type { ReportedFault } from "@lemma/core";
 import { compositionHistory, faultHistory, planComposition } from "@lemma/composition";
-import type { PluginRow, WebComposition } from "@lemma/contracts";
+import type { WebComposition } from "@lemma/contracts";
 import { readDiscovery } from "@lemma/contracts/discovery";
 import { profileNameProblem, profileOf, readProfileFile } from "@lemma/contracts/profiles";
-import { appDefaults, bundled, bundledCode, bundledWeb, optIn } from "./bundled.ts";
+import { appDefaults, bundled, bundledCode, bundledWeb, pinned, withAddress } from "./bundled.ts";
 import { loadComposition, projectPluginsDir, readConfigText, updateConfig } from "./config.ts";
 import { makeHostChanges } from "./control.ts";
 import type { HostChanges, Read } from "./control.ts";
@@ -36,20 +36,10 @@ const argValue = (name: string): string | undefined => {
   const arg = argv[at]!;
   return arg.includes("=") ? arg.slice(arg.indexOf("=") + 1) : argv[at + 1];
 };
-/**
- * The transport's `port` and `host` for this run only (`lemma serve --port 8080 --host 0.0.0.0`): over what the config
- * files say, and never written to them.
- */
-const transportOverrides: Readonly<Record<string, unknown>> = {
-  ...(argValue("port") === undefined ? {} : { port: Number(argValue("port")) }),
-  ...(argValue("host") === undefined ? {} : { host: argValue("host") }),
-};
-const withOverrides = (rows: Readonly<Record<string, PluginRow>>): Readonly<Record<string, PluginRow>> => {
-  if (Object.keys(transportOverrides).length === 0) return rows;
-  const row = rows["transport.server"] ?? {};
-  const config = typeof row.config === "object" && row.config !== null ? row.config : {};
-  return { ...rows, "transport.server": { ...row, config: { ...config, ...transportOverrides } } };
-};
+/** Where this run listens, `--port` and `--host` (`lemma serve --port 8080 --host 0.0.0.0`), over the config files (`withAddress`). */
+const portArg = argValue("port");
+const hostArg = argValue("host");
+const address = { ...(portArg === undefined ? {} : { port: Number(portArg) }), ...(hostArg === undefined ? {} : { host: hostArg }) };
 /**
  * `--safe` (or `LEMMA_SAFE=1`): the bundled plugins as shipped, reading no
  * config file and no plugin file, and writing neither: the way back from a
@@ -152,16 +142,8 @@ delete process.env.LEMMA_TOKEN;
 // Consumed here: tools inherit this environment, and a CLI the agent runs must use its own directory, not ours.
 delete process.env.INIT_CWD;
 const userPluginsDir = pluginsDirOf(paths);
-// The config the app supplies beneath the rows, with the port the profile keeps (`profile.json`) beneath the transport's.
-const profilePort = (await Effect.runPromise(readProfileFile(paths.home)))?.port;
-const defaults = profilePort === undefined ? appDefaults : { ...appDefaults, "transport.server": { ...appDefaults["transport.server"], port: profilePort } };
-
-/** Plugins no config change may turn off, with the reason clients show. Everything they need is locked with them. */
-const pinned: Readonly<Record<string, string>> = {
-  "transport.server": "Serves the web app and the CLI; replace it with another transport plugin instead of turning it off",
-};
-/** What the host provides itself (see `hostRuntime`): planned as present, and refused from a plugin. */
-const provided = runtimeCapabilities;
+// The config the app supplies beneath the rows, with the port the profile keeps (`profile.json`).
+const defaults = appDefaults((await Effect.runPromise(readProfileFile(paths.home)))?.port);
 /** What `Trace` reads: every span the host's work ends, kept in memory, and the composition's changes. */
 const spans = makeSpanCollector();
 const changes = compositionHistory();
@@ -187,9 +169,10 @@ const EMPTY_WEB: WebComposition = { plugins: {}, enabledIn: {}, configIn: {}, fi
 
 /** Reads config files and local plugins into the next composition (see `planComposition`), with every diagnostic. */
 const read: Effect.Effect<Read, ReloadError> = Effect.gen(function* () {
-  const input = { bundled, optIn, pinned: Object.keys(pinned), defaults, provided, localRequired: true };
+  // What the host provides itself (`hostRuntime`) is planned as present, and refused from a plugin.
+  const input = { bundled, pinned: Object.keys(pinned), defaults, provided: runtimeCapabilities, localRequired: true };
   if (safe) {
-    const planned = planComposition({ ...input, local: [], rows: withOverrides({}) });
+    const planned = planComposition({ ...input, local: [], rows: withAddress({}, address) });
     // The bundled plugins as shipped: only an error in them is said, as it stops the start.
     const diagnostics = planned.diagnostics.filter((diagnostic) => diagnostic.severity === "error");
     return { ...planned, diagnostics, enabledIn: {}, configIn: {}, trusted: false, web: EMPTY_WEB, webIds: bundledWeb, code: bundledCode(bundled) };
@@ -211,7 +194,7 @@ const read: Effect.Effect<Read, ReloadError> = Effect.gen(function* () {
   const planned = planComposition({
     ...input,
     local: localPlugins,
-    rows: withOverrides(loaded.rows),
+    rows: withAddress(loaded.rows, address),
     elsewhere: (id) => webIds.includes(id),
     elsewhereIds: webIds,
   });

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { EventData, SessionEvent, SessionInfo } from "@lemma/sessions";
-import { agentOfCall, childrenOf, elapsed, groupStatus, isActive, outcomesOf, parseNotice, stateOf } from "../src/agents.ts";
+import { agentOfCall, childrenOf, groupStatus, isActive, outcomesOf, parseNotice, stateOf } from "../src/agents.ts";
 
 const session = (id: string, extra: Partial<SessionInfo> = {}): SessionInfo => ({ id, cwd: "/w", createdAt: 0, updatedAt: 0, lastSeq: 3, ...extra });
 const branch = (...data: EventData[]): SessionEvent[] =>
@@ -90,11 +90,5 @@ describe("a thread's agents", () => {
     expect(groupStatus(["working", "waiting"])).toEqual({ label: "1 working, 1 needs input", active: true });
     expect(groupStatus(["done", "done"])).toEqual({ label: "All finished", active: false });
     expect(groupStatus(["done", "failed", "stopped"])).toEqual({ label: "1 failed, 1 stopped", active: false });
-  });
-
-  it("count their time shortly", () => {
-    expect(elapsed(0, 12_000)).toBe("12s");
-    expect(elapsed(0, 3 * 60_000)).toBe("3m");
-    expect(elapsed(0, 78 * 60_000)).toBe("1h 18m");
   });
 });

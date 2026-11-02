@@ -6,6 +6,7 @@ import type { PluginShare, SessionEvent, TrajectoryRequest } from "@lemma/sessio
 import { PluginTabs, PluginsFacts } from "@lemma/settings";
 import type { ThreadsService } from "@lemma/threads";
 import type { SlotsService } from "@lemma/web";
+import { plural } from "@lemma/web/format";
 
 /** Characters as tokens, roughly: four to a token. */
 const tokens = (chars: number) => `≈${formatTokens(Math.ceil(chars / 4))}`;
@@ -52,7 +53,7 @@ export function addCosts(threads: ThreadsService, slots: SlotsService): void {
       if (found === undefined) return undefined;
       const size = found.shares.reduce((sum, share) => sum + share.systemChars + share.toolChars, 0);
       const changed = found.shares.reduce((sum, share) => sum + share.changed.length, 0);
-      return `${tokens(size)} tokens of prompt and tools; ${found.first ? "the first" : changed === 0 ? "nothing changed" : `${changed} part${changed === 1 ? "" : "s"} changed`}`;
+      return `${tokens(size)} tokens of prompt and tools; ${found.first ? "the first" : changed === 0 ? "nothing changed" : `${plural(changed, "part")} changed`}`;
     },
   });
 

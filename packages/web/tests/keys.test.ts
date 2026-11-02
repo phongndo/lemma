@@ -1,5 +1,18 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { bindingOf, formatKeys, holdsKeys, listKey, matchesKeys, quickKey, radioGroupKey, radioStep, stepFor, typedWithAltGr, wrapStep } from "../src/keys.ts";
+import {
+  bindingOf,
+  focusStep,
+  formatKeys,
+  holdsKeys,
+  listKey,
+  matchesKeys,
+  quickKey,
+  radioGroupKey,
+  radioStep,
+  stepFor,
+  typedWithAltGr,
+  wrapStep,
+} from "../src/keys.ts";
 
 // Not a Mac here, so `mod` is Ctrl. Node has a `navigator` that reports the host, so pin it.
 vi.hoisted(() => {
@@ -185,5 +198,39 @@ describe("radioGroupKey", () => {
     expect(group(1).press("ArrowLeft", { alt: true }).next).toBeUndefined();
     expect(group(1).press("ArrowRight", { shift: true }).next).toBeUndefined();
     expect(group(undefined).press("ArrowRight").next).toBeUndefined();
+  });
+});
+
+describe("focusStep", () => {
+  afterEach(() => vi.unstubAllGlobals());
+  /** Three rows matching `.row`, as the DOM would hand them over, with focus on `focused`: a row, or something inside one. */
+  const rows = (focused: number | "inside" | undefined) => {
+    const all = [0, 1, 2].map(() => ({ focus: vi.fn(), closest: (_: string): unknown => null }));
+    for (const row of all) row.closest = () => row;
+    const inside = { closest: () => all[2] };
+    vi.stubGlobal("document", { activeElement: focused === undefined ? null : focused === "inside" ? inside : all[focused] });
+    const container = { querySelectorAll: (selector: string) => (selector === ".row" ? all : []) } as unknown as ParentNode;
+    return { all, container };
+  };
+
+  it("steps from the row focus is in, round past the ends, focusing the one moved to", () => {
+    const { all, container } = rows(2);
+    expect(focusStep(container, ".row", "ArrowDown")).toBe(all[0]);
+    expect(all[0]!.focus).toHaveBeenCalled();
+    expect(focusStep(rows("inside").container, ".row", "ArrowUp")).toBeDefined();
+  });
+
+  it("steps from `from` when focus is in no row, else from nothing", () => {
+    const { all, container } = rows(undefined);
+    expect(focusStep(container, ".row", "ArrowDown", { from: all[1] as unknown as Element })).toBe(all[2]);
+    expect(focusStep(container, ".row", "ArrowUp")).toBe(all[2]);
+    expect(focusStep(container, ".row", "ArrowDown")).toBe(all[0]);
+  });
+
+  it("moves nothing for another key, or with no rows", () => {
+    const { all, container } = rows(0);
+    expect(focusStep(container, ".row", "Enter")).toBeUndefined();
+    expect(focusStep(container, ".none", "ArrowDown")).toBeUndefined();
+    expect(all.some((row) => row.focus.mock.calls.length > 0)).toBe(false);
   });
 });

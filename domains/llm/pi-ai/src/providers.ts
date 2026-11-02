@@ -13,6 +13,7 @@ import { openAICompletionsApi } from "@earendil-works/pi-ai/api/openai-completio
 import { openAIResponsesApi } from "@earendil-works/pi-ai/api/openai-responses.lazy";
 import { piMessagesApi } from "@earendil-works/pi-ai/api/pi-messages.lazy";
 import { Schema } from "effect";
+import { errorMessage } from "@lemma/contracts";
 
 /** Wire APIs a configured provider can speak. Implementations load on first request. */
 const apis = {
@@ -114,7 +115,7 @@ export function watchRefresh(provider: Provider, report: (provider: string, expi
       report(provider.id, undefined);
       return fresh;
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
+      const message = errorMessage(error);
       if (!signal.aborted && refusedRefresh(message)) report(provider.id, message);
       throw error;
     }
