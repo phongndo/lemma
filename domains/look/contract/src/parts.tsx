@@ -341,6 +341,17 @@ export interface MenuItemProps {
   readonly run: () => void;
   /** Drawn in the error color: it destroys something. */
   readonly danger?: boolean;
+  /** Drawn before the label. */
+  readonly icon?: IconName;
+  /** Muted words after the label: a path, a count. Nothing shows when it is empty. */
+  readonly hint?: string | undefined;
+  /**
+   * Makes it one choice of several (role `menuitemradio`), and whether it is the one chosen. A checkmark shows in the
+   * icon's place while it is checked.
+   */
+  readonly checked?: boolean;
+  /** Its tooltip. */
+  readonly tip?: string | undefined;
 }
 
 /** A row of a popover's menu (`Popover`): picking it closes the menu, then runs. */

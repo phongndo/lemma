@@ -1,5 +1,6 @@
 import { matchesQuery } from "@lemma/web/match";
 import type { McpServerStatus } from "@lemma/mcp";
+import { plural } from "@lemma/web/format";
 
 /**
  * How a server is doing: a few words for its row (`Connected · 12 tools`, `Needs sign-in`), and a tone. Only trouble
@@ -28,14 +29,12 @@ export interface ServerItem {
   readonly keywords: string;
 }
 
-const count = (n: number, one: string) => `${n} ${one}${n === 1 ? "" : "s"}`;
-
 export const statusOf = (server: McpServerStatus): ServerStatus => {
   const reached = server.tools.filter((tool) => tool.exposure !== "hidden").length;
   if (server.auth?.state === "signing-in") return { tone: "busy", text: "Signing in…" };
   switch (server.state) {
     case "connected":
-      return { tone: "ok", text: `Connected · ${count(reached, "tool")}` };
+      return { tone: "ok", text: `Connected · ${plural(reached, "tool")}` };
     case "connecting":
       return { tone: "busy", text: "Connecting…" };
     case "failed":

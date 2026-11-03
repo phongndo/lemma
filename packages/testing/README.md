@@ -33,7 +33,11 @@ seam storage code takes instead of `node:fs` (the sessions plugin through
 
 A seeded random source (`seededRandom(seed)`) decides crashes and faults, so a
 seed replays a run. Only what `FileSystem` covers is modelled: one process,
-regular files and directories, POSIX paths.
+regular files and directories, POSIX paths. `errno(code, message)` makes an
+error as Node's file system throws it, for another disk in memory (the
+simulator's `MemFs`). Code that runs outside Vitest (the simulator's
+benchmark) imports these, and `SimDisk`, from `@lemma/testing/disk`: the
+package's index loads Vitest with the conformance suites.
 
 ## Conformance suites
 

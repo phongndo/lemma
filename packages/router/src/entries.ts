@@ -59,12 +59,11 @@ const serialize = (states: ReadonlyMap<string, Record<string, unknown>>, unsaved
   return `[${entries.join(",")}]`;
 };
 
-/** What `storage` held, as far as it can be trusted: state by entry, in the order written (an older object form too). */
+/** What `storage` held, as far as it can be trusted: state by entry, in the order written. */
 const deserialize = (text: string): Map<string, Record<string, unknown>> => {
   const states = new Map<string, Record<string, unknown>>();
   const saved: unknown = JSON.parse(text);
-  const pairs: readonly unknown[] = Array.isArray(saved) ? saved : isRecord(saved) ? Object.entries(saved) : [];
-  for (const pair of pairs) {
+  for (const pair of Array.isArray(saved) ? saved : []) {
     if (!Array.isArray(pair) || typeof pair[0] !== "string" || !isRecord(pair[1])) continue;
     states.set(pair[0], own(pair[1]));
   }

@@ -1,5 +1,6 @@
 import type { FileFinderApi } from "@ff-labs/fff-node";
 import type { FffIndexesService } from "@lemma/workspace/fff";
+import { errorMessage } from "@lemma/contracts";
 
 /** fff's `FileFinder`: a test, or another engine of the same shape, stands in for it. */
 export type Finder = FileFinderApi;
@@ -48,8 +49,6 @@ export interface Indexes extends FffIndexesService {
   readonly close: () => void;
 }
 
-const message = (cause: unknown) => (cause instanceof Error ? cause.message : String(cause));
-
 /**
  * One index per directory searched, shared by every call using it, those that arrive while it opens too; a failed open
  * is retried by the next call.
@@ -96,7 +95,7 @@ export const makeIndexes = (options: { readonly idleMs: number; readonly open?: 
       const index = acquire(root);
       try {
         const finder = await index.finder.catch((cause: unknown) => {
-          throw new Error(`File search is unavailable here: ${message(cause)}`);
+          throw new Error(`File search is unavailable here: ${errorMessage(cause)}`);
         });
         return await body(finder);
       } finally {

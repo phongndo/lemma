@@ -6,7 +6,7 @@ import type { AssistantMessage } from "@lemma/llm";
 import { RECORD_KIND_LABEL, promptDiff, rebuildRequest, recordRequest } from "@lemma/sessions";
 import type { AssistantRecord, LedgerRecord, SystemRecord, Timing, TrajectoryRequest } from "@lemma/sessions";
 import { inputTokens } from "./scale.ts";
-import { clockTime } from "@lemma/web/format";
+import { clockTime, plural } from "@lemma/web/format";
 import { radioGroupKey } from "@lemma/web/keys";
 import { ToolViews, formatThroughput, throughput } from "@lemma/threads";
 import { CopyIcon, Markdown, XIcon } from "@lemma/look";
@@ -201,7 +201,7 @@ export function createDetails(view: View) {
                 <i style={{ width: `${(entry.chars / max()) * 100}%` }} />
               </span>
               <span class="trj-source-chars">{entry.chars.toLocaleString()}</span>
-              <span class="trj-source-parts">{entry.parts.join(", ")}</span>
+              <span class="trj-source-parts tw:truncate">{entry.parts.join(", ")}</span>
             </div>
           )}
         </For>
@@ -251,7 +251,7 @@ export function createDetails(view: View) {
               rows={[
                 ["Model", request.model],
                 ["Thinking", request.thinking],
-                ["History", `${request.messages} message${request.messages === 1 ? "" : "s"}`],
+                ["History", plural(request.messages, "message")],
                 [
                   "Composition",
                   <span class="trj-mono" data-tip={request.composition}>
@@ -601,7 +601,7 @@ export function createDetails(view: View) {
                   <Show when={v().name}>
                     <span class="trj-mono">{v().name}</span>
                   </Show>
-                  <span class="trj-details-where">{v().where}</span>
+                  <span class="trj-details-where tw:truncate">{v().where}</span>
                 </>
               }
             />

@@ -2,7 +2,7 @@ import { Cause, Deferred, Duration, Effect, Exit, Fiber, Schema, Scope, Stream }
 import type { Layer } from "effect";
 import { RpcClientError } from "effect/rpc";
 import type { Socket } from "effect/socket";
-import { HostError, mapChunks, wireCodec } from "@lemma/contracts";
+import { causeMessage, HostError, mapChunks, wireCodec } from "@lemma/contracts";
 import type {
   ChannelDeclaration,
   ChannelInfo,
@@ -95,9 +95,9 @@ export interface Host {
         channel: ChannelDeclaration<"stream", Payload, Success>,
         payload: Payload,
         onElement: (element: Success) => void,
-        onEnd?: (error?: HostError | Error) => void,
+        onEnd?: StreamEnd,
       ): () => void;
-      (id: string, payload: unknown, onElement: (element: unknown) => void, onEnd?: (error?: HostError | Error) => void): () => void;
+      (id: string, payload: unknown, onElement: (element: unknown) => void, onEnd?: StreamEnd): () => void;
     };
   };
   readonly host: {
@@ -177,8 +177,8 @@ export const runPromise = <A, E>(effect: Effect.Effect<A, E>, signal?: AbortSign
     Exit.isSuccess(exit) ? exit.value : Promise.reject(toError(Cause.squash(exit.cause))),
   );
 
-const toError = (error: unknown): HostError | Error => {
-  if (error instanceof HostError || error instanceof Error) return error;
+const toError = (error: unknown): Error => {
+  if (error instanceof Error) return error;
   if (typeof error === "object" && error !== null && "message" in error) return new Error(String(error.message));
   return new Error(String(error));
 };
@@ -208,17 +208,13 @@ const channelOf = (target: string | ChannelDeclaration): ChannelCodec => {
     };
   }
   const { id } = target;
-  const reason = (cause: Cause.Cause<unknown>) => {
-    const error = Cause.squash(cause);
-    return error instanceof Error ? error.message : String(error);
-  };
   return {
     id,
     request: (payload: unknown) =>
       Effect.suspend(() => Schema.encodeUnknownEffect(wireCodec(target.payload))(payload)).pipe(
         Effect.map((encoded) => ({ id, payload: encoded })),
         Effect.catchCause((cause) =>
-          Effect.fail(new HostError({ code: "InvalidPayload", subject: id, message: `Invalid payload for "${id}": ${reason(cause)}` })),
+          Effect.fail(new HostError({ code: "InvalidPayload", subject: id, message: `Invalid payload for "${id}": ${causeMessage(cause)}` })),
         ),
       ),
     read: (value: unknown) =>
@@ -228,7 +224,7 @@ const channelOf = (target: string | ChannelDeclaration): ChannelCodec => {
             new HostError({
               code: "Mismatch",
               subject: id,
-              message: `The host's "${id}" sent what this client's declaration of it does not read (are they from different versions?): ${reason(cause)}`,
+              message: `The host's "${id}" sent what this client's declaration of it does not read (are they from different versions?): ${causeMessage(cause)}`,
             }),
           ),
         ),
@@ -249,7 +245,7 @@ const openOver = (rpc: Pick<RawHostRpcClient, "Channel.Open">, target: string | 
 };
 
 /** How a stream from the host ended: with nothing when it finished, else the host's `HostError` or the connection's failure. */
-type StreamEnd = (error?: HostError | Error) => void;
+export type StreamEnd = (error?: HostError | Error) => void;
 
 /**
  * Reads a stream from the host into callbacks until the returned close: each
@@ -276,33 +272,6 @@ const drain = <A>(stream: Stream.Stream<A, unknown>, onElement: (element: A) => 
     fiber.interruptUnsafe();
   };
 };
-
-/** `Host.channel` over the connection's Effect client: what `connect` gives. */
-const channelsOver = (rpc: HostRpcClient): Host["channel"] => ({
-  list: () => runPromise(rpc["Channel.List"]()),
-  call: (target: string | ChannelDeclaration, payload?: unknown, options?: CallOptions) => runPromise(callOver(rpc, target, payload), options?.signal),
-  open: (target: string | ChannelDeclaration, payload: unknown, onElement: (element: any) => void, onEnd?: StreamEnd) =>
-    drain(openOver(raw(rpc), target, payload), onElement, onEnd, `Channel "${typeof target === "string" ? target : target.id}" listener failed`),
-});
-
-/** What `Host.Events` sends: `subscribed` once the subscription has joined, so the client hears all that is published from then on, then the runtime's events. */
-type HostEventsElement = { readonly type: "subscribed" } | RuntimeEvent;
-
-/**
- * The host's own events (`Host.Events`) over the connection's Effect client,
- * read into callbacks as `Host.channel.open` reads a stream: `onEvent` hears
- * `subscribed`, then each event; `onEnd` hears how it ended, if by itself
- * (the connection dropped, say). Returns `close`, after which neither is
- * called. What `connect` subscribes with, saying whether it `answers`
- * questions.
- */
-const eventsOver = (
-  rpc: HostRpcClient,
-  answers: boolean,
-  client: ClientHello | undefined,
-  onEvent: (event: HostEventsElement) => void,
-  onEnd?: StreamEnd,
-): (() => void) => drain(raw(rpc)["Host.Events"]({ answers, ...(client === undefined ? {} : { client }) }), onEvent, onEnd, "Host event listener failed");
 
 /**
  * Whether a request failed because its connection dropped: `Host` rejects
@@ -337,11 +306,7 @@ export const callChannel = <Payload, Success>(
 ): Effect.Effect<Success, HostError | RpcClientError.RpcClientError> =>
   callOver(rpc, channel, payload) as Effect.Effect<Success, HostError | RpcClientError.RpcClientError>;
 
-export const describeError = (error: unknown): string => {
-  if (error instanceof HostError) return error.message;
-  if (error instanceof Error) return error.message;
-  return String(error);
-};
+export const describeError = (error: unknown): string => (error instanceof Error ? error.message : String(error));
 
 /**
  * Opens the connection and keeps a `Host.Events` subscription alive with
@@ -380,17 +345,17 @@ export const connect = async (options: ConnectOptions): Promise<Host> => {
 
   /** One subscription and probe, for as long as the subscription lasts: why it ended, or why it could not start. */
   const attempt = Effect.gen(function* () {
-    // Subscribe first so nothing published after the probe is missed.
+    // Subscribe first so nothing published after the probe is missed. The host sends `subscribed` once the
+    // subscription has joined, so the client hears all that is published from then on, then the runtime's events.
     const subscribed = yield* Deferred.make<void>();
     const ended = yield* Deferred.make<string>();
     yield* Effect.acquireRelease(
       Effect.sync(() =>
-        eventsOver(
-          rpc,
-          answers,
-          client,
+        drain(
+          raw(rpc)["Host.Events"]({ answers, ...(client === undefined ? {} : { client }) }),
           (event) => (event.type === "subscribed" ? Deferred.doneUnsafe(subscribed, Effect.void) : emit(event)),
           (error) => Deferred.doneUnsafe(ended, Effect.succeed(error === undefined ? "Event stream ended" : describeError(error))),
+          "Host event listener failed",
         ),
       ),
       (close) => Effect.sync(close),
@@ -441,9 +406,8 @@ export const connect = async (options: ConnectOptions): Promise<Host> => {
       statusListeners.add(listener);
       listener(status);
     });
-  const channels = channelsOver(rpc);
   const channel: Host["channel"] = {
-    ...channels,
+    list: () => runPromise(rpc["Channel.List"]()),
     call: async (target: string | ChannelDeclaration, payload?: unknown, options?: CallOptions) => {
       for (;;) {
         const { generation } = status;
@@ -455,6 +419,8 @@ export const connect = async (options: ConnectOptions): Promise<Host> => {
         }
       }
     },
+    open: (target: string | ChannelDeclaration, payload: unknown, onElement: (element: any) => void, onEnd?: StreamEnd) =>
+      drain(openOver(raw(rpc), target, payload), onElement, onEnd, `Channel "${typeof target === "string" ? target : target.id}" listener failed`),
   };
 
   return {

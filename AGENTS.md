@@ -33,7 +33,7 @@ Use:
   plugins](docs/plugins.md#the-five-shapes)): what plugins add is a registry or a
   slot in the domain's contract, not a service method. Name it in the domain's
   README, and say how its handlers or items compose, and what a failing one
-  does, in an `@composition` line of its doc comment; `scripts/check-boundaries.ts`
+  does, in an `@composition` line of its doc comment; `scripts/check-docs.ts`
   fails one missing either.
 - Keep `@lemma/core` domain-neutral: application contracts, persistence,
   transports, and UI belong to plugins.

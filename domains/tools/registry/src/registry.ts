@@ -3,7 +3,7 @@ import { Cause, Clock, Effect, Exit, Fiber, Order, Queue, Result, Schema, Stream
 import type { Context } from "effect";
 import { awaitable, Events, Hooks, PluginContext, Registries } from "@lemma/core";
 import type { HandlerStep } from "@lemma/core";
-import { creditOf, inChainOrder, Inspectors } from "@lemma/contracts";
+import { creditOf, errorMessage, inChainOrder, Inspectors } from "@lemma/contracts";
 import type { CheckCredit, ResultCredit } from "@lemma/contracts";
 import { Guards, ToolError, ToolExecuteHook, ToolExecuted, ToolOutput, ToolResult, Tools } from "@lemma/tools";
 import type { ExecuteOptions, Tool, ToolContext, ToolContribution, ToolInvocation, ToolRunner } from "@lemma/tools";
@@ -39,7 +39,7 @@ const entryOf = (tool: Tool<any>): Entry | string => {
     output: tool.output === undefined ? undefined : toolOutput(tool.output),
   }));
   if (Result.isFailure(rendered)) {
-    const why = `its schemas have no JSON Schema form (${message(rendered.failure)})`;
+    const why = `its schemas have no JSON Schema form (${errorMessage(rendered.failure)})`;
     entries.set(tool, why);
     return why;
   }
@@ -64,8 +64,6 @@ const entryOf = (tool: Tool<any>): Entry | string => {
   entries.set(tool, entry);
   return entry;
 };
-
-const message = (cause: unknown): string => (cause instanceof Error ? cause.message : typeof cause === "string" ? cause : String(cause));
 
 const errorResult = (text: string, details?: unknown): ToolResult =>
   new ToolResult({ content: [{ type: "text", text }], isError: true, ...(details === undefined ? {} : { details }) });
@@ -136,7 +134,7 @@ function runTool(tool: Tool<any>, input: unknown, base: Omit<ToolContext, "signa
         return Result.isSuccess(decoded) ? decoded.success : errorResult(`Tool "${tool.name}" returned an invalid result: ${decoded.failure.message}`);
       }),
       Effect.catchCause((cause) =>
-        Cause.hasInterruptsOnly(cause) ? Effect.failCause(cause as Cause.Cause<never>) : Effect.succeed(errorResult(message(Cause.squash(cause)))),
+        Cause.hasInterruptsOnly(cause) ? Effect.failCause(cause as Cause.Cause<never>) : Effect.succeed(errorResult(errorMessage(Cause.squash(cause)))),
       ),
       Effect.onInterrupt(() => Effect.sync(() => controller.abort("interrupted"))),
       Effect.ensuring(Effect.sync(() => outer.removeEventListener("abort", forward))),

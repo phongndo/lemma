@@ -2,6 +2,7 @@ import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { Data, Effect, Result, Schema } from "effect";
 import { isAlive, readJsonFile, writeFileAtomic } from "./fs.ts";
+import { errorMessage } from "./host.ts";
 
 /*
  * Node only: `@lemma/contracts/discovery`. How a client finds a host. A
@@ -123,7 +124,7 @@ const unusable = (path: string, why: string) =>
 const readText = (path: string) =>
   Effect.tryPromise({
     try: () => readFile(path, "utf8").catch((cause: NodeJS.ErrnoException) => (cause.code === "ENOENT" ? undefined : Promise.reject(cause))),
-    catch: (cause) => unusable(path, cause instanceof Error ? cause.message : String(cause)),
+    catch: (cause) => unusable(path, errorMessage(cause)),
   });
 
 /** environments.json as it is, or empty without the file. */

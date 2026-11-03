@@ -1,6 +1,6 @@
 import { configValues, describeConfig, faultMessage } from "@lemma/contracts";
 import type { ConfigField, ConfigScope, FaultRecord, PluginChange, PluginInfo, PluginSource } from "@lemma/contracts";
-import { Events, Hooks, PluginContext, Registries } from "@lemma/core";
+import { builtinKeys, requiredBy } from "@lemma/core";
 import type { Capability, Composition, EventSnapshot, HookSnapshot, Plugin, PluginSnapshot, RegistrySnapshot, ReportedFault } from "@lemma/core";
 
 /** A plugin definition the app can load, with where it came from. */
@@ -13,15 +13,12 @@ export interface KnownPlugin {
   readonly resources?: Readonly<Record<string, readonly string[]>>;
 }
 
-/** Runtime capabilities the core supplies to every plugin; not dependencies between plugins. */
-const builtins = new Set<string>([Hooks.key, PluginContext.key, Events.key, Registries.key]);
-
 /**
  * Keys no plugin provides to another: the core's builtins and what the app
  * provides itself (its `provide.provides`). The kernel refuses a plugin
  * offering one, so that plugin is nobody's provider.
  */
-export const reservedKeys = (provided: readonly Capability[]): ReadonlySet<string> => new Set([...builtins, ...provided.map((tag) => tag.key)]);
+export const reservedKeys = (provided: readonly Capability[]): ReadonlySet<string> => new Set([...builtinKeys, ...provided.map((tag) => tag.key)]);
 
 const isEnabled = (composition: Composition, id: string): boolean => composition.plugins[id]?.enabled !== false;
 
@@ -69,7 +66,11 @@ export function resolveComposition(
   } = {},
 ): Resolved {
   const reserved = reservedKeys(options.provided ?? []);
-  const locked = lockedBy(known, rows, options.pinned ?? [], reserved);
+  const locked = requiredBy(
+    known.map(({ plugin }) => plugin),
+    providersOf(known, rows, reserved),
+    options.pinned ?? [],
+  );
   const overridden = [...locked.keys()].filter((id) => rows.plugins[id]?.enabled === false);
   const composition: Composition =
     overridden.length === 0
@@ -94,28 +95,6 @@ export function resolveComposition(
   }
   const plugins = Object.fromEntries(Object.entries(composition.plugins).filter(([id]) => !haltedBy.has(id)));
   return { composition: { plugins }, haltedBy, locked, overridden };
-}
-
-/** Each pinned plugin (to itself) and every plugin it needs, directly or through other plugins, to the pinned plugin's id. */
-function lockedBy(known: readonly KnownPlugin[], composition: Composition, pinned: readonly string[], reserved: ReadonlySet<string>): Map<string, string> {
-  const byId = new Map(known.map((entry) => [entry.plugin.id, entry.plugin]));
-  const providers = providersOf(known, composition, reserved);
-  const locked = new Map<string, string>();
-  for (const root of pinned) if (byId.has(root)) locked.set(root, root);
-  for (const root of pinned) {
-    const stack = [root];
-    while (stack.length) {
-      const plugin = byId.get(stack.pop()!);
-      if (!plugin) continue;
-      for (const tag of plugin.requires) {
-        const provider = providers.get(tag.key);
-        if (provider === undefined || locked.has(provider)) continue;
-        locked.set(provider, root);
-        stack.push(provider);
-      }
-    }
-  }
-  return locked;
 }
 
 interface CatalogInput {
@@ -228,7 +207,7 @@ export function catalog({
       ...(scope === undefined ? {} : { scope }),
       ...(locked === undefined ? {} : { locked }),
       provides: plugin.provides.map((tag) => tag.key),
-      requires: plugin.requires.map((tag) => tag.key).filter((key) => !builtins.has(key)),
+      requires: plugin.requires.map((tag) => tag.key).filter((key) => !builtinKeys.has(key)),
       ...(plugin.uses === undefined ? {} : { uses: plugin.uses }),
       ...(resources === undefined ? {} : { resources }),
       ...(plugin.implements === undefined ? {} : { implements: plugin.implements }),
@@ -248,7 +227,6 @@ export function catalog({
   });
 }
 
-/** A fault as text: the kernel's message and its cause, squashed. */
 /**
  * Recent faults per plugin, newest first and at most `limit` each: the core
  * keeps only an instance's latest, and a restart clears it, so the history of

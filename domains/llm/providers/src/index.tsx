@@ -23,7 +23,7 @@ import { Settings, SettingsGroups, SettingsSections } from "@lemma/settings";
 import { ComposerNotices, ErrorActions } from "@lemma/threads";
 import type { ErrorActionProps } from "@lemma/threads";
 import { Notify, Slots, WebPlugins, defineWebPlugin } from "@lemma/web";
-import { CheckIcon, Dialog, FilterIcon, KeyIcon, MenuItem, pickSvg, PlusIcon, Popover, SearchField, Spinner } from "@lemma/look";
+import { Dialog, FilterIcon, KeyIcon, MenuItem, pickSvg, PlusIcon, Popover, SearchField, Spinner } from "@lemma/look";
 import { ConnectDialog } from "./connect.tsx";
 import { CustomProviderDialog } from "./custom.tsx";
 import styles from "./providers.css?inline";
@@ -116,7 +116,7 @@ function ProviderRow(props: {
       </span>
       <span class="setting-text provider-info">
         <span class="setting-title provider-name">{props.provider.name}</span>
-        <span class="setting-desc provider-desc">{describeProvider(props.provider)}</span>
+        <span class="setting-desc provider-desc tw:truncate">{describeProvider(props.provider)}</span>
       </span>
       <span class="setting-control" ref={control}>
         <Show
@@ -277,7 +277,7 @@ function CustomProviderRow(props: { open: () => void }) {
       </span>
       <span class="setting-text provider-info">
         <span class="setting-title provider-name">Custom provider</span>
-        <span class="setting-desc provider-desc">Any OpenAI-, Anthropic-, or Gemini-compatible endpoint, like Ollama or a gateway</span>
+        <span class="setting-desc provider-desc tw:truncate">Any OpenAI-, Anthropic-, or Gemini-compatible endpoint, like Ollama or a gateway</span>
       </span>
       <span class="setting-control">
         <button class="button small provider-connect" onClick={props.open}>
@@ -562,24 +562,7 @@ export default defineWebPlugin({
             >
               {(close) => (
                 <For each={FILTERS}>
-                  {(option) => (
-                    <button
-                      class="menu-item"
-                      role="menuitemradio"
-                      aria-checked={filter() === option.value}
-                      onClick={() => {
-                        setFilter(option.value);
-                        close();
-                      }}
-                    >
-                      <span class="menu-check">
-                        <Show when={filter() === option.value}>
-                          <CheckIcon />
-                        </Show>
-                      </span>
-                      {option.label}
-                    </button>
-                  )}
+                  {(option) => <MenuItem label={option.label} checked={filter() === option.value} close={close} run={() => setFilter(option.value)} />}
                 </For>
               )}
             </Popover>

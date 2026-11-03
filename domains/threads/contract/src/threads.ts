@@ -567,7 +567,10 @@ export interface ToolBodyProps {
 export interface ToolView {
   /** The kind of thing a call does, beside its line. A call with an icon and a summary is not also named. */
   readonly icon?: IconName;
-  /** A call's arguments in a line. */
+  /**
+   * A call's arguments in a line. A tool whose `path` names the file it acts on uses `fileSummary` (from
+   * `@lemma/threads/summary`, which a view loads without the rest of the contract).
+   */
   readonly summary?: (args: Record<string, unknown> | undefined, context: { readonly cwd?: string; readonly home?: string }) => ToolSummary;
   /** The string argument shown while a call's arguments stream in, before they parse (`command`, `path`). */
   readonly streaming?: string;

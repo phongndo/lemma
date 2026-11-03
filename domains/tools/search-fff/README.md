@@ -1,6 +1,14 @@
 # tools.search-fff
 
-The `grep` and `find` tools, searching with [fff](https://github.com/dmtrKovalenko/fff) through `@ff-labs/fff-node`. Adds both to `Tools`, searching the indexes `workspace.search-fff` keeps (`FffIndexes`, in `@lemma/workspace/fff`), which it requires; its web half (`./web`) shows a call as its pattern and where it searched. Their descriptions, defaults, and output follow fff's own pi extension ([pi-fff](https://github.com/dmtrKovalenko/fff/tree/main/packages/pi-fff), 0.11.0), which fff's author tunes against agents. No config: how long an index stays open is `workspace.search-fff`'s `idleMinutes`.
+The `grep` and `find` tools, searching with
+[fff](https://github.com/dmtrKovalenko/fff) through `@ff-labs/fff-node`. Adds
+both to `Tools`. They search the indexes `workspace.search-fff` keeps
+(`FffIndexes`, in `@lemma/workspace/fff`). Its web half (`./web`) shows a call
+as its pattern and where it searched. Their descriptions, defaults, and output
+follow fff's own pi extension
+([pi-fff](https://github.com/dmtrKovalenko/fff/tree/main/packages/pi-fff),
+0.11.0), which fff's author tunes against agents. No config:
+`workspace.search-fff`'s `idleMinutes` sets how long an index stays open.
 
 | Tool   | Input                                                                                                     | Behavior                                                                                                                             |
 | ------ | --------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
@@ -10,31 +18,25 @@ The `grep` and `find` tools, searching with [fff](https://github.com/dmtrKovalen
 ## Behavior
 
 - **Where it searches.** `path` resolves against the session's directory
-  (`resolveToCwd` in `@lemma/tools/files`). A folder or file that exists matches
-  exactly; a top-level file also matches its namesakes below it, since fff
-  matches no glob without a `/`. A path that does not exist, and a glob, read
-  as pi-fff reads them: `main.rs` is a file of that name anywhere, `lib` a
-  folder of that name anywhere. `exclude` reads each entry that way.
-- **Outside the session's directory**, an absolute, `~/`, or `../` path
-  indexes the deepest directory of it that exists, and results show absolute
-  paths. The home directory and `/` are never indexed: fff refuses them.
+  (`resolveToCwd` in `@lemma/tools/files`). An existing folder or file matches
+  exactly. A missing path or a glob reads as pi-fff reads it: `main.rs` is a
+  file of that name anywhere, `lib` a folder of that name anywhere. `exclude`
+  reads each entry that way.
+- **Outside the session's directory**, an absolute, `~/`, or `../` path indexes
+  its deepest existing directory, and results show absolute paths. fff refuses
+  to index the home directory and `/`.
 - **Matching.** Case is ignored unless the pattern has a capital letter. A
-  pattern with regex syntax that compiles is a regex; one that matches
-  everything (`.*`) is refused. fff's agent mode reads path-like words in a
-  pattern as filters too (`schema.rs parse` greps `parse` in `schema.rs`).
-- **Ranking.** Files changed recently come first, and files git sees changed
-  are tagged. No frecency database is opened, so what you open in an editor
-  does not count. fff reads git on a thread of its own after the scan, so a
-  new index's first answers can come without git's order and tags; waiting
-  for them would need fff's synchronous refresh, which would hold the host's
-  thread for as long as git takes.
-- **Paging.** A cursor is a number, a grep's next file or a find's count
-  shown, so a call with one replays after a restart.
-- **Indexes** are one per directory searched, shared with the workspace's
-  file search: the first call waits up to 15s for a new index's scan and then
-  answers with what is indexed so far, saying so. fff's watcher keeps them
-  current until `workspace.search-fff`'s `idleMinutes` after the last search
-  of either kind; `workspace.search-fff.indexes` lists them.
+  pattern that compiles as a regex is one. One that matches everything (`.*`)
+  is refused.
+- **Ranking.** Recently changed files come first, and files git sees changed
+  are tagged. A new index's first answers can lack git's order and tags: fff
+  reads git on its own thread after the scan, and waiting for it would hold the
+  host's thread.
+- **Paging.** A cursor is a number, so a call with one replays after a restart.
+- **Indexes** are one per directory, shared with the workspace's file search
+  (`workspace.search-fff.indexes` lists them). The first call waits up to 15s
+  for a new index's scan, then answers with what is indexed so far, and says
+  so.
 - **Failures.** fff loads on the first call, so a platform without its native
   library fails the calls while the plugin keeps running. With
   `workspace.search-fff` off, nothing provides the indexes, and this plugin
@@ -60,8 +62,8 @@ The `grep` and `find` tools, searching with [fff](https://github.com/dmtrKovalen
   cursor to continue.
 - **Named `grep` and `find`.** pi-fff's `ffgrep` and `fffind` stand beside pi's
   own; Lemma has none.
-- **It repeats and runs alongside others** (`replay: "safe"`, `parallel: "safe"`),
-  as `read` does: it only reads.
+- **It repeats and runs alongside others** (`replay: "safe"`,
+  `parallel: "safe"`), as `read` does: it only reads.
 - **A cursor built as fff builds one.** fff-node does not export
   `createGrepCursor`; a grep cursor is the offset of the next file, which the
   pinned version and the tests hold to.

@@ -1,7 +1,7 @@
 import { join } from "node:path";
 import { Effect, Exit, Ref, Schedule, Schema } from "effect";
 import { CliChecks } from "@lemma/cli";
-import { Channels, HostControl, Notice, Paths, serveChannel, shellWord } from "@lemma/contracts";
+import { Channels, errorMessage, HostControl, Notice, Paths, serveChannel, shellWord } from "@lemma/contracts";
 import { definePlugin, Events } from "@lemma/core";
 import { Build, compareVersions, INSTALLER_TITLES, RELEASE_CONTRACT, ReleaseChannels, ReleaseError, UPDATABLE } from "@lemma/release";
 import type { ReleaseStatus } from "@lemma/release";
@@ -153,7 +153,7 @@ export default definePlugin({
             catch: (cause) =>
               new ReleaseError({
                 reason: "Failed",
-                message: `Lemma ${answer.version} is installed, but its restart could not be started: ${cause instanceof Error ? cause.message : String(cause)}`,
+                message: `Lemma ${answer.version} is installed, but its restart could not be started: ${errorMessage(cause)}`,
               }),
           });
           return { version: answer.version, updated: answer.updated, restarting: true };

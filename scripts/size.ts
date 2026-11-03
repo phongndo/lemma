@@ -18,8 +18,10 @@ const BUDGET: Readonly<Record<string, number>> = {
   // `Paths.profile`), so they cannot be a plugin's. And for how every channel answers (channels.ts): a stream's elements
   // sent a chunk at a time, and a request's errors made only when it fails, which no plugin could do for the others.
   // Raised from 18,500 for the frontmatter parser (frontmatter.ts), one for the plugins that read Markdown files with
-  // fields (skills, modes), which kept two that read them differently.
-  "packages/contracts": 19_000,
+  // fields (skills, modes), which kept two that read them differently. Raised from 19,000 for the locks between
+  // processes (fs.ts: `claimPidLock`, `holdFileLock`), which the host, the sessions store, credentials, and profiles
+  // each wrote their own of; the host shrank by its copy.
+  "packages/contracts": 20_500,
   // Raised from about 20,600 (2,800 lines) for profiles: a host refuses a profile never made, and keeps its port, before
   // any plugin runs. Its launch is JavaScript (start.mjs, launch.mjs: the compile cache, Effect's bundle, its Node.js
   // flags), which loads before the compile cache is on, and is counted with the rest. Raised from about 22,100 (3,000

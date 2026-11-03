@@ -6,6 +6,7 @@ import { SettingsGroups, SettingsMenu, SettingsRoute, SettingsSections } from "@
 import { Dialog, filled, identicon, LaptopIcon, MenuItem, PlusIcon, Popover } from "@lemma/look";
 import { copyAndTell } from "@lemma/web/clipboard";
 import { Client, Notify, Router, Slots, defineWebPlugin } from "@lemma/web";
+import { errorMessage } from "@lemma/contracts";
 import styles from "./web.css?inline";
 
 const SECTION = "profiles";
@@ -97,8 +98,6 @@ const shrink = async (file: File): Promise<string> => {
 };
 
 /** What a call's failure says, for a dialog to show. */
-const messageOf = (error: unknown) => (error instanceof Error ? error.message : String(error));
-
 /**
  * Switches between the profiles on the host's machine, each a separate Lemma, and manages them. With one profile there
  * is nothing to switch, and the settings button stays a gear. With more, the settings button shows the one this page
@@ -271,7 +270,7 @@ export default defineWebPlugin({
             {(here) => (
               <div class="profiles-current" role="none">
                 <Avatar avatar={here().avatar} large />
-                <span class="profiles-current-name">{profileTitle(here())}</span>
+                <span class="profiles-current-name tw:truncate">{profileTitle(here())}</span>
               </div>
             )}
           </Show>
@@ -370,7 +369,7 @@ export default defineWebPlugin({
                   <PicturePicker profile={profile()} />
                 </span>
                 <span class="setting-text">
-                  <Show when={editing()} fallback={<span class="setting-title profiles-name">{profileTitle(profile())}</span>}>
+                  <Show when={editing()} fallback={<span class="setting-title profiles-name tw:truncate">{profileTitle(profile())}</span>}>
                     <NameField profile={profile()} done={() => setEditing(false)} />
                   </Show>
                   <span class="setting-desc">{state()}</span>
@@ -468,7 +467,7 @@ export default defineWebPlugin({
           await client.channel.call(ProfileChannels.create, { name: name(), title: wanted });
           props.close();
         } catch (error) {
-          setProblem(messageOf(error));
+          setProblem(errorMessage(error));
         } finally {
           setBusy(false);
         }
@@ -534,7 +533,7 @@ export default defineWebPlugin({
           await client.channel.call(ProfileChannels.remove, { name });
         } catch (error) {
           setBusy(false);
-          return setProblem(messageOf(error));
+          return setProblem(errorMessage(error));
         }
         // The desktop app closes its windows, and forgets what their pages kept.
         await desktop?.profileRemoved?.(name).catch(() => undefined);

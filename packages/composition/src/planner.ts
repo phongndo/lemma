@@ -1,6 +1,6 @@
 import { Predicate, Result, Schema, SchemaIssue } from "effect";
 import type { PluginRow } from "@lemma/contracts";
-import { checkComposition, Diagnostic } from "@lemma/core";
+import { checkComposition, Diagnostic, firstIssue, requiredBy } from "@lemma/core";
 import type { Capability, Composition, CompositionError, Plugin, PluginEntry } from "@lemma/core";
 import { reservedKeys, resolveComposition } from "./catalog.ts";
 import type { KnownPlugin, Resolved } from "./catalog.ts";
@@ -27,8 +27,6 @@ export interface PlanInput {
   readonly rows: Readonly<Record<string, PluginRow>>;
   /** Plugins that always run, with everything they need; a problem in one stops the start. */
   readonly pinned?: readonly string[];
-  /** Bundled plugins that start off: each runs once a row turns it on (`enabled: true`). */
-  readonly optIn?: ReadonlySet<string>;
   /** Config the app supplies beneath a row's `config`, key by key (the host's `staticDir`). */
   readonly defaults?: Readonly<Record<string, Readonly<Record<string, unknown>>>>;
   /** Whether plugins from files must start unless their row says `required: false` (the host's policy). */
@@ -115,10 +113,9 @@ export function planComposition(input: PlanInput): Plan {
   const { rows } = input;
 
   const plugins: Record<string, PluginEntry> = {};
-  for (const { plugin, source } of known) {
+  for (const { plugin } of known) {
     const base = input.defaults?.[plugin.id];
-    const off = source === "bundled" && input.optIn?.has(plugin.id) === true;
-    plugins[plugin.id] = { ...(base === undefined ? {} : { config: base }), ...(off ? { enabled: false } : {}) };
+    plugins[plugin.id] = base === undefined ? {} : { config: base };
   }
   for (const { plugin, source } of known) {
     if (source === "bundled" || rows[plugin.id]?.enabled === false) continue;
@@ -291,26 +288,23 @@ function entryOf(entry: PluginEntry, row: PluginRow, base: Readonly<Record<strin
 
 const isRunning = (composition: Composition, id: string) => composition.plugins[id] !== undefined && composition.plugins[id]?.enabled !== false;
 
-/** `ids` and every plugin providing what they need, transitively: what must start for them to. No plugin provides a `reserved` key. */
-function closure(known: readonly KnownPlugin[], composition: Composition, ids: ReadonlySet<string>, reserved: ReadonlySet<string>): Set<string> {
-  const byId = new Map(known.map((entry) => [entry.plugin.id, entry.plugin]));
+/** `ids` and every running plugin providing what they need, transitively: what must start for them to. No plugin provides a `reserved` key. */
+function closure(
+  known: readonly KnownPlugin[],
+  composition: Composition,
+  ids: ReadonlySet<string>,
+  reserved: ReadonlySet<string>,
+): ReadonlyMap<string, string> {
   const providers = new Map<string, string>();
   for (const { plugin } of known) {
     if (!isRunning(composition, plugin.id)) continue;
     for (const tag of plugin.provides) if (!reserved.has(tag.key) && !providers.has(tag.key)) providers.set(tag.key, plugin.id);
   }
-  const found = new Set<string>();
-  const stack = [...ids];
-  while (stack.length) {
-    const plugin = byId.get(stack.pop()!);
-    if (plugin === undefined || found.has(plugin.id)) continue;
-    found.add(plugin.id);
-    for (const tag of plugin.requires) {
-      const provider = providers.get(tag.key);
-      if (provider !== undefined) stack.push(provider);
-    }
-  }
-  return found;
+  return requiredBy(
+    known.map(({ plugin }) => plugin),
+    providers,
+    ids,
+  );
 }
 
 /** Which plugin to leave out for `error`; undefined when every candidate must run. A replacement goes before a bundled plugin. */
@@ -348,9 +342,8 @@ function describe(
     case "InvalidConfig": {
       const plugin = running.find((candidate) => candidate.id === error.plugins[0]);
       const decoded = plugin?.config === undefined ? undefined : Schema.decodeUnknownResult(plugin.config)(configs[plugin.id] ?? {});
-      const issue =
-        decoded !== undefined && Result.isFailure(decoded) ? SchemaIssue.makeFormatterStandardSchemaV1()(decoded.failure.issue).issues[0] : undefined;
-      const at = issue?.path?.filter((segment): segment is string | number => typeof segment === "string" || typeof segment === "number") ?? [];
+      const issue = decoded !== undefined && Result.isFailure(decoded) ? firstIssue(decoded.failure.issue) : undefined;
+      const at = issue?.path ?? [];
       return `its config is invalid${at.length ? ` at ${at.join(".")}` : ""}: ${issue?.message ?? error.message}`;
     }
     case "MissingCapability": {

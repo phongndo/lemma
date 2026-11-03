@@ -150,6 +150,27 @@ export const stepFor = (key: string, index: number, length: number): number | un
 };
 
 /**
+ * Moves focus with ↓ or ↑ (`stepFor`) among the rows in `container` that match `selector`, and returns the row it
+ * focused. It moves from the row that holds focus, or else from `from` (the row selected), or else from nothing, to the
+ * first or the last. It returns undefined for any other key, or when no row matches, and then moves nothing. The caller
+ * handles the event (`preventDefault`) when a row is returned. `focus` is how the row takes focus
+ * (`{ preventScroll: true }`).
+ */
+export const focusStep = (
+  container: ParentNode,
+  selector: string,
+  key: string,
+  options: { readonly from?: Element | null; readonly focus?: FocusOptions } = {},
+): HTMLElement | undefined => {
+  const rows = [...container.querySelectorAll<HTMLElement>(selector)];
+  const start = document.activeElement?.closest(selector) ?? options.from ?? null;
+  const step = stepFor(key, start === null ? -1 : rows.indexOf(start as HTMLElement), rows.length);
+  const next = step === undefined ? undefined : rows[step];
+  next?.focus(options.focus);
+  return next;
+};
+
+/**
  * Where a key moves the choice in a radio group of `length` options, as ARIA's pattern has it: either arrow along
  * either axis, wrapping at the ends, and Home and End to the first and last. Undefined for any other key. The group is
  * one Tab stop (the checked option's `tabindex` 0, the rest -1), and moving checks the option moved to.

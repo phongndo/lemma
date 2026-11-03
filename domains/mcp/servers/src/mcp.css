@@ -74,12 +74,6 @@
   min-width: 0;
 }
 
-.mcp-tool-description {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
 .mcp-add,
 .mcp-form {
   display: flex;

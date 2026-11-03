@@ -1,13 +1,10 @@
-import { displayPath } from "@lemma/web/format";
+import { fileSummary } from "@lemma/threads/summary";
 import type { ToolView } from "@lemma/threads";
 
 /** How the web app shows a `write` call: the file written. */
 export const writeView: ToolView = {
   icon: "pencil",
-  summary: (args, context) => {
-    const path = typeof args?.path === "string" && args.path !== "" ? displayPath(args.path, context.cwd, context.home) : undefined;
-    return path === undefined ? {} : { primary: path, file: { path, kind: "file" } };
-  },
+  summary: fileSummary,
   streaming: "path",
   action: ["changed", "file", "files"],
 };

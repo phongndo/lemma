@@ -1,4 +1,4 @@
-import { HostError } from "@lemma/contracts";
+import { errorMessage, HostError } from "@lemma/contracts";
 import type { Diagnostic } from "@lemma/core";
 
 interface Tagged {
@@ -32,7 +32,7 @@ const formatDiagnostic = (diagnostic: Diagnostic): string =>
  */
 export const toHostError = (error: unknown): HostError => {
   if (error instanceof HostError) return error;
-  if (!isTagged(error)) return new HostError({ code: "Unknown", message: error instanceof Error ? error.message : String(error) });
+  if (!isTagged(error)) return new HostError({ code: "Unknown", message: errorMessage(error) });
   const code = text(error.reason) ?? error._tag;
   const named = new Set(error.diagnostics?.map((diagnostic) => diagnostic.pluginId));
   const subject =

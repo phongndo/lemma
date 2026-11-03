@@ -5,9 +5,10 @@ import { Data, Effect, Schema, Semaphore } from "effect";
 import type { Scope } from "effect";
 import { readDiscovery } from "@lemma/contracts/discovery";
 import type { Discovery } from "@lemma/contracts/discovery";
-import { errorCode, readJsonFile, writeFileAtomic } from "@lemma/contracts/fs";
+import { errorCode, holdFileLock, readJsonFile, writeFileAtomic } from "@lemma/contracts/fs";
 import { DEFAULT_PROFILE, isDefaultProfile, profileFilePath, profileHome, profileNameProblem, profilesDir, readProfileFile } from "@lemma/contracts/profiles";
 import type { ProfileFile } from "@lemma/contracts/profiles";
+import { errorMessage } from "@lemma/contracts";
 import { MAX_PICTURE_BYTES, titleProblem } from "./profiles.ts";
 import type { AvatarChange, ProfileAvatar } from "./profiles.ts";
 
@@ -106,8 +107,7 @@ export class ProfileError extends Data.TaggedError("ProfileError")<{
   readonly message: string;
 }> {}
 
-const failedWrite = (what: string, cause: unknown) =>
-  new ProfileError({ reason: "Write", message: `${what}: ${cause instanceof Error ? cause.message : String(cause)}` });
+const failedWrite = (what: string, cause: unknown) => new ProfileError({ reason: "Write", message: `${what}: ${errorMessage(cause)}` });
 
 /** Why `name` names no profile that can be made or deleted under `root`: none, or the default's, which is `root` itself. */
 const ownNameProblem = (root: string, name: string) => (isDefaultProfile(name) ? `"${name}" is the default profile, ${root} itself` : profileNameProblem(name));
@@ -115,42 +115,12 @@ const ownNameProblem = (root: string, name: string) => (isDefaultProfile(name) ?
 /** One profile made at a time in this process: another being made picks its port once this one's `profile.json` keeps its own. */
 const making = Semaphore.makeUnsafe(1);
 
-/** How old a lock another process left (killed while it made a profile) is before it is taken back. */
-const STALE_LOCK_MS = 60_000;
-
 /**
- * And one at a time across processes (the CLI, another profile's host): `<root>/profiles/.making`, a folder, as mkdir is
- * atomic, held while one is made. No profile is named with a dot, so none is it.
+ * And one at a time across processes (the CLI, another profile's host): `<root>/profiles/.making.lock`, held while one
+ * is made (`holdFileLock`). No profile is named with a dot, so none is it.
  */
-const makingLock = (root: string): Effect.Effect<void, ProfileError, Scope.Scope> => {
-  const lock = join(profilesDir(root), ".making");
-  const take = Effect.gen(function* () {
-    yield* Effect.tryPromise({
-      try: () => mkdir(profilesDir(root), { recursive: true, mode: 0o700 }),
-      catch: (cause) => failedWrite(`Cannot make ${profilesDir(root)}`, cause),
-    });
-    while (
-      !(yield* Effect.tryPromise({
-        try: () =>
-          mkdir(lock).then(
-            () => true,
-            (error: unknown) => (errorCode(error) === "EEXIST" ? false : Promise.reject(error)),
-          ),
-        catch: (cause) => failedWrite(`Cannot make ${lock}`, cause),
-      }))
-    ) {
-      const age = yield* Effect.promise(() =>
-        stat(lock).then(
-          (found) => Date.now() - found.mtimeMs,
-          () => 0,
-        ),
-      );
-      if (age > STALE_LOCK_MS) yield* Effect.promise(() => rm(lock, { recursive: true, force: true }));
-      else yield* Effect.sleep("25 millis");
-    }
-  });
-  return Effect.asVoid(Effect.acquireRelease(take, () => Effect.promise(() => rm(lock, { recursive: true, force: true }))));
-};
+const makingLock = (root: string): Effect.Effect<void, ProfileError, Scope.Scope> =>
+  holdFileLock(join(profilesDir(root), ".making.lock")).pipe(Effect.mapError(({ message }) => new ProfileError({ reason: "Write", message })));
 
 /**
  * Makes the profile `name` under `root`: its home, empty but for a `profile.json` naming a port of its own, from

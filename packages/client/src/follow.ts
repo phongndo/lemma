@@ -1,7 +1,7 @@
 import { HostError } from "@lemma/contracts";
 import type { ChannelDeclaration } from "@lemma/contracts";
 import { safely } from "./host.ts";
-import type { Host } from "./host.ts";
+import type { Host, StreamEnd } from "./host.ts";
 
 /**
  * What `follow` uses of a connection: its status, its `channels-changed`
@@ -9,8 +9,6 @@ import type { Host } from "./host.ts";
  * CLI's); so is a test's fake.
  */
 export type Followable = Pick<Host, "status" | "onStatus" | "onEvent"> & { readonly channel: Pick<Host["channel"], "open"> };
-
-type StreamEnd = (error?: HostError | Error) => void;
 
 /**
  * Keeps a channel stream open until the returned close: opened now if

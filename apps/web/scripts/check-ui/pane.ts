@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { startHost } from "./hosts.ts";
 import { boot, showView } from "./shared.ts";
+import type { Contracts } from "./shared.ts";
 
 // 7: the thread's inspection pane: the trajectory, and who shaped a request, beside the chat; its tabs, width, and address.
 export const pane = async (): Promise<string> => {
@@ -76,8 +77,8 @@ export const pane = async (): Promise<string> => {
   // In a browser, which keeps ⌘T and ⌘L from its pages, they stay the browser's: they are the desktop app's alone.
   const boundKeys = (id: string) =>
     page.evaluate(async (id) => {
-      const { Actions } = (await import("/src/ui/api.ts" as string)).api.contracts;
-      const action = (window as any).lemma.slots().get(Actions, id);
+      const { Actions } = (await import("/src/ui/api.ts" as string)).api.contracts as Contracts;
+      const action = window.lemma.slots().get(Actions, id);
       return action === undefined ? "no action" : (action.keys ?? "no keys");
     }, id);
   assert.deepEqual(
@@ -162,18 +163,18 @@ export const pane = async (): Promise<string> => {
   await page.waitForFunction(() => document.querySelector(".thread-chat")!.getBoundingClientRect().width > 0);
   // An address naming a view shows the thread's tab of it, rather than another, then names the thread alone.
   const threadPath = await page.evaluate(async () => {
-    const { Router } = (await import("/src/ui/api.ts" as string)).api.contracts;
+    const { Router } = (await import("/src/ui/api.ts" as string)).api.contracts as Contracts;
     const path = location.pathname;
-    (await (window as any).lemma.service(Router)).navigate(`${path}/trajectory`);
+    (await window.lemma.service(Router))!.navigate(`${path}/trajectory`);
     return path;
   });
   await page.waitForFunction((path) => location.pathname === path, threadPath);
   assert.deepEqual(await titles(), ["Trace"], "an address naming a view opened another tab of it");
   // The pane is the thread's: another shows its own, and this one's is as it was on coming back.
   const other: string = await page.evaluate(async (current) => {
-    const { Threads } = (await import("/src/ui/api.ts" as string)).api.contracts;
-    const threads = await (window as any).lemma.service(Threads);
-    const next = threads.list().find((session: { id: string; lastSeq: number }) => !current.includes(session.id) && session.lastSeq > 0).id;
+    const { Threads } = (await import("/src/ui/api.ts" as string)).api.contracts as Contracts;
+    const threads = (await window.lemma.service(Threads))!;
+    const next = threads.list().find((session) => !current.includes(session.id) && session.lastSeq > 0)!.id;
     await threads.select(next);
     return next;
   }, thread);

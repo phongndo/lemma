@@ -1,4 +1,4 @@
-import { stepFor } from "@lemma/web/keys";
+import { focusStep } from "@lemma/web/keys";
 
 /**
  * The keys of a panel's table whose rows select, so the keyboard works it as the pointer does: ↑ and ↓ select the row
@@ -24,13 +24,9 @@ export const rowKeys =
       clear();
       table.focus();
     } else {
-      const rows = [...table.querySelectorAll<HTMLElement>("tbody tr[data-key]")];
-      const from = focused ?? selected;
-      const step = stepFor(event.key, from === null ? -1 : rows.indexOf(from), rows.length);
-      const next = step === undefined ? undefined : rows[step];
+      const next = focusStep(table, "tbody tr[data-key]", event.key, { from: selected });
       if (next === undefined) return;
       select(next.dataset.key!);
-      next.focus();
       next.scrollIntoView({ block: "nearest" });
     }
     event.preventDefault();

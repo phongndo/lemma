@@ -11,7 +11,7 @@ import { EventBus } from "./events.ts";
 import type { ObserverHandle } from "./events.ts";
 import { planChange } from "./change.ts";
 import type { Member } from "./change.ts";
-import { applicationProblems } from "./graph.ts";
+import { applicationProblems, requiredBy } from "./graph.ts";
 import { attributes, HookRegistry } from "./hooks.ts";
 import type { OwnerHandle } from "./hooks.ts";
 import { makeOwnServices } from "./own.ts";
@@ -253,24 +253,12 @@ function assemble<E>(
           }
           instance.own.begin(Context.makeUnsafe<never>(new Map([...inputs, [Scope.Scope.key, instance.scope]])));
           const limit = Duration.fromInputUnsafe(instance.plugin.deadlines?.activate ?? defaults.activate);
-          const build = Effect.suspend(() => Layer.buildWithScope(instance.plugin.layer(config), instance.scope)).pipe(
-            Effect.updateContext((caller: Context.Context<never>) => {
-              // The caller's runtime settings and parent span come along; services only from the declared inputs.
-              const provided = new Map([...caller.mapUnsafe].filter(([key]) => runtimeSettings.has(key) || key === Tracer.ParentSpan.key));
-              for (const [key, value] of inputs) provided.set(key, value);
-              return Context.makeUnsafe<unknown>(provided);
-            }),
-            // Building records the memo map it used in the output; that is not an export.
-            Effect.map(Context.omit(Layer.CurrentMemoMap)),
-            Effect.flatMap((output) => {
-              const declared = new Set(instance.plugin.provides.map((tag) => tag.key));
-              const missing = [...declared].filter((key) => !output.mapUnsafe.has(key));
-              const undeclared = [...output.mapUnsafe.keys()].filter((key) => !declared.has(key));
-              if (missing.length || undeclared.length) {
-                return Effect.fail(new CapabilityMismatch({ pluginId: instance.id, missing, undeclared }));
-              }
-              return Effect.succeed(output);
-            }),
+          const build = buildDeclared(() => instance.plugin.layer(config), instance.scope, inputs, instance.plugin.provides).pipe(
+            Effect.flatMap(({ output, missing, undeclared }) =>
+              missing.length || undeclared.length
+                ? Effect.fail(new CapabilityMismatch({ pluginId: instance.id, missing, undeclared }))
+                : Effect.succeed(output),
+            ),
             disconnect,
             Effect.timeoutOrElse({ duration: limit, orElse: () => Effect.fail(new DeadlineExceeded({ pluginId: instance.id, phase: "activate", limit })) }),
             Effect.catchCause((cause) =>
@@ -385,7 +373,6 @@ function assemble<E>(
               if (wasActive) dependent.haltedBy = instance.id;
             }
             yield* dispose(instance, Exit.fail(fault), "failed");
-            instance.state = "failed";
           }),
         ),
       );
@@ -415,7 +402,7 @@ function assemble<E>(
             const planned = planChange(members, { instances, order }, force, providedKeys);
             if (Result.isFailure(planned)) return yield* new PlanError({ errors: planned.failure });
             const { ordered, configs, providers: nextProviders, raw, changed, stops } = planned.success;
-            const required = partial === undefined ? undefined : requiredClosure(ordered, nextProviders, partial.required);
+            const required = partial === undefined ? undefined : requiredBy(ordered, nextProviders, partial.required);
             const nextIds = ordered.map((plugin) => plugin.id);
             const previousOrder = order;
             let interrupted = 0;
@@ -683,44 +670,46 @@ function assemble<E>(
  * that fails, or whose services differ from what it declares, closes `scope`.
  */
 function provision<E>(provide: ApplicationServices<readonly Capability[], E>, builtins: Context.Context<never>, scope: Scope.Closeable) {
-  return Layer.buildWithScope(provide.layer, scope).pipe(
-    Effect.updateContext((caller: Context.Context<never>) => {
-      const inputs = new Map([...caller.mapUnsafe].filter(([key]) => runtimeSettings.has(key) || key === Tracer.ParentSpan.key));
-      for (const [key, value] of builtins.mapUnsafe) inputs.set(key, value);
-      return Context.makeUnsafe<unknown>(inputs);
-    }),
-    // Building records the memo map it used in the output; that is not a service.
-    Effect.map(Context.omit(Layer.CurrentMemoMap)),
-    Effect.flatMap((output) => {
-      const declared = new Set(provide.provides.map((tag) => tag.key));
-      const missing = [...declared].filter((key) => !output.mapUnsafe.has(key));
-      const undeclared = [...output.mapUnsafe.keys()].filter((key) => !declared.has(key));
+  return buildDeclared(() => provide.layer, scope, builtins.mapUnsafe, provide.provides).pipe(
+    Effect.flatMap(({ output, missing, undeclared }) => {
       if (missing.length || undeclared.length) {
         const detail = `missing: ${missing.join(", ") || "none"}; undeclared: ${undeclared.join(", ") || "none"}`;
         return Effect.die(new Error(`The application's services do not match provide.provides (${detail})`));
       }
-      return Effect.succeed(output as Context.Context<never>);
+      return Effect.succeed(output);
     }),
     Effect.onError((cause) => Scope.close(scope, Exit.failCause(cause))),
     Effect.withSpan("core.provide"),
   );
 }
 
-/** `ids` and, transitively, the providers of everything they require: what must activate for them to. */
-function requiredClosure(ordered: readonly Plugin[], providers: ReadonlyMap<string, string>, ids: ReadonlySet<string>): ReadonlySet<string> {
-  const byId = new Map(ordered.map((plugin) => [plugin.id, plugin]));
-  const found = new Set<string>();
-  const stack = [...ids];
-  while (stack.length) {
-    const plugin = byId.get(stack.pop()!);
-    if (plugin === undefined || found.has(plugin.id)) continue;
-    found.add(plugin.id);
-    for (const tag of plugin.requires) {
-      const provider = providers.get(tag.key);
-      if (provider !== undefined) stack.push(provider);
-    }
-  }
-  return found;
+/**
+ * Build `layer` in `scope` from `inputs` and the caller's runtime settings and
+ * parent span, nothing else of the caller's, and compare what it built with
+ * `provides`: the keys it lacks (`missing`) and the keys it has besides
+ * (`undeclared`), both empty when it matches.
+ */
+function buildDeclared<E>(
+  layer: () => Layer.Layer<never, E, any>,
+  scope: Scope.Scope,
+  inputs: ReadonlyMap<string, unknown>,
+  provides: readonly Capability[],
+): Effect.Effect<{ readonly output: Context.Context<never>; readonly missing: readonly string[]; readonly undeclared: readonly string[] }, E> {
+  return Effect.suspend(() => Layer.buildWithScope(layer(), scope)).pipe(
+    Effect.updateContext((caller: Context.Context<never>) => {
+      const provided = new Map([...caller.mapUnsafe].filter(([key]) => runtimeSettings.has(key) || key === Tracer.ParentSpan.key));
+      for (const [key, value] of inputs) provided.set(key, value);
+      return Context.makeUnsafe<unknown>(provided);
+    }),
+    // Building records the memo map it used in the output; that is not a service.
+    Effect.map(Context.omit(Layer.CurrentMemoMap)),
+    Effect.map((output) => {
+      const declared = new Set(provides.map((tag) => tag.key));
+      const missing = [...declared].filter((key) => !output.mapUnsafe.has(key));
+      const undeclared = [...output.mapUnsafe.keys()].filter((key) => !declared.has(key));
+      return { output: output as Context.Context<never>, missing, undeclared };
+    }),
+  );
 }
 
 function closedPlan(): PlanError {

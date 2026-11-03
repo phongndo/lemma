@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { readdir, readFile, stat } from "node:fs/promises";
 import { join } from "node:path";
 import { Predicate } from "effect";
@@ -137,4 +138,22 @@ export async function entriesOf(dir: string): Promise<Entry[]> {
     }
   }
   return entries;
+}
+
+/**
+ * A package's version: a hash of the mtimes of the files under `dir` that `include` takes by name, but its
+ * dependencies' (`node_modules`) and hidden ones, so an edit to any of them is a new version.
+ */
+export async function folderVersion(dir: string, include: (name: string) => boolean): Promise<string> {
+  const files: string[] = [];
+  const walk = async (at: string): Promise<void> => {
+    for (const entry of await readdir(at, { withFileTypes: true }).catch(() => [])) {
+      if (entry.name === "node_modules" || entry.name.startsWith(".")) continue;
+      if (entry.isDirectory()) await walk(join(at, entry.name));
+      else if (include(entry.name)) files.push(join(at, entry.name));
+    }
+  };
+  await walk(dir);
+  const stamps = await Promise.all(files.sort().map(async (path) => `${path}:${(await stat(path).catch(() => undefined))?.mtimeMs ?? 0}\n`));
+  return createHash("sha256").update(stamps.join("")).digest("hex").slice(0, 16);
 }

@@ -5,7 +5,7 @@ import { basename, dirname, isAbsolute, join, resolve, sep } from "node:path";
 import { Effect, Schema } from "effect";
 import type { Context } from "effect";
 import { definePlugin, Registries } from "@lemma/core";
-import { Channels, Paths } from "@lemma/contracts";
+import { Channels, errorMessage, Paths } from "@lemma/contracts";
 import { serveFiles, serveWorkspace, Workspace, WORKSPACE_CONTRACT, WorkspaceError } from "@lemma/workspace";
 import type { DirectoryEntry, DirectoryListing, GitBranch, GitStatus, Place, Worktree, WorkspaceStatus } from "@lemma/workspace";
 import { expandHome, isInside, kindOf, readJsonFile, writeFileAtomic } from "@lemma/contracts/fs";
@@ -323,7 +323,7 @@ export const makeWorkspace = (options: WorkspaceOptions): Context.Service.Shape<
       }
       yield* Effect.tryPromise({
         try: () => mkdir(dir, { recursive: true }),
-        catch: (cause) => new WorkspaceError({ path: dir, reason: "Failed", message: cause instanceof Error ? cause.message : String(cause), cause }),
+        catch: (cause) => new WorkspaceError({ path: dir, reason: "Failed", message: errorMessage(cause), cause }),
       });
       return yield* status(dir);
     });
@@ -435,7 +435,7 @@ export const makeWorkspace = (options: WorkspaceOptions): Context.Service.Shape<
       }
       yield* Effect.tryPromise({
         try: () => mkdir(dirname(target), { recursive: true }),
-        catch: (cause) => new WorkspaceError({ path: target, reason: "Failed", message: cause instanceof Error ? cause.message : String(cause), cause }),
+        catch: (cause) => new WorkspaceError({ path: target, reason: "Failed", message: errorMessage(cause), cause }),
       });
       // Started from a remote branch, it would track it, and push to it: it pushes as itself instead.
       yield* run(

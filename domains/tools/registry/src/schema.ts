@@ -1,10 +1,8 @@
-import { JsonSchema as EffectJsonSchema, SchemaRepresentation } from "effect";
+import { JsonSchema as EffectJsonSchema, Predicate, SchemaRepresentation } from "effect";
 import type { Schema } from "effect";
 import type { JsonSchema } from "@lemma/llm";
 
 type Json = Record<string, unknown>;
-
-const isObject = (value: unknown): value is Json => typeof value === "object" && value !== null && !Array.isArray(value);
 
 /** Keywords that mean nothing to a model provider, or that some providers reject. */
 const dropped = new Set(["$schema", "$id", "$defs", "definitions", "$comment", "title"]);
@@ -60,7 +58,7 @@ const withoutUndefined = (node: Representation): Representation => {
 /** Effect's JSON form of a number admits the strings `"NaN"`, `"Infinity"`, `"-Infinity"`; a decoded tool input does not. */
 const isNumberEncoding = (node: Json): boolean => {
   const anyOf = node["anyOf"];
-  if (!Array.isArray(anyOf) || anyOf.length !== 2 || !isObject(anyOf[0]) || !isObject(anyOf[1])) return false;
+  if (!Array.isArray(anyOf) || anyOf.length !== 2 || !Predicate.isObject(anyOf[0]) || !Predicate.isObject(anyOf[1])) return false;
   const [number, special] = anyOf;
   const names = special["enum"];
   return (
@@ -89,13 +87,13 @@ function jsonSchemaOf(schema: Schema.Top): Json {
 
   const clean = (node: unknown, seen: ReadonlySet<string>): unknown => {
     if (Array.isArray(node)) return node.map((item) => clean(item, seen));
-    if (!isObject(node)) return node;
+    if (!Predicate.isObject(node)) return node;
     const ref = node["$ref"];
     if (typeof ref === "string") {
       const { $ref: _, ...siblings } = node;
       const name = decodeURIComponent(ref.replace(/^#\/(\$defs|definitions)\//, ""));
       const target = defs[name];
-      if (!isObject(target) || seen.has(name)) return clean(siblings, seen);
+      if (!Predicate.isObject(target) || seen.has(name)) return clean(siblings, seen);
       return clean({ ...target, ...siblings }, new Set([...seen, name]));
     }
     if (isNumberEncoding(node)) {
@@ -105,7 +103,7 @@ function jsonSchemaOf(schema: Schema.Top): Json {
     const out: Json = {};
     for (const [key, value] of Object.entries(node)) {
       if (dropped.has(key)) continue;
-      if (schemaMaps.has(key) && isObject(value)) {
+      if (schemaMaps.has(key) && Predicate.isObject(value)) {
         out[key] = Object.fromEntries(Object.entries(value).map(([name, child]) => [name, clean(child, seen)]));
       } else if (schemaValues.has(key)) {
         out[key] = clean(value, seen);

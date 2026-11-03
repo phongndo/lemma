@@ -1,10 +1,11 @@
 import { For, Show, createMemo, createSignal } from "solid-js";
 import type { RouterEvent, RouteVerdict } from "@lemma/router";
 import { clockTime } from "@lemma/web/format";
-import { PLUGIN_PANEL, clearsOnEscape, rowKeys } from "@lemma/devtools/web";
+import { Chips, clearsOnEscape, FilterField, PLUGIN_PANEL, SelectableTable } from "@lemma/devtools/web";
 import { Pages } from "@lemma/web";
 import type { RouterService, SlotsService } from "@lemma/web";
 import type { DevtoolsService } from "@lemma/devtools/web";
+import { Details, Section } from "./parts.tsx";
 
 /* The router's panels' views (see `routePanels`), loaded the first time the devtools draw one of their own panels. */
 
@@ -78,21 +79,19 @@ export function Routes(props: { router: RouterService; slots: SlotsService; devt
   return (
     <div class="dt-scope">
       <div class="dt-toolbar" role="toolbar" aria-label="Routes toolbar">
-        <label class="dt-filter devtools-routes-address">
+        <FilterField
+          class="devtools-routes-address"
+          label="Address to explain"
+          placeholder={router.location().href}
+          value={address() ?? router.location().href}
+          onInput={setAddress}
+          onKeyDown={clearsOnEscape(
+            () => address() ?? "",
+            () => setAddress(undefined),
+          )}
+        >
           <span>Address</span>
-          <input
-            aria-label="Address to explain"
-            placeholder={router.location().href}
-            value={address() ?? router.location().href}
-            spellcheck={false}
-            autocomplete="off"
-            onInput={(event) => setAddress(event.currentTarget.value)}
-            onKeyDown={clearsOnEscape(
-              () => address() ?? "",
-              () => setAddress(undefined),
-            )}
-          />
-        </label>
+        </FilterField>
         <span class="dt-sep" />
         <span>
           <span class={explained().status === "matched" ? "dt-ok" : "dt-warn"}>{explained().status}</span>
@@ -108,86 +107,68 @@ export function Routes(props: { router: RouterService; slots: SlotsService; devt
       <For each={snapshot().issues}>{(issue) => <div class="dt-banner">{issue.message}</div>}</For>
       <div class="dt-split">
         <div class="dt-main" tabindex="-1">
-          <table class="dt-table" aria-label="Routes" role="grid" tabindex="0" onKeyDown={rowKeys(setSelected)}>
-            <thead>
-              <tr>
-                <th>Path</th>
-                <th>Route</th>
-                <th>Verdict</th>
-                <th>Shown by</th>
-                <th>Plugin</th>
-              </tr>
-            </thead>
-            <tbody>
-              <For each={snapshot().routes}>
-                {(route) => {
-                  const verdict = () => verdictOf(route.id);
-                  return (
-                    <tr
-                      data-row
-                      data-key={route.id}
-                      data-selected={current()?.id === route.id}
-                      aria-selected={current()?.id === route.id}
-                      tabindex="-1"
-                      onClick={() => setSelected(route.id)}
-                    >
-                      <td class="dt-code">{route.path}</td>
-                      <td>{route.id}</td>
-                      <td class={VERDICT_CLASS[verdict()?.outcome ?? "no-match"]}>{verdict()?.outcome ?? ""}</td>
-                      <td class="dt-code">{route.entries[0] ?? <span class="dt-warn">nothing: its plugin is off</span>}</td>
-                      <td>
-                        <Show when={route.entries[0]}>{(entry) => <PluginLink devtools={devtools} id={owner(entry())} />}</Show>
-                      </td>
-                    </tr>
-                  );
-                }}
-              </For>
-            </tbody>
-          </table>
+          <SelectableTable
+            label="Routes"
+            columns={[{ title: "Path" }, { title: "Route" }, { title: "Verdict" }, { title: "Shown by" }, { title: "Plugin" }]}
+            rows={snapshot().routes}
+            key={(route) => route.id}
+            selected={current()?.id}
+            onSelect={setSelected}
+          >
+            {(route) => (
+              <>
+                <td class="dt-code">{route.path}</td>
+                <td>{route.id}</td>
+                <td class={VERDICT_CLASS[verdictOf(route.id)?.outcome ?? "no-match"]}>{verdictOf(route.id)?.outcome ?? ""}</td>
+                <td class="dt-code">{route.entries[0] ?? <span class="dt-warn">nothing: its plugin is off</span>}</td>
+                <td>
+                  <Show when={route.entries[0]}>{(entry) => <PluginLink devtools={devtools} id={owner(entry())} />}</Show>
+                </td>
+              </>
+            )}
+          </SelectableTable>
         </div>
         <Show when={current()} keyed>
           {(route) => (
-            <aside class="dt-details dt-side" aria-label="Route details">
-              <div class="dt-details-title">
-                <strong>{route.id}</strong>
-                <span class="dt-muted dt-code">{route.path}</span>
-              </div>
-              <div class="dt-side-body">
-                <dl class="dt-facts">
-                  <dt>Verdict</dt>
-                  <dd class={VERDICT_CLASS[verdictOf(route.id)?.outcome ?? "no-match"]}>{verdictOf(route.id)?.outcome}</dd>
-                  <dt>Why</dt>
-                  <dd>{verdictOf(route.id)?.detail}</dd>
-                  <dt>For</dt>
-                  <dd>{explained().href}</dd>
-                  <dt>Known</dt>
-                  <dd>{route.known ? "yes: it matches while nothing shows it" : "no"}</dd>
-                </dl>
-                <section class="dt-section">
-                  <h4>
-                    <span>Registered</span>
-                    <span class="dt-section-aside">first shows; the rest are overridden</span>
-                  </h4>
-                  <Show when={route.entries.length > 0} fallback={<p class="dt-muted">Nothing: it shows as unavailable.</p>}>
-                    <table class="dt-table">
-                      <tbody>
-                        <For each={route.entries}>
-                          {(entry, index) => (
-                            <tr data-row>
-                              <td class="dt-code">{entry}</td>
-                              <td>
-                                <PluginLink devtools={devtools} id={owner(entry)} />
-                              </td>
-                              <td class="dt-muted">{index() === 0 ? "shown" : "overridden"}</td>
-                            </tr>
-                          )}
-                        </For>
-                      </tbody>
-                    </table>
-                  </Show>
-                </section>
-              </div>
-            </aside>
+            <Details
+              label="Route details"
+              title={
+                <>
+                  <strong>{route.id}</strong>
+                  <span class="dt-muted dt-code">{route.path}</span>
+                </>
+              }
+            >
+              <dl class="dt-facts">
+                <dt>Verdict</dt>
+                <dd class={VERDICT_CLASS[verdictOf(route.id)?.outcome ?? "no-match"]}>{verdictOf(route.id)?.outcome}</dd>
+                <dt>Why</dt>
+                <dd>{verdictOf(route.id)?.detail}</dd>
+                <dt>For</dt>
+                <dd>{explained().href}</dd>
+                <dt>Known</dt>
+                <dd>{route.known ? "yes: it matches while nothing shows it" : "no"}</dd>
+              </dl>
+              <Section title="Registered" aside="first shows; the rest are overridden">
+                <Show when={route.entries.length > 0} fallback={<p class="dt-muted">Nothing: it shows as unavailable.</p>}>
+                  <table class="dt-table">
+                    <tbody>
+                      <For each={route.entries}>
+                        {(entry, index) => (
+                          <tr data-row>
+                            <td class="dt-code">{entry}</td>
+                            <td>
+                              <PluginLink devtools={devtools} id={owner(entry)} />
+                            </td>
+                            <td class="dt-muted">{index() === 0 ? "shown" : "overridden"}</td>
+                          </tr>
+                        )}
+                      </For>
+                    </tbody>
+                  </table>
+                </Show>
+              </Section>
+            </Details>
           )}
         </Show>
       </div>
@@ -220,7 +201,7 @@ export function Navigation(props: { router: RouterService }) {
   const { router } = props;
   const [query, setQuery] = createSignal("");
   const [kind, setKind] = createSignal<(typeof KINDS)[number]["id"]>("all");
-  const [selected, setSelected] = createSignal<number>();
+  const [selected, setSelected] = createSignal<string>();
   const events = createMemo(() => {
     const words = query().trim().toLowerCase();
     return [...router.journal()]
@@ -228,7 +209,7 @@ export function Navigation(props: { router: RouterService }) {
       .filter((event) => kind() === "all" || event.kind === kind())
       .filter((event) => words === "" || `${event.kind} ${addressOf(event)} ${detailOf(event)}`.toLowerCase().includes(words));
   });
-  const chosen = () => router.journal().find((event) => event.seq === selected());
+  const chosen = () => router.journal().find((event) => String(event.seq) === selected());
   const here = () => router.location();
   /** What is kept with this entry; a value set back to nothing (`undefined`) is not kept. */
   const state = () => {
@@ -238,122 +219,76 @@ export function Navigation(props: { router: RouterService }) {
   return (
     <div class="dt-scope">
       <div class="dt-toolbar" role="toolbar" aria-label="Navigation toolbar">
-        <label class="dt-filter">
-          <input
-            aria-label="Filter the journal"
-            placeholder="Filter"
-            value={query()}
-            onInput={(event) => setQuery(event.currentTarget.value)}
-            onKeyDown={clearsOnEscape(query, () => setQuery(""))}
-          />
-        </label>
+        <FilterField label="Filter the journal" placeholder="Filter" value={query()} onInput={setQuery} />
         <span class="dt-sep" />
-        <For each={KINDS}>
-          {(option) => (
-            <button class="dt-chip" aria-pressed={kind() === option.id} onClick={() => setKind(option.id)}>
-              {option.label}
-            </button>
-          )}
-        </For>
+        <Chips options={KINDS} value={kind()} onChange={setKind} />
       </div>
       <div class="dt-split">
         <div class="dt-main" tabindex="-1">
-          <table
-            class="dt-table"
-            aria-label="Router journal"
-            role="grid"
-            tabindex="0"
-            onKeyDown={rowKeys(
-              (key) => setSelected(Number(key)),
-              () => setSelected(undefined),
-            )}
-          >
-            <thead>
-              <tr>
-                <th class="devtools-journal-time">Time</th>
-                <th class="devtools-journal-at dt-num">At</th>
-                <th class="devtools-journal-event">Event</th>
-                <th>Address</th>
-                <th>Details</th>
-              </tr>
-            </thead>
-            <tbody>
-              <For
-                each={events()}
-                fallback={
-                  <tr>
-                    <td colSpan={5} class="dt-muted">
-                      Nothing yet
-                    </td>
-                  </tr>
-                }
-              >
-                {(event) => (
-                  <tr
-                    data-row
-                    data-key={event.seq}
-                    data-selected={selected() === event.seq}
-                    aria-selected={selected() === event.seq}
-                    tabindex="-1"
-                    onClick={() => setSelected(selected() === event.seq ? undefined : event.seq)}
-                  >
-                    <td class="dt-code dt-muted">{clockTime(event.at)}</td>
-                    <td class="dt-num dt-muted">{event.index}</td>
-                    <td class={KIND_CLASS[event.kind]}>{event.kind}</td>
-                    <td class="dt-code">{addressOf(event)}</td>
-                    <td>{detailOf(event)}</td>
-                  </tr>
-                )}
-              </For>
-            </tbody>
-          </table>
-        </div>
-        <aside class="dt-details dt-side" aria-label="Navigation details">
-          <Show
-            when={chosen()}
-            keyed
-            fallback={
-              <>
-                <div class="dt-details-title">
-                  <strong>This history entry</strong>
-                </div>
-                <div class="dt-side-body">
-                  <dl class="dt-facts">
-                    <dt>Address</dt>
-                    <dd>{here().href}</dd>
-                    <dt>Position</dt>
-                    <dd>{here().index}</dd>
-                    <dt>Key</dt>
-                    <dd>{here().key}</dd>
-                  </dl>
-                  <section class="dt-section">
-                    <h4>
-                      <span>Kept with it</span>
-                      <span class="dt-section-aside">back or forward finds it again</span>
-                    </h4>
-                    <Show when={state()} fallback={<p class="dt-muted">Nothing.</p>}>
-                      {(kept) => <pre class="dt-pre">{JSON.stringify(kept(), undefined, 2)}</pre>}
-                    </Show>
-                  </section>
-                </div>
-              </>
-            }
+          <SelectableTable
+            label="Router journal"
+            columns={[
+              { title: "Time", class: "devtools-journal-time" },
+              { title: "At", class: "devtools-journal-at dt-num" },
+              { title: "Event", class: "devtools-journal-event" },
+              { title: "Address" },
+              { title: "Details" },
+            ]}
+            rows={events()}
+            key={(event) => String(event.seq)}
+            selected={selected()}
+            onSelect={setSelected}
+            onClear={() => setSelected(undefined)}
+            empty="Nothing yet"
           >
             {(event) => (
               <>
-                <div class="dt-details-title">
+                <td class="dt-code dt-muted">{clockTime(event.at)}</td>
+                <td class="dt-num dt-muted">{event.index}</td>
+                <td class={KIND_CLASS[event.kind]}>{event.kind}</td>
+                <td class="dt-code">{addressOf(event)}</td>
+                <td>{detailOf(event)}</td>
+              </>
+            )}
+          </SelectableTable>
+        </div>
+        <Show
+          when={chosen()}
+          keyed
+          fallback={
+            <Details label="Navigation details" title={<strong>This history entry</strong>}>
+              <dl class="dt-facts">
+                <dt>Address</dt>
+                <dd>{here().href}</dd>
+                <dt>Position</dt>
+                <dd>{here().index}</dd>
+                <dt>Key</dt>
+                <dd>{here().key}</dd>
+              </dl>
+              <Section title="Kept with it" aside="back or forward finds it again">
+                <Show when={state()} fallback={<p class="dt-muted">Nothing.</p>}>
+                  {(kept) => <pre class="dt-pre">{JSON.stringify(kept(), undefined, 2)}</pre>}
+                </Show>
+              </Section>
+            </Details>
+          }
+        >
+          {(event) => (
+            <Details
+              label="Navigation details"
+              title={
+                <>
                   <strong class={KIND_CLASS[event.kind]}>{event.kind}</strong>
                   <span class="dt-muted">
                     #{event.seq} · {clockTime(event.at)}
                   </span>
-                </div>
-                <div class="dt-side-body">
-                  <pre class="dt-pre">{JSON.stringify(event, undefined, 2)}</pre>
-                </div>
-              </>
-            )}
-          </Show>
-        </aside>
+                </>
+              }
+            >
+              <pre class="dt-pre">{JSON.stringify(event, undefined, 2)}</pre>
+            </Details>
+          )}
+        </Show>
       </div>
       <div class="dt-status" role="status">
         <span class="dt-code">{here().href}</span>

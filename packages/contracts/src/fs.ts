@@ -1,6 +1,10 @@
-import { promises as nodeFs } from "node:fs";
+import { closeSync, promises as nodeFs, openSync, readFileSync, statSync, unlinkSync, writeFileSync, writeSync } from "node:fs";
+import { randomUUID } from "node:crypto";
+import { hostname, uptime } from "node:os";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
-import { Option, Schema } from "effect";
+import { Cause, Data, Duration, Effect, Exit, Option, Result, Schedule, Schema } from "effect";
+import type { Scope } from "effect";
+import { errorMessage } from "./host.ts";
 
 /*
  * Node only, apart from the package root (which clients load in browsers):
@@ -242,3 +246,257 @@ export async function writeFileAtomic(path: string, data: string | Uint8Array, o
     await fs.rm(temp, { force: true });
   }
 }
+
+/*
+ * Pid locks: a file naming the one process that holds it, kept while that
+ * process runs, as a host keeps its home and a sessions store its directory.
+ * They are a convention between Lemma processes, not protection against other
+ * programs.
+ */
+
+/** Slack for the boot time, which uptime gives to the second, and for a clock set at boot. */
+export const BOOT_SLACK_MS = 10_000;
+/** How old a lock that names nobody, or a takeover guard, must be before it is taken over: writing one takes far less. */
+export const UNREADABLE_GRACE_MS = 10_000;
+
+/** Epoch ms this machine booted: a lock taken before then (less `BOOT_SLACK_MS`) names a process that is gone, whatever has its pid now. */
+export const bootTime = (): number => Date.now() - uptime() * 1000;
+
+/** A lock file as it was found: its text, and how long ago it was last modified. */
+export interface FoundLock {
+  readonly text: string;
+  readonly age: number;
+}
+
+/** A pid lock to take. */
+export interface PidLock {
+  /** The lock file. A process taking a stale one over holds `<file>.takeover` beside it while it does. */
+  readonly file: string;
+  /** What this process writes in it, naming itself. */
+  readonly text: string;
+  /**
+   * Whether the lock found is abandoned, so it may be taken over: its holder is gone, or it names nobody and is older
+   * than `UNREADABLE_GRACE_MS`, too old to be still being written.
+   */
+  readonly stale: (found: FoundLock) => boolean;
+}
+
+/** The file operations taking a pid lock uses, as Effects, so the one way of taking it runs on synchronous calls or a `FileSystem`. */
+export interface PidLockFiles<E> {
+  /** Creates the file holding `text`; false when it exists. */
+  readonly create: (file: string, text: string) => Effect.Effect<boolean, E>;
+  /** The file as found; undefined when there is none. */
+  readonly inspect: (file: string) => Effect.Effect<FoundLock | undefined, E>;
+  /** Writes `text` over the file. */
+  readonly replace: (file: string, text: string) => Effect.Effect<void, E>;
+  /** Removes the file if it is there. */
+  readonly remove: (file: string) => Effect.Effect<void, E>;
+  /** Waits a moment while another process takes the lock over. */
+  readonly pause: Effect.Effect<void>;
+}
+
+/** The lock taken, or else the lock that holds it, as found. */
+export type PidLockClaim = { readonly taken: true } | { readonly taken: false; readonly holder: FoundLock };
+
+/**
+ * Takes `lock.file` for this process, or finds the lock that holds it. The
+ * file is created exclusively, so two processes cannot both take a free lock.
+ * One found `stale` is taken over only by the process that creates the guard
+ * beside it (`<file>.takeover`), and only if it is still the lock found stale,
+ * so two cannot both take it over. A guard a crash left is cleared once it is
+ * older than `UNREADABLE_GRACE_MS`; two processes clearing one at the same
+ * instant could both go on, a window this convention accepts.
+ */
+export const claimPidLock = <E>(files: PidLockFiles<E>, lock: PidLock): Effect.Effect<PidLockClaim, E> =>
+  Effect.gen(function* () {
+    const guard = `${lock.file}.takeover`;
+    for (;;) {
+      if (yield* files.create(lock.file, lock.text)) return { taken: true } as const;
+      const found = yield* files.inspect(lock.file);
+      // Released meanwhile.
+      if (found === undefined) continue;
+      if (!lock.stale(found)) return { taken: false, holder: found } as const;
+      if (!(yield* files.create(guard, lock.text))) {
+        // Another process is taking it over; or one crashed doing so, and its guard is old.
+        const other = yield* files.inspect(guard);
+        if (other !== undefined && other.age > UNREADABLE_GRACE_MS) yield* files.remove(guard);
+        else yield* files.pause;
+        continue;
+      }
+      // Replaced only if it is still the lock found stale: another process may have taken it over meanwhile.
+      const taken = yield* Effect.gen(function* () {
+        if ((yield* files.inspect(lock.file))?.text !== found.text) return false;
+        yield* files.replace(lock.file, lock.text);
+        return true;
+      }).pipe(Effect.ensuring(Effect.ignore(files.remove(guard))));
+      if (taken) return { taken: true } as const;
+    }
+  });
+
+/** A pid lock's files on `node:fs`'s synchronous calls. What they throw is a defect. */
+const syncLockFiles: PidLockFiles<never> = {
+  create: (file, text) =>
+    Effect.sync(() => {
+      try {
+        const fd = openSync(file, "wx", 0o600);
+        try {
+          writeSync(fd, text);
+        } finally {
+          closeSync(fd);
+        }
+        return true;
+      } catch (cause) {
+        if (errorCode(cause) === "EEXIST") return false;
+        throw cause;
+      }
+    }),
+  inspect: (file) =>
+    Effect.sync(() => {
+      try {
+        const { mtimeMs } = statSync(file);
+        return { text: readFileSync(file, "utf8"), age: Date.now() - mtimeMs };
+      } catch (cause) {
+        if (errorCode(cause) === "ENOENT") return undefined;
+        throw cause;
+      }
+    }),
+  replace: (file, text) => Effect.sync(() => writeFileSync(file, text, { mode: 0o600 })),
+  remove: (file) =>
+    Effect.sync(() => {
+      try {
+        unlinkSync(file);
+      } catch {
+        // Gone already.
+      }
+    }),
+  pause: Effect.sync(() => void Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 50)),
+};
+
+/**
+ * `claimPidLock` on `node:fs`'s synchronous calls, for a process that takes its
+ * lock before anything else starts. It throws what those calls throw. Its
+ * writes are not synced.
+ */
+export const claimPidLockSync = (lock: PidLock): PidLockClaim => {
+  const exit = Effect.runSyncExit(claimPidLock(syncLockFiles, lock));
+  if (Exit.isSuccess(exit)) return exit.value;
+  throw Cause.squash(exit.cause);
+};
+
+/*
+ * File locks: a file held while a piece of work runs, so processes take turns
+ * at a read-modify-write.
+ */
+
+export interface FileLockOptions {
+  /** Give up with `Locked` after waiting this long for another holder. Default 10s. */
+  readonly waitMs?: number;
+  /** A lock whose file has not been touched for this long is abandoned. Holders touch it at a third of this. Default 30s. */
+  readonly staleMs?: number;
+}
+
+/** A file lock was not taken: `Locked`, another process held it for all of `waitMs`; `Io`, its file or directory could not be made. */
+export class FileLockError extends Data.TaggedError("FileLockError")<{
+  readonly reason: "Locked" | "Io";
+  readonly message: string;
+  readonly cause?: unknown;
+}> {}
+
+/** What a file lock holds: its holder's process, machine, and a nonce no other holder has. */
+interface FileLockOwner {
+  readonly pid: number;
+  readonly host: string;
+  readonly nonce: string;
+}
+
+/**
+ * Holds the file `lock` for the scope, so processes take turns at what runs in
+ * it. The lock is created with O_EXCL and holds `{ pid, host, nonce }`; its
+ * directory is made (0700) if missing. The holder touches it every third of
+ * `staleMs`, a heartbeat that stops with the scope even when the work in it
+ * runs uninterruptibly. A lock is abandoned when its process is gone (same
+ * host) or it has not been touched within `staleMs`; a crash between creating
+ * and writing it leaves an empty one, abandoned once stale like any other. A
+ * waiter removes exactly the lock it judged abandoned (matched by content), and
+ * two racing to remove one leave a narrow window this convention accepts.
+ * Waiting polls with jitter and fails `Locked` after `waitMs`. It does not
+ * guard against programs that ignore the lock.
+ */
+export const holdFileLock = (lock: string, options: FileLockOptions = {}): Effect.Effect<void, FileLockError, Scope.Scope> => {
+  const waitMs = options.waitMs ?? 10_000;
+  const staleMs = options.staleMs ?? 30_000;
+  const owner: FileLockOwner = { pid: process.pid, host: hostname(), nonce: randomUUID() };
+  const io = (what: string) => (cause: unknown) => new FileLockError({ reason: "Io", message: `Cannot create ${what}: ${errorMessage(cause)}`, cause });
+
+  const tryCreate = Effect.tryPromise({
+    try: async () => {
+      const handle = await nodeFs.open(lock, "wx", 0o600);
+      try {
+        await handle.writeFile(JSON.stringify(owner));
+      } finally {
+        await handle.close();
+      }
+    },
+    catch: (cause) => cause,
+  }).pipe(Effect.result);
+
+  /** The current holder's text if it is abandoned, `vanished` if the lock disappeared meanwhile, else undefined. */
+  const abandoned = Effect.promise(async (): Promise<{ readonly text: string } | "vanished" | undefined> => {
+    try {
+      const handle = await nodeFs.open(lock, "r");
+      try {
+        const [info, text] = await Promise.all([handle.stat(), handle.readFile("utf8")]);
+        if (Date.now() - info.mtimeMs > staleMs) return { text };
+        const holder = Result.getOrUndefined(Result.try(() => JSON.parse(text) as Partial<FileLockOwner>));
+        if (holder?.host === owner.host && typeof holder.pid === "number" && !isAlive(holder.pid)) return { text };
+        return undefined;
+      } finally {
+        await handle.close();
+      }
+    } catch (cause) {
+      if (errorCode(cause) === "ENOENT") return "vanished";
+      throw cause;
+    }
+  });
+
+  const removeIfUnchanged = (text: string) =>
+    Effect.promise(async () => {
+      const current = await nodeFs.readFile(lock, "utf8").catch(() => undefined);
+      if (current !== undefined && current === text) await nodeFs.rm(lock, { force: true });
+    });
+
+  const acquire = Effect.gen(function* () {
+    yield* Effect.tryPromise({ try: () => nodeFs.mkdir(dirname(lock), { recursive: true, mode: 0o700 }), catch: io(dirname(lock)) });
+    const deadline = Date.now() + waitMs;
+    while (true) {
+      const created = yield* tryCreate;
+      if (Result.isSuccess(created)) return;
+      if (errorCode(created.failure) !== "EEXIST") return yield* io(lock)(created.failure);
+      const stale = yield* abandoned;
+      if (stale === "vanished") continue;
+      if (stale !== undefined) yield* removeIfUnchanged(stale.text);
+      // Also bounds retries when an abandoned lock cannot be removed.
+      if (Date.now() >= deadline) {
+        return yield* new FileLockError({ reason: "Locked", message: `${lock} is held by another process; gave up after ${waitMs}ms` });
+      }
+      if (stale === undefined) yield* Effect.sleep(Duration.millis(20 + Math.random() * 60));
+    }
+  });
+
+  const release = Effect.promise(async () => {
+    const current = await nodeFs.readFile(lock, "utf8").catch(() => undefined);
+    if (current === JSON.stringify(owner)) await nodeFs.rm(lock, { force: true });
+  });
+
+  const heartbeat = Effect.promise(() => {
+    const now = new Date();
+    return nodeFs.utimes(lock, now, now).catch(() => undefined);
+  }).pipe(Effect.repeat(Schedule.spaced(Duration.millis(staleMs / 3))));
+
+  return Effect.gen(function* () {
+    yield* Effect.acquireRelease(acquire, () => release);
+    // Interruptible even when the work is not (a token refresh that must not lose its rotated token): closing the
+    // scope interrupts this fiber and waits for it, so it must never run uninterruptibly.
+    yield* Effect.forkScoped(Effect.interruptible(heartbeat));
+  });
+};

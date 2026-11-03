@@ -19,6 +19,7 @@ import {
   CheckIcon,
   ConfirmDelete,
   FilterIcon,
+  MenuItem,
   Popover,
   QuestionIcon,
   RedoIcon,
@@ -181,7 +182,7 @@ function ArchivedRow(props: { deps: Deps; session: SessionInfo; selection: RowSe
             )}
           </Show>
           <a
-            class="archived-title"
+            class="archived-title tw:truncate"
             href={deps.threads.href(id())}
             draggable={false}
             data-nav="title"
@@ -254,20 +255,8 @@ function ArchivedRow(props: { deps: Deps; session: SessionInfo; selection: RowSe
 function ProjectFilter(props: { deps: Deps; projects: readonly string[] }) {
   const { deps } = props;
   const count = (project: string) => archivedOf(deps.threads.list()).filter((session) => deps.projectOf(session.cwd) === project).length;
-  const pick = (project: string | undefined, close: () => void) => {
-    deps.setProject(project);
-    close();
-  };
-  const item = (project: string | undefined, label: string, close: () => void, detail?: string): JSX.Element => (
-    <button class="menu-item" role="menuitemradio" aria-checked={deps.project() === project} onClick={() => pick(project, close)}>
-      <span class="menu-check">
-        <Show when={deps.project() === project}>
-          <CheckIcon />
-        </Show>
-      </span>
-      <span class="menu-label">{label}</span>
-      <Show when={detail}>{(text) => <span class="menu-hint">{text()}</span>}</Show>
-    </button>
+  const item = (project: string | undefined, label: string, close: () => void, hint?: string): JSX.Element => (
+    <MenuItem label={label} hint={hint} checked={deps.project() === project} close={close} run={() => deps.setProject(project)} />
   );
   return (
     <Popover
@@ -276,7 +265,7 @@ function ProjectFilter(props: { deps: Deps; projects: readonly string[] }) {
         <Show when={deps.project() !== undefined} fallback={<FilterIcon />}>
           <FilterIcon />
           {/* No project is `""`, a project too. */}
-          <span class="archived-filter-label">{deps.projectName(deps.project()!)}</span>
+          <span class="archived-filter-label tw:truncate">{deps.projectName(deps.project()!)}</span>
         </Show>
       }
       triggerClass={deps.project() === undefined ? "icon-button archived-filter" : "icon-button archived-filter active"}

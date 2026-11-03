@@ -114,12 +114,9 @@
 }
 
 .agent-title {
-  overflow: hidden;
   color: var(--text);
   font-size: var(--font-size-md);
   font-weight: 500;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 .agent-state {
@@ -143,11 +140,8 @@
 }
 
 .agent-detail {
-  overflow: hidden;
   color: var(--text-3);
   font-size: var(--font-size-sm);
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 .agent-time {
@@ -306,12 +300,6 @@
 .agent-crumb:hover {
   background: var(--bg-hover);
   color: var(--text);
-}
-
-.agent-crumb-title {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 .agent-crumb-sep {

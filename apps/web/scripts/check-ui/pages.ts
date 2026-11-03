@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { startHost } from "./hosts.ts";
 import { boot, switchTo } from "./shared.ts";
+import type { Contracts, PageReports } from "./shared.ts";
 
 /** The frames pages are drawn in, top to bottom: title, sandbox, height, and where each sits. */
 const framesOf = (page: import("playwright").Page) =>
@@ -17,9 +18,9 @@ export const pages = async (): Promise<string> => {
   const host = await startHost();
   const { page, expectNoErrors } = await boot(host);
   await page.evaluate(() => {
-    (window as any).pageReports = [];
+    window.pageReports = [];
     addEventListener("message", (event) => {
-      if (event.data?.type === "check-page") (window as any).pageReports.push(event.data);
+      if (event.data?.type === "check-page") window.pageReports!.push(event.data);
     });
   });
   // The scripted model's script waits at the gate `script` after its first call, until the check has seen it, however
@@ -45,7 +46,7 @@ export const pages = async (): Promise<string> => {
 
   await page.waitForFunction(() => document.querySelectorAll(".turn-footer").length === 1, undefined, { timeout: 30_000 });
   await page
-    .waitForFunction(() => (window as any).pageReports.filter((report: any) => report.title === "Summary").length > 0, undefined, { timeout: 10_000 })
+    .waitForFunction(() => window.pageReports!.filter((report) => report.title === "Summary").length > 0, undefined, { timeout: 10_000 })
     .catch(() => assert.fail("a page drawn in the chat did not run its script"));
   const answerTop = await page.evaluate(() => {
     const answer = [...document.querySelectorAll(".turn p")].find((p) => p.textContent?.includes("Both pages are above"));
@@ -83,7 +84,7 @@ export const pages = async (): Promise<string> => {
       { timeout: 5_000 },
     )
     .catch(async () => assert.fail(`a page's frame is not sized to its content: ${JSON.stringify(await framesOf(page))}`));
-  const first = await page.evaluate(() => (window as any).pageReports.findLast((report: any) => report.title === "Summary"));
+  const first = await page.evaluate(() => (window.pageReports as PageReports).findLast((report) => report.title === "Summary")!);
   assert.equal(first.reach, "SecurityError", "a page reaches into the app");
   const appBg = () => page.evaluate(() => getComputedStyle(document.documentElement).getPropertyValue("--bg").trim());
   assert.equal(first.bg, await appBg(), "a page does not have the app's theme");
@@ -101,8 +102,8 @@ export const pages = async (): Promise<string> => {
   const theme = await page.evaluate(() => document.documentElement.dataset.theme);
   await page.evaluate(
     async (scheme) => {
-      const { Client } = (await import("/src/ui/api.ts" as string)).api.contracts;
-      await (await (window as any).lemma.service(Client)).configure({ "look.appearance": { values: { scheme } } });
+      const { Client } = (await import("/src/ui/api.ts" as string)).api.contracts as Contracts;
+      await (await window.lemma.service(Client))!.configure({ "look.appearance": { values: { scheme } } });
     },
     theme === "dark" ? "light" : "dark",
   );
@@ -110,7 +111,7 @@ export const pages = async (): Promise<string> => {
   await page
     .waitForFunction(
       ({ bg, loaded }) => {
-        const last = (window as any).pageReports.findLast((report: any) => report.title === "Summary");
+        const last = (window.pageReports as PageReports).findLast((report) => report.title === "Summary")!;
         return last.bg === bg && last.loaded === loaded;
       },
       { bg: await appBg(), loaded: first.loaded },
@@ -144,7 +145,7 @@ export const pages = async (): Promise<string> => {
     .catch(() => assert.fail("the height a page's frame took is not stored"));
   await switchTo(page, "tools.html", false);
   await page.evaluate(() => {
-    const first: Record<string, string> = ((window as any).firstHeights = {});
+    const first: Record<string, string> = (window.firstHeights = {});
     new MutationObserver(() => {
       for (const frame of document.querySelectorAll<HTMLIFrameElement>("iframe.html-frame"))
         if (!(frame.title in first) && frame.style.height !== "") first[frame.title] = frame.style.height;
@@ -152,13 +153,13 @@ export const pages = async (): Promise<string> => {
   });
   await switchTo(page, "tools.html", true);
   await summary.waitFor({ timeout: 5_000 });
-  assert.equal(await page.evaluate(() => (window as any).firstHeights.Summary), `${took}px`, "a page drawn again does not start at the height it took");
+  assert.equal(await page.evaluate(() => window.firstHeights!.Summary), `${took}px`, "a page drawn again does not start at the height it took");
 
   // A long page: its buttons sit beside it, where the chat has room, and stay at the top of the chat as it scrolls by.
   let content = await contentOf(summary.locator("iframe"));
   await content.evaluate(() => {
-    (window as any).hashes = [];
-    addEventListener("hashchange", () => (window as any).hashes.push(location.hash));
+    window.hashes = [];
+    addEventListener("hashchange", () => window.hashes!.push(location.hash));
     document.body.insertAdjacentHTML(
       "beforeend",
       `<p><a id="to-far" href="#far">Far</a> <a id="to-deep" href="#deep">Deep</a> <a id="out" href="https://example.com/out">Out</a> <a id="own" href="https://example.com/own">Own</a></p>` +
@@ -203,10 +204,9 @@ export const pages = async (): Promise<string> => {
         .waitForFunction(
           (inFrame) => {
             const scroller = document.querySelector<HTMLElement>(".chat-view .scroller")!;
-            const watch = window as any;
-            watch.stillFor = watch.lastTop === scroller.scrollTop ? (watch.stillFor ?? 0) + 1 : 0;
-            watch.lastTop = scroller.scrollTop;
-            if (watch.stillFor < 5) return false;
+            window.stillFor = window.lastTop === scroller.scrollTop ? (window.stillFor ?? 0) + 1 : 0;
+            window.lastTop = scroller.scrollTop;
+            if (window.stillFor < 5) return false;
             if (inFrame === undefined) return true;
             const view = scroller.getBoundingClientRect();
             const top = document.querySelector("iframe[title='Summary']")!.getBoundingClientRect().top + inFrame;
@@ -243,7 +243,7 @@ export const pages = async (): Promise<string> => {
     )
     .catch(() => assert.fail("a link to a place in a page does not scroll the chat to it"));
   assert.deepEqual(
-    await content.evaluate(() => ({ hash: location.hash, target: document.querySelector(":target")?.id, hashes: (window as any).hashes })),
+    await content.evaluate(() => ({ hash: location.hash, target: document.querySelector(":target")?.id, hashes: window.hashes })),
     { hash: "#far", target: "far", hashes: ["#far"] },
     "a link to a place in a page is not followed by the page: its address, :target, and hashchange",
   );
@@ -262,18 +262,14 @@ export const pages = async (): Promise<string> => {
 
   // A link elsewhere opens in the person's browser, unless the page's own script took the click.
   await page.evaluate(() => {
-    const opened: string[] = ((window as any).opened = []);
+    const opened: string[] = (window.opened = []);
     window.open = (url?: string | URL) => (opened.push(String(url)), null);
   });
   await clickInPage("own");
   await clickInPage("out");
   // The page's messages arrive in order: once the second link's has, the first's would have.
-  await page.waitForFunction(() => (window as any).opened.length > 0, undefined, { timeout: 3_000 }).catch(() => assert.fail("a link elsewhere does not open"));
-  assert.deepEqual(
-    await page.evaluate(() => (window as any).opened),
-    ["https://example.com/out"],
-    "a link the page's script took is opened too, or a link not",
-  );
+  await page.waitForFunction(() => window.opened!.length > 0, undefined, { timeout: 3_000 }).catch(() => assert.fail("a link elsewhere does not open"));
+  assert.deepEqual(await page.evaluate(() => window.opened), ["https://example.com/out"], "a link the page's script took is opened too, or a link not");
 
   // Full screen: the page over the app, filling the dialog, focus in the page; Tab out of its end comes round to the
   // dialog's close button, and Shift+Tab back into the page.
@@ -297,14 +293,14 @@ export const pages = async (): Promise<string> => {
   // Each Escape, once the page's bootstrap has had it, the page says so after anything the bootstrap said: once the app
   // hears that, it has heard whether the page asked it to close.
   await page.evaluate(() => {
-    (window as any).escapes = 0;
-    addEventListener("message", (event) => event.data?.type === "check-escaped" && (window as any).escapes++);
+    window.escapes = 0;
+    addEventListener("message", (event) => event.data?.type === "check-escaped" && window.escapes!++);
   });
   await content.evaluate(() => {
     document.body.insertAdjacentHTML("beforeend", `<input id="field"><dialog id="own-dialog">Own</dialog>`);
     addEventListener("keydown", (event) => event.key === "Escape" && setTimeout(() => parent.postMessage({ type: "check-escaped" }, "*"), 0));
   });
-  const escaped = (count: number) => page.waitForFunction((count) => (window as any).escapes >= count, count, { timeout: 3_000 });
+  const escaped = (count: number) => page.waitForFunction((count) => window.escapes! >= count, count, { timeout: 3_000 });
   // Each Escape comes up only once what it did going down is checked, as a user's key comes up a moment later. Chromium
   // can leave a key unanswered that reaches this frame as it goes, and `keyboard.press` then waits for ever: the Escape
   // that closes the page comes up once the frame has gone, and one that wrongly closed it fails its check, not hangs.

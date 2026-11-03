@@ -80,7 +80,7 @@ const rates = <K extends string>(prng: Prng, kinds: readonly K[], max: number, f
  * failing a lot, not every part a little. Broad runs keep the rest of the space sampled, so the focus does not leave
  * a blind spot (TigerBeetle's "Fuzzer Blind Spots").
  */
-export const FOCUSES = ["broad", "disk", "model", "tools", "lifecycle"] as const;
+const FOCUSES = ["broad", "disk", "model", "tools", "lifecycle"] as const;
 export type Focus = (typeof FOCUSES)[number];
 
 /** The mix a seed draws. Prompts and waits are always on, so every run does something. */
@@ -111,7 +111,7 @@ export const drawSwarm = (prng: Prng, focus: Focus = prng.pick(FOCUSES)): Swarm 
 };
 
 /** A mix with nothing failing and every action of the workload's clients on: for the benchmark and the liveness phase. */
-export const calmSwarm = (actions: Readonly<Record<Action, number>>): Swarm => ({
+const calmSwarm = (actions: Readonly<Record<Action, number>>): Swarm => ({
   focus: "broad",
   actions,
   model: NO_MODEL_FAULTS,
@@ -133,7 +133,7 @@ export interface WorldOptions {
 }
 
 /** A simulated run went wrong: what the checker found, with the seed that replays it. */
-export class Violation extends Error {
+class Violation extends Error {
   override readonly name = "Violation";
 }
 
@@ -719,16 +719,25 @@ export class World {
     this.checker.audit(served, this.fileEvents(), this.calls, this.tools);
   }
 
-  /** Each session's events as its file's bytes parse, a torn last line (no newline) left out. */
-  fileEvents(): Map<string, SessionEvent[]> {
-    const sessions = new Map<string, SessionEvent[]>();
+  /**
+   * Each session file's whole lines, by its path under `<home>/sessions`: a torn last line (no newline) is a write a
+   * crash tore, which the store does not serve.
+   */
+  sessionFiles(): Map<string, string> {
+    const files = new Map<string, string>();
     for (const file of this.disk.list()) {
       if (!file.startsWith(`${HOME}/sessions/`) || !file.endsWith(".jsonl")) continue;
-      // Whole lines only: one without its newline is a write a crash tore, which the store does not serve.
-      const lines = (this.disk.read(file) ?? "")
-        .split("\n")
-        .slice(0, -1)
-        .filter((line) => line !== "");
+      const text = this.disk.read(file) ?? "";
+      files.set(file.slice(`${HOME}/sessions/`.length), text.slice(0, text.lastIndexOf("\n") + 1));
+    }
+    return files;
+  }
+
+  /** Each session's events as its file's whole lines parse (`sessionFiles`). */
+  fileEvents(): Map<string, SessionEvent[]> {
+    const sessions = new Map<string, SessionEvent[]>();
+    for (const text of this.sessionFiles().values()) {
+      const lines = text.split("\n").filter((line) => line !== "");
       let id: string | undefined;
       const events: SessionEvent[] = [];
       for (const line of lines) {

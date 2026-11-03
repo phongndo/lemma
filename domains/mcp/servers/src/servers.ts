@@ -4,6 +4,7 @@ import type { McpAuthStatus, McpServer, McpServerChange, McpServerConfig, McpSer
 import { outputBudget, ToolResult } from "@lemma/tools";
 import type { Tool, ToolNamespace } from "@lemma/tools";
 import { boundOutput } from "@lemma/tools/files";
+import { errorMessage } from "@lemma/contracts";
 import { bearer, callbackParams, finishSignIn, needsSignIn, newState, SignInStore, startSignIn, unionScopes } from "./auth.ts";
 import type { Challenge, Flow, SignInTarget } from "./auth.ts";
 import { listenForCallback } from "./callback.ts";
@@ -26,6 +27,8 @@ import type { Definition, ServersFile } from "./config.ts";
 import { Connection, sendsOwnToken } from "./connection.ts";
 import type { McpTool } from "./connection.ts";
 import { isImageAddress } from "./form.ts";
+import { serial } from "./serial.ts";
+import type { Serial } from "./serial.ts";
 import { inputOf, namespaceOf, outputOf, structuredOf, toContent, toolNames } from "./tools.ts";
 
 /** A server's icon: its entry's, when it can be one (for every theme), else the ones it declares. */
@@ -67,8 +70,6 @@ const signsIn = (config: McpServerConfig): boolean => config.url !== undefined &
 /** What a tool call to a server that needs signing in fails with, for the model to pass on. */
 const signInNeeded = (server: string) =>
   `MCP server "${server}" needs the person to sign in before its tools work: they can from Settings › Integrations, or with /mcp login ${server}.`;
-
-const messageOf = (cause: unknown) => (cause instanceof Error ? cause.message : String(cause));
 
 /** A sign-in stopped by the person, or replaced by another: nothing to report. */
 const STOPPED = "The sign-in was stopped";
@@ -121,7 +122,7 @@ interface Entry {
   /** Its tools' namespace, while it has tools. */
   namespace: Registered | undefined;
   /** Serializes adding and removing its tools. */
-  syncing: Promise<void>;
+  readonly syncing: Serial;
   /** A remote server Lemma signs in to, as its connection was made: the sign-in it holds is the one for this address. */
   target: SignInTarget | undefined;
   signIn: SignInRun | undefined;
@@ -146,7 +147,7 @@ export class Servers {
   private readonly entries = new Map<string, Entry>();
   private file: ServersFile;
   private plugins: readonly { readonly item: McpServer; readonly pluginId: string }[] = [];
-  private queue: Promise<void> = Promise.resolve();
+  private readonly queue = serial();
   private closed = false;
   private readonly kernel: Kernel;
   private readonly options: Options;
@@ -209,7 +210,7 @@ export class Servers {
         // A plugin's server has the plugin's values without the entry: one differing from them is written.
         await writeChange(this.options.file, name, change, definition.source.kind === "plugin" ? definition.source.config : {});
       } catch (cause) {
-        throw new McpError({ reason: "Failed", message: cause instanceof Error ? cause.message : String(cause), cause });
+        throw new McpError({ reason: "Failed", message: errorMessage(cause), cause });
       }
       this.file = await readServersFile(this.options.file);
       await this.apply();
@@ -227,12 +228,12 @@ export class Servers {
       try {
         await writeEntry(this.options.file, name, entry);
       } catch (cause) {
-        throw new McpError({ reason: "Failed", message: cause instanceof Error ? cause.message : String(cause), cause });
+        throw new McpError({ reason: "Failed", message: errorMessage(cause), cause });
       }
       this.file = await readServersFile(this.options.file);
       await this.apply();
       if (entry === null)
-        await this.store.set(name, undefined).catch((cause: unknown) => this.kernel.warn(`${name}'s sign-in was not removed: ${messageOf(cause)}`));
+        await this.store.set(name, undefined).catch((cause: unknown) => this.kernel.warn(`${name}'s sign-in was not removed: ${errorMessage(cause)}`));
     });
   }
 
@@ -260,7 +261,7 @@ export class Servers {
       url = await startSignIn(this.store, target, flow, entry.challenge);
     } catch (cause) {
       await callback.close();
-      const message = this.redact(entry, `Could not start signing in: ${messageOf(cause)}`);
+      const message = this.redact(entry, `Could not start signing in: ${errorMessage(cause)}`);
       if (entry.signIn === run) {
         entry.signIn = undefined;
         entry.signInError = message;
@@ -290,7 +291,7 @@ export class Servers {
       codeOf(params, run.flow, true);
     } catch (cause) {
       // A wrong paste leaves the sign-in waiting, for the right one.
-      throw new McpError({ reason: "Invalid", message: messageOf(cause) });
+      throw new McpError({ reason: "Invalid", message: errorMessage(cause) });
     }
     run.paste(params);
     const failure = await run.ended;
@@ -315,7 +316,7 @@ export class Servers {
     try {
       await this.store.set(name, undefined);
     } catch (cause) {
-      throw new McpError({ reason: "Failed", message: messageOf(cause), cause });
+      throw new McpError({ reason: "Failed", message: errorMessage(cause), cause });
     }
     await this.reconnect(name);
   }
@@ -332,7 +333,7 @@ export class Servers {
       const expanded = expandConfig(config, this.options.env);
       return { name, url: expanded.url!, oauth: expanded.oauth };
     } catch (cause) {
-      throw new McpError({ reason: "Invalid", message: messageOf(cause) });
+      throw new McpError({ reason: "Invalid", message: errorMessage(cause) });
     }
   }
 
@@ -353,7 +354,7 @@ export class Servers {
   }
 
   private cannotListen(port: number, cause: unknown): never {
-    throw new McpError({ reason: "Failed", message: `Could not listen on port ${port} for the browser to come back to Lemma: ${messageOf(cause)}`, cause });
+    throw new McpError({ reason: "Failed", message: `Could not listen on port ${port} for the browser to come back to Lemma: ${errorMessage(cause)}`, cause });
   }
 
   /**
@@ -380,7 +381,7 @@ export class Servers {
       });
       await finishSignIn(this.store, target, run.flow!, codeOf(params, run.flow!, arrival === undefined), params.get("iss") ?? undefined);
     } catch (cause) {
-      failure = this.redact(entry, messageOf(cause));
+      failure = this.redact(entry, errorMessage(cause));
     } finally {
       clearTimeout(timer);
     }
@@ -410,7 +411,8 @@ export class Servers {
       return this.stopSignIn(entry);
     });
     await Promise.all(stopped);
-    await this.queue.catch(() => {});
+    // Waits for the change under way; those after it run nothing now.
+    await this.queue(async () => {});
     await Promise.all([...this.entries.values()].map((entry) => entry.connection?.close()));
   }
 
@@ -466,9 +468,9 @@ export class Servers {
   }
 
   private serially(work: () => Promise<void>): Promise<void> {
-    const run = this.queue.then(() => (this.closed ? undefined : work()));
-    this.queue = run.catch(() => {});
-    return run;
+    return this.queue(async () => {
+      if (!this.closed) await work();
+    });
   }
 
   private find(name: string): Entry {
@@ -499,7 +501,7 @@ export class Servers {
           listed: [],
           registered: new Map(),
           namespace: undefined,
-          syncing: Promise.resolve(),
+          syncing: serial(),
           target: undefined,
           signIn: undefined,
           signInError: undefined,
@@ -564,7 +566,7 @@ export class Servers {
           entry.listed = tools;
           void this.sync(entry).then(
             () => this.publish(),
-            (cause: unknown) => this.kernel.warn(`${entry.definition.name}'s tools: ${cause instanceof Error ? cause.message : String(cause)}`),
+            (cause: unknown) => this.kernel.warn(`${entry.definition.name}'s tools: ${errorMessage(cause)}`),
           );
         },
       },
@@ -589,7 +591,7 @@ export class Servers {
 
   /** Adds the server's tools as it last listed them, at their exposures now, and removes those it no longer has. */
   private sync(entry: Entry): Promise<void> {
-    const run = entry.syncing.then(async () => {
+    return entry.syncing(async () => {
       const wanted = new Map<string, { readonly key: string; readonly tool: Tool }>();
       if (entry.connection !== undefined) {
         const names = toolNames(
@@ -618,12 +620,10 @@ export class Servers {
           entry.registered.set(name, { key, remove: await this.kernel.addTool(tool) });
         } catch (cause) {
           // Another plugin holds the name: the rest of the server's tools are added all the same.
-          this.kernel.warn(`${entry.definition.name}'s tool ${name} was not added: ${cause instanceof Error ? cause.message : String(cause)}`);
+          this.kernel.warn(`${entry.definition.name}'s tool ${name} was not added: ${errorMessage(cause)}`);
         }
       }
     });
-    entry.syncing = run.catch(() => {});
-    return run;
   }
 
   /**
@@ -648,7 +648,7 @@ export class Servers {
     try {
       entry.namespace = { key, remove: await this.kernel.addNamespace(namespace) };
     } catch (cause) {
-      this.kernel.warn(`${server}'s namespace was not added: ${cause instanceof Error ? cause.message : String(cause)}`);
+      this.kernel.warn(`${server}'s namespace was not added: ${errorMessage(cause)}`);
     }
   }
 
@@ -672,7 +672,7 @@ export class Servers {
         } catch (cause) {
           if (needsSignIn(cause)) throw new Error(signInNeeded(server), { cause });
           // What reaches the model shows a `${VAR}`'s reference, as the page does.
-          throw new Error(this.redact(entry, messageOf(cause)), { cause });
+          throw new Error(this.redact(entry, errorMessage(cause)), { cause });
         }
         const { content, fullOutputPath } = await boundOutput(toContent(result), { budget: outputBudget(context.maxResultChars), name: "mcp" });
         return new ToolResult({

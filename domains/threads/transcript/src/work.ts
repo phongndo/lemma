@@ -1,5 +1,6 @@
 import { callFailed } from "@lemma/threads";
 import type { Block, Item } from "@lemma/threads";
+import { plural } from "@lemma/web/format";
 
 /**
  * A turn's folded work as rows, the way a work log reads: each thought, tool
@@ -60,13 +61,8 @@ export const summarizeTools = (names: readonly string[], actionOf: ActionOf): st
   }
   const shown = [...kinds.values()].slice(0, NAMED);
   rest += [...kinds.values()].slice(NAMED).reduce((sum, kind) => sum + kind.count, 0);
-  const named = shown.map(({ words: [verb, one, many], count }) => `${verb} ${count} ${count === 1 ? one : many}`);
-  const parts =
-    named.length === 0
-      ? [`used ${rest} ${rest === 1 ? "tool" : "tools"}`]
-      : rest === 0
-        ? named
-        : [...named, `${rest} other ${rest === 1 ? "action" : "actions"}`];
+  const named = shown.map(({ words: [verb, one, many], count }) => `${verb} ${plural(count, one, many)}`);
+  const parts = named.length === 0 ? [`used ${plural(rest, "tool")}`] : rest === 0 ? named : [...named, plural(rest, "other action")];
   const sentence = parts.length > 2 ? `${parts.slice(0, -1).join(", ")}, and ${parts.at(-1)}` : parts.join(" and ");
   return sentence.charAt(0).toUpperCase() + sentence.slice(1);
 };

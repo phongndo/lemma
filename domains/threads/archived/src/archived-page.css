@@ -53,10 +53,7 @@
 
 .archived-filter-label {
   min-width: 0;
-  overflow: hidden;
   font-size: var(--font-size-sm);
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 /* While threads are selected, the search's row holds them too, beside it: how many (and how many it hides), and what to
@@ -218,12 +215,9 @@
 /* The title is a link to the thread: quiet until the pointer is on it. */
 .archived-title {
   min-width: 0;
-  overflow: hidden;
   color: var(--text);
   font-size: var(--font-size-md);
   text-decoration: none;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 .archived-title:hover {

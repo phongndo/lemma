@@ -4,6 +4,7 @@ import { copyText } from "@lemma/web/clipboard";
 import { codePlaces, createBlockLexer, CodeBlocks, CheckIcon, CodeIcon, CopyIcon, ImageIcon, XIcon } from "@lemma/look";
 import type { CodeBlock, MarkdownBlock, CodeBlockRenderer, MarkdownProps } from "@lemma/look";
 import { SlotsContext } from "@lemma/web";
+import { errorMessage } from "@lemma/contracts";
 
 /**
  * Builds code blocks as plain DOM, outside Solid's tree, for the markdown
@@ -102,7 +103,7 @@ const codeBlocks = (owner: Owner | null) => {
         const note = document.createElement("span");
         note.className = "code-error";
         note.textContent = "Not rendered";
-        note.dataset.tip = error instanceof Error ? error.message : String(error);
+        note.dataset.tip = errorMessage(error);
         tools.prepend(note);
       };
       try {

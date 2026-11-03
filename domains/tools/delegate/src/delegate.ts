@@ -4,7 +4,7 @@ import { Effect, Result, Schedule, Schema, Semaphore } from "effect";
 import type { Context } from "effect";
 import type { Registries } from "@lemma/core";
 import { callHere } from "@lemma/cli";
-import { HostError, InteractionError } from "@lemma/contracts";
+import { errorMessage, HostError, InteractionError } from "@lemma/contracts";
 import type { Interaction } from "@lemma/contracts";
 import { AgentChannels, ModeChannels, MODES_PLUGIN, offeredFor } from "@lemma/agent";
 import type { ModeInfo, PromptOutcome, TurnOptions, WhenBusy } from "@lemma/agent";
@@ -38,7 +38,7 @@ export const failure = (id: string, error: unknown): string => {
     const code = typeof tagged.reason === "string" ? tagged.reason : tagged._tag;
     return `"${id}" failed (${code}): ${sentence(typeof tagged.message === "string" ? tagged.message : code)}`;
   }
-  return `"${id}" failed: ${sentence(error instanceof Error ? error.message : String(error))}`;
+  return `"${id}" failed: ${sentence(errorMessage(error))}`;
 };
 
 export const DelegateInput = Schema.Struct({

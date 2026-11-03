@@ -1,4 +1,4 @@
-import { Effect, Schema } from "effect";
+import { Effect, Schema, SchemaIssue } from "effect";
 
 /** A value a config file can hold: what JSON can say. */
 export type ConfigValue = string | number | boolean | null | readonly ConfigValue[] | { readonly [key: string]: ConfigValue };
@@ -82,3 +82,17 @@ export function configSchema<const D extends ConfigDefaults>(defaults: D): Schem
 /** A plugin's `config` as a Schema: itself, or derived from its defaults. */
 export const toConfigSchema = (config: ConfigInput): Schema.Codec<any, any> =>
   Schema.isSchema(config) ? (config as Schema.Codec<any, any>) : configSchema(config as ConfigDefaults);
+
+const formatIssue = SchemaIssue.makeFormatterStandardSchemaV1();
+
+/**
+ * The first problem a failed decode found, so a message can say where a
+ * config is wrong: its `path` into the value (keys and indexes, empty at the
+ * root) and its `message`. Undefined when the issue names none.
+ */
+export const firstIssue = (issue: SchemaIssue.Issue): { readonly path: readonly (string | number)[]; readonly message: string } | undefined => {
+  const first = formatIssue(issue).issues[0];
+  if (first === undefined) return undefined;
+  const path = (first.path ?? []).filter((segment): segment is string | number => typeof segment === "string" || typeof segment === "number");
+  return { path, message: first.message };
+};

@@ -81,7 +81,7 @@ export function createTable(view: View) {
         <Switch
           fallback={
             <span
-              class="trj-text"
+              class="trj-text tw:truncate"
               data-tip={tipOf(recordName(r))}
               classList={{
                 "trj-muted": r.kind === "system" || (r.kind === "assistant" && !firstLine(contentText(r.message.content)) && !r.failed),
@@ -94,7 +94,7 @@ export function createTable(view: View) {
         >
           <Match when={r.kind === "tool" && r}>
             {(tool) => (
-              <span class="trj-text" data-tip={tipOf(`${tool().run.call.name} ${JSON.stringify(tool().run.call.arguments)}`)}>
+              <span class="trj-text tw:truncate" data-tip={tipOf(`${tool().run.call.name} ${JSON.stringify(tool().run.call.arguments)}`)}>
                 <span class="trj-call-name">{tool().run.call.name}</span>
                 <span class="trj-call-args"> {JSON.stringify(tool().run.call.arguments)}</span>
               </span>
@@ -209,7 +209,7 @@ export function createTable(view: View) {
                 >
                   {/* A button sorts, so the keyboard reaches it as the mouse does. */}
                   <Show when={column.sortable} fallback={column.label}>
-                    <button type="button" class="trj-sort-button" onClick={() => sortBy(column.key as SortKey)}>
+                    <button type="button" class="trj-sort-button tw:truncate" onClick={() => sortBy(column.key as SortKey)}>
                       {column.label}
                       <Show when={sort().key === column.key}>
                         <span class="trj-sort" aria-hidden="true">
@@ -247,7 +247,7 @@ export function createTable(view: View) {
                               ▶
                             </span>
                             <span class="trj-group-label">Turn {turn().index}</span>
-                            <span class="trj-group-prompt" data-tip={prompt() === "" ? undefined : tipOf(prompt())}>
+                            <span class="trj-group-prompt tw:truncate" data-tip={prompt() === "" ? undefined : tipOf(prompt())}>
                               {prompt()}
                             </span>
                             <span class="trj-group-meta">

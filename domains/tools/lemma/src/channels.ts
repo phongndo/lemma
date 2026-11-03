@@ -1,7 +1,7 @@
 import { Effect, Schema, SchemaAST, Stream } from "effect";
 import type { Context } from "effect";
 import type { Registries } from "@lemma/core";
-import { elementsOf, HostError, InteractionError, resultOf, wireCodec, withChannel, withdrawnFrom } from "@lemma/contracts";
+import { elementsOf, errorMessage, HostError, InteractionError, resultOf, wireCodec, withChannel, withdrawnFrom } from "@lemma/contracts";
 import type { Channel, ChannelCall, ChannelStream, Interaction } from "@lemma/contracts";
 import { outputBudget, ToolResult } from "@lemma/tools";
 import type { Tool, ToolContext } from "@lemma/tools";
@@ -51,7 +51,7 @@ const encodedOf = (schema: Schema.Top): SchemaAST.AST => Schema.toEncoded(wireCo
 
 const isNothing = (ast: SchemaAST.AST) => SchemaAST.isNull(ast) || SchemaAST.isUndefined(ast) || SchemaAST.isVoid(ast);
 
-export const payloadShape = (payload: Schema.Top): PayloadShape => {
+const payloadShape = (payload: Schema.Top): PayloadShape => {
   const ast = encodedOf(payload);
   if (isNothing(ast)) return { input: Schema.Struct({}) as unknown as Json, payload: () => null };
   if (SchemaAST.isObjects(ast)) {
@@ -94,8 +94,6 @@ const jsonable = (schema: Schema.Top): void => {
 const errorResult = (text: string, structured?: unknown) =>
   new ToolResult({ content: [{ type: "text", text }], isError: true, ...(structured === undefined ? {} : { structured }) });
 
-const reasonOf = (cause: unknown): string => (cause instanceof Error ? cause.message : String(cause));
-
 /** What a failed call says to the model: the channel, the code, and what to do about it. */
 export const failure = (id: string, error: unknown): string => {
   if (error instanceof HostError) {
@@ -112,7 +110,7 @@ export const failure = (id: string, error: unknown): string => {
     const code = typeof tagged.reason === "string" ? tagged.reason : tagged._tag;
     return `"${id}" failed (${code}): ${sentence(typeof tagged.message === "string" ? tagged.message : code)}`;
   }
-  return `"${id}" failed: ${sentence(reasonOf(error))}`;
+  return `"${id}" failed: ${sentence(errorMessage(error))}`;
 };
 
 /** A message ending as a sentence does, so a hint after it reads as one of its own. */
@@ -130,7 +128,7 @@ export const isCode =
   };
 
 const invalid = (id: string, cause: unknown) =>
-  new HostError({ code: "InvalidPayload", subject: id, message: `Invalid payload for "${id}": ${reasonOf(cause)}` });
+  new HostError({ code: "InvalidPayload", subject: id, message: `Invalid payload for "${id}": ${errorMessage(cause)}` });
 
 const decodePayload = (channel: Channel, json: unknown) =>
   Schema.decodeUnknownEffect(wireCodec(channel.payload))(json).pipe(Effect.mapError((cause) => invalid(channel.id, cause)));
@@ -138,7 +136,8 @@ const decodePayload = (channel: Channel, json: unknown) =>
 const encodeValue = (channel: Channel, value: unknown) =>
   Schema.encodeUnknownEffect(wireCodec(channel.success))(value).pipe(
     Effect.mapError(
-      (cause) => new HostError({ code: "Failed", subject: channel.id, message: `"${channel.id}" answered what its schema cannot send: ${reasonOf(cause)}` }),
+      (cause) =>
+        new HostError({ code: "Failed", subject: channel.id, message: `"${channel.id}" answered what its schema cannot send: ${errorMessage(cause)}` }),
     ),
   );
 
@@ -147,7 +146,7 @@ const encodeValue = (channel: Channel, value: unknown) =>
  * within its plugin's lifetime, made again on a replacement when it is `repeatable` (`withChannel`). Resolves to its
  * result's JSON.
  */
-export const callJson = (registries: Reader, id: string, json: unknown): Effect.Effect<unknown, unknown> =>
+const callJson = (registries: Reader, id: string, json: unknown): Effect.Effect<unknown, unknown> =>
   withChannel(registries, id, "call", ({ item }, left) =>
     Effect.flatMap(decodePayload(item, json), (payload) =>
       Effect.flatMap(resultOf(item, payload, { left, withdrawn: withdrawnFrom(id, "call") }), (value) => encodeValue(item, value)),
@@ -155,7 +154,7 @@ export const callJson = (registries: Reader, id: string, json: unknown): Effect.
   );
 
 /** Reads a stream's elements as JSON until `take` have come, it ends, or `timeoutMs` passes; withdrawn when its plugin leaves. */
-export const collectJson = (
+const collectJson = (
   registries: Reader,
   id: string,
   json: unknown,
@@ -195,7 +194,7 @@ export const permission = (interaction: Asker, title: string, json: unknown): Ef
   );
 
 /** A result for the model and for scripts: the JSON as bounded text, and whole as `structured`. */
-export const jsonResult = (json: unknown, context: ToolContext, details: Record<string, unknown>): Effect.Effect<ToolResult> =>
+const jsonResult = (json: unknown, context: ToolContext, details: Record<string, unknown>): Effect.Effect<ToolResult> =>
   Effect.promise(async () => {
     const text = JSON.stringify(json, null, 2) ?? "null";
     const { content, fullOutputPath } = await boundOutput([{ type: "text", text }], { budget: outputBudget(context.maxResultChars), name: "lemma" });

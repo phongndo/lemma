@@ -1,12 +1,18 @@
-import { Order, Result, Schema, SchemaIssue, Scope } from "effect";
+import { Order, Result, Schema, Scope } from "effect";
+import { firstIssue } from "../config.ts";
 import { CompositionError } from "../errors.ts";
 import { Events } from "../events.ts";
 import { Hooks, PluginContext } from "../hooks.ts";
 import { Registries } from "../registries.ts";
 import type { Plugin } from "../plugin.ts";
 
-const builtins = new Set<string>([Hooks.key, PluginContext.key, Events.key, Registries.key]);
-const reserved = new Set([...builtins, Scope.Scope.key]);
+/**
+ * The keys of the capabilities the core gives every plugin itself (`Hooks`,
+ * `PluginContext`, `Events`, `Registries`): a plugin requiring one needs no
+ * provider, and none may provide one.
+ */
+export const builtinKeys: ReadonlySet<string> = new Set([Hooks.key, PluginContext.key, Events.key, Registries.key]);
+const reserved = new Set([...builtinKeys, Scope.Scope.key]);
 
 interface Planned {
   /** Dependency order; independent plugins use code-unit id order. */
@@ -159,9 +165,7 @@ export function plan(
     // Absent config decodes as an empty object so all-optional schemas need no row.
     const result = Schema.decodeUnknownResult(plugin.config)(rawConfigs(plugin.id) ?? {});
     if (Result.isFailure(result)) {
-      const path = SchemaIssue.makeFormatterStandardSchemaV1()(result.failure.issue).issues[0]?.path?.filter(
-        (segment): segment is string | number => typeof segment === "string" || typeof segment === "number",
-      );
+      const path = firstIssue(result.failure.issue)?.path;
       errors.push(
         new CompositionError({
           reason: "InvalidConfig",
@@ -179,7 +183,7 @@ export function plan(
   for (const plugin of byId.values()) {
     const required = new Set<Plugin>();
     for (const tag of plugin.requires) {
-      if (builtins.has(tag.key) || provided.has(tag.key)) continue;
+      if (builtinKeys.has(tag.key) || provided.has(tag.key)) continue;
       const provider = providers.get(tag.key);
       if (!provider) {
         errors.push(
@@ -259,4 +263,30 @@ function malformedContract(pluginId: string, spec: unknown, field: "uses" | "imp
     plugins: [pluginId],
     contract: { name: String(spec) },
   });
+}
+
+/**
+ * What must run for `roots` to: each root among `plugins`, and, transitively,
+ * the provider of everything each requires (`providers`, capability key to
+ * plugin id). Each is mapped to the root it was first reached from, a root to
+ * itself. A key with no provider among `plugins` adds nothing.
+ */
+export function requiredBy(plugins: Iterable<Plugin>, providers: ReadonlyMap<string, string>, roots: Iterable<string>): Map<string, string> {
+  const byId = new Map<string, Plugin>();
+  for (const plugin of plugins) byId.set(plugin.id, plugin);
+  const reached = new Map<string, string>();
+  const starts = [...roots].filter((id) => byId.has(id));
+  for (const root of starts) reached.set(root, root);
+  for (const root of starts) {
+    const stack = [root];
+    while (stack.length) {
+      for (const tag of byId.get(stack.pop()!)!.requires) {
+        const provider = providers.get(tag.key);
+        if (provider === undefined || reached.has(provider) || !byId.has(provider)) continue;
+        reached.set(provider, root);
+        stack.push(provider);
+      }
+    }
+  }
+  return reached;
 }

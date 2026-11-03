@@ -397,9 +397,6 @@
 
 .prompt-card-prompt {
   font-weight: 500;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
 }
 
 .prompt-card-reply {
@@ -929,9 +926,6 @@
 .attempt-error {
   flex: 1;
   min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
   font-size: var(--font-size-sm);
 }
 

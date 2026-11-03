@@ -34,7 +34,7 @@ TypeScript 7's compiler.
 
 ```sh
 nix develop -c pnpm install --frozen-lockfile
-nix develop -c pnpm check          # build, import boundaries, test hygiene, lint, format check, type-check
+nix develop -c pnpm check          # build, import boundaries, test hygiene, doc, size, and examples checks, lint, format check, type-check
 nix develop -c pnpm test           # every package's tests
 nix develop -c pnpm run ci         # check, then test: CI's check and test jobs in one
 nix develop -c pnpm format         # write the formatting `pnpm check` expects
@@ -128,9 +128,10 @@ What a soak check finds is a bug to fix, not a change that broke.
 
 ## Benchmarks
 
-`node scripts/bench-compare.ts` compares the core's benchmarks with a base
-revision. With `--harness`, it compares the harness's too
-([the core's README](../packages/core/README.md#develop)).
+`node scripts/bench-compare.ts` compares
+[the core's benchmarks](../packages/core/README.md#develop) with a base
+revision. With `--harness`, it compares the harness's too. Its doc comment says
+how it tells a change from noise.
 
 `pnpm harness:bench` measures what the harness does per step, in simulated
 time, as a session grows ([`@lemma/sim`](../packages/sim/README.md#the-harness-benchmark)).
@@ -155,6 +156,14 @@ Its counts are the same on every machine, and they are hard budgets.
     removed. There is no list of exceptions.
   - It also reports how many points the examples show. `--list` says which
     examples show each.
+- **Docs.** `scripts/check-docs.ts` fails on a doc the code has left behind.
+  - Each domain's README names every extension point its contract declares.
+  - Each name in the tables of [Writing plugins](plugins.md) is one a contract
+    exports.
+  - Each hook and registry says how it composes, in an `@composition` line of
+    its doc comment.
+  - The core's and the router's docs link only within their packages. So a
+    copy of those packages keeps every link working.
 - **Test hygiene.** Tests wait for a condition, never a fixed time. They make
   their temporary files with `mkdtemp`.
   - `scripts/check-boundaries.ts` counts fixed waits and fixed temporary names
@@ -183,7 +192,7 @@ seed and path that replay it.
 
 | Test                                              | Checks                                                                                                                            | Variables (`_RUNS`, `_SEED`, `_PATH`) |
 | ------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------- |
-| `packages/core/tests/sequences.test.ts`           | the kernel's load, reload, fail, and restart sequences                                                                            | `LEMMA_SEQUENCE_*`                    |
+| `packages/core/tests/sequences.test.ts`           | the kernel's load, reload, fail, and restart sequences ([README](../packages/core/README.md#develop))                             | `LEMMA_SEQUENCE_*`                    |
 | `domains/sessions/files/tests/simulation.test.ts` | the session log on a simulated disk that crashes, tears writes, and fails ([README](../domains/sessions/files/README.md#testing)) | `LEMMA_SIM_*`                         |
 | `domains/agent/loop/tests/conversation.test.ts`   | random conversations and checkouts: every request is well formed and rebuilds from the log                                        | `LEMMA_CONVERSATION_*`                |
 | `packages/sim/tests/world.test.ts`                | the harness in simulated time under a seed's workload and faults, crashes, and restarts ([README](../packages/sim/README.md))     | `LEMMA_HARNESS_*` (`_TICKS`)          |

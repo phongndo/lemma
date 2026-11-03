@@ -1,7 +1,8 @@
 # llm.commands
 
-The model providers' commands. Adds them to `Commands`. Requires `Interaction` and `Llm`,
-so a composition without `Llm` still has the other commands. No config.
+The model providers' commands. Adds them to `Commands`. They are a plugin of
+their own, so a composition without `Llm` still has the other commands. No
+config.
 
 | Command      | Title                  | Does                                               |
 | ------------ | ---------------------- | -------------------------------------------------- |

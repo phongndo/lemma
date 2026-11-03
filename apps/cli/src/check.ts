@@ -10,7 +10,8 @@ import { Deferred, Effect } from "effect";
 import type { Scope } from "effect";
 import type { PluginStatus } from "@lemma/contracts";
 import { HOST_FLAGS } from "@lemma/host/launch";
-import { SHUTDOWN_TIMEOUT_MS } from "@lemma/host/limits";
+import { STOP_WAIT_MS } from "@lemma/host/limits";
+import { errorMessage } from "@lemma/contracts";
 import { CliError, ExitCode } from "./command.ts";
 import type { Failure, Io, Output } from "./command.ts";
 import { nodeCommand } from "./release.ts";
@@ -25,11 +26,10 @@ import { nodeCommand } from "./release.ts";
 // From this file's folder, which is the bundle's too (`dist/lemma.mjs`): the launcher either way, as `lemma serve` runs.
 const launcher = fileURLToPath(new URL("../bin/lemma.js", import.meta.url));
 /**
- * How long a host has to start; to stop once asked (`lemma: stopped`), past its own limit; and then to exit, which it
- * does at once unless something its plugin started keeps it running.
+ * How long a host has to start; to stop once asked (`lemma: stopped`), `STOP_WAIT_MS`; and then to exit, which it does
+ * at once unless something its plugin started keeps it running.
  */
 const START_MS = 30_000;
-const STOP_MS = SHUTDOWN_TIMEOUT_MS + 5_000;
 /** How long the host has to answer the check, once it serves: a plugin blocking its event loop holds the answer back. */
 const ASK_MS = 15_000;
 const EXIT_MS = 2_000;
@@ -64,7 +64,7 @@ const readManifest = (path: string): { readonly manifest?: { readonly lemma?: { 
   try {
     return { manifest: JSON.parse(readFileSync(path, "utf8")) as { readonly lemma?: { readonly web?: unknown } } };
   } catch (error) {
-    return { problem: `Its package.json cannot be read: ${error instanceof Error ? error.message : String(error)}` };
+    return { problem: `Its package.json cannot be read: ${errorMessage(error)}` };
   }
 };
 
@@ -73,7 +73,7 @@ const named = (lines: readonly string[]) => [...new Set(lines.flatMap((line) => 
 
 /**
  * How a host stopped: `exited` as asked; `lingered`, done stopping but kept running by something its plugin started
- * (a timer, a socket, a child process); `stuck`, not done stopping within `STOP_MS`; `orphaned`, exited, leaving
+ * (a timer, a socket, a child process); `stuck`, not done stopping within `STOP_WAIT_MS`; `orphaned`, exited, leaving
  * processes its plugin started running.
  */
 type Stopped = "exited" | "lingered" | "stuck" | "orphaned";
@@ -83,7 +83,7 @@ const stopProblems = (stopped: Stopped, failed: Stopped | undefined): string[] =
   ...(stopped === "lingered"
     ? [`The host stopped but did not exit: something the plugin started (a timer, a socket, a child process) keeps it running`]
     : stopped === "stuck"
-      ? [`The host did not finish stopping within ${STOP_MS / 1000} s of being asked to`]
+      ? [`The host did not finish stopping within ${STOP_WAIT_MS / 1000} s of being asked to`]
       : stopped === "orphaned"
         ? ["Processes the plugin started were still running once the host had exited"]
         : []),
@@ -106,7 +106,7 @@ const stops = new WeakMap<ChildProcess, Promise<Stopped>>();
 
 /**
  * Stops a host: SIGTERM, then, once it says it is done (`stopped`), `EXIT_MS` to exit, else, or if it never says so
- * within `STOP_MS`, its whole process group is killed.
+ * within `STOP_WAIT_MS`, its whole process group is killed.
  */
 const stopHost = (child: ChildProcess, stopped: Promise<void>): Promise<Stopped> => {
   const stopping = stops.get(child) ?? stopOnce(child, stopped);
@@ -125,7 +125,7 @@ const stopOnce = (child: ChildProcess, stopped: Promise<void>): Promise<Stopped>
       child.kill("SIGKILL");
     };
     let exiting: ReturnType<typeof setTimeout> | undefined;
-    const stuck = setTimeout(() => kill("stuck"), STOP_MS);
+    const stuck = setTimeout(() => kill("stuck"), STOP_WAIT_MS);
     void stopped.then(() => {
       clearTimeout(stuck);
       exiting = setTimeout(() => kill("lingered"), EXIT_MS);

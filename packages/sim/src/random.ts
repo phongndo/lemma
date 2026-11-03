@@ -1,5 +1,6 @@
 import type { Random } from "effect";
 import type { IdSource } from "@lemma/contracts";
+import { seededRandom } from "@lemma/testing/disk";
 
 /** FNV-1a: a label's 32-bit hash, to seed a part's own source from the run's seed. */
 const hash = (text: string): number => {
@@ -9,26 +10,18 @@ const hash = (text: string): number => {
 };
 
 /**
- * The seeded source a simulation draws every decision from: mulberry32, as `SimDisk`'s. Each part of the simulation
+ * The seeded source a simulation draws every decision from: `SimDisk`'s (`seededRandom`). Each part of the simulation
  * draws from a source of its own (`split`), so a change in how often one part draws leaves the others' draws, and a
  * failing seed's run, as they were.
  */
 export class Prng {
   readonly seed: number;
-  private state: number;
+  /** A draw from [0, 1). */
+  readonly next: () => number;
 
   constructor(seed: number) {
     this.seed = seed >>> 0;
-    this.state = this.seed;
-  }
-
-  /** A draw from [0, 1). */
-  next(): number {
-    this.state = (this.state + 0x6d2b79f5) >>> 0;
-    let t = this.state;
-    t = Math.imul(t ^ (t >>> 15), t | 1);
-    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    this.next = seededRandom(this.seed);
   }
 
   /** An integer from [0, `count`). */

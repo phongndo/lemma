@@ -1,5 +1,5 @@
 import { promises as fs } from "node:fs";
-import { tmpdir } from "node:os";
+import { hostname, tmpdir } from "node:os";
 import * as path from "node:path";
 import { Cause, Effect, Exit } from "effect";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -102,16 +102,18 @@ describe("profiles.switcher", () => {
   });
 
   it("waits on another process making a profile, and takes back a lock one that stopped left", async () => {
-    const lock = path.join(root, "profiles", ".making");
-    await fs.mkdir(lock, { recursive: true });
+    const lock = path.join(root, "profiles", ".making.lock");
+    await fs.mkdir(path.dirname(lock), { recursive: true });
+    // Held by a process that runs.
+    await fs.writeFile(lock, JSON.stringify({ pid: process.pid, host: hostname(), nonce: "other" }));
     const making = ok<ProfileInfo>(call("profiles.create", { name: "after" }));
     // While the lock is held it makes nothing, over far more turns of the loop than making one takes.
     for (let turn = 0; turn < 200; turn++) await fs.stat(root);
-    expect(await fs.readdir(path.join(root, "profiles"))).toEqual([".making"]);
-    await fs.rm(lock, { recursive: true });
+    expect(await fs.readdir(path.join(root, "profiles"))).toEqual([".making.lock"]);
+    await fs.rm(lock);
     expect((await making).name).toBe("after");
-    // Left by one killed while it held it, a minute ago and more.
-    await fs.mkdir(lock);
+    // Left by one killed while it held it, untouched for a minute and more.
+    await fs.writeFile(lock, JSON.stringify({ pid: process.pid, host: hostname(), nonce: "killed" }));
     const old = new Date(Date.now() - 120_000);
     await fs.utimes(lock, old, old);
     expect((await ok<ProfileInfo>(call("profiles.create", { name: "stale" }))).name).toBe("stale");

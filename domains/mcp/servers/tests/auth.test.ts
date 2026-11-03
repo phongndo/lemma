@@ -3,21 +3,16 @@ import { createServer } from "node:net";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { Effect, Fiber, Layer, Stream } from "effect";
-import type { Scope } from "effect";
+import { Effect, Fiber } from "effect";
 import { afterEach, describe, expect, it } from "vitest";
-import { Events, makeCore } from "@lemma/core";
-import { eventFeed, Paths } from "@lemma/contracts";
-import { Mcp, McpChanged, summarize } from "@lemma/mcp";
+import { Mcp, summarize } from "@lemma/mcp";
 import type { McpServerStatus, McpState } from "@lemma/mcp";
-import { ToolInvocation, ToolRunner } from "@lemma/tools";
 import { textOf } from "@lemma/tools/testing";
-import registry from "@lemma/tools-registry";
-import mcpServers from "../src/index.ts";
 import { bearer, callbackParams, finishSignIn, needsSignIn, newState, SignInStore, startSignIn } from "../src/auth.ts";
 import type { SignInTarget } from "../src/auth.ts";
 import { redact, secretsOf } from "../src/config.ts";
 import { Servers } from "../src/servers.ts";
+import { call, until, withCore } from "./helpers.ts";
 import { startOAuthServer } from "./fixtures/oauth.ts";
 import type { OAuthFixture, OAuthOptions } from "./fixtures/oauth.ts";
 
@@ -49,41 +44,8 @@ const occupy = (port: number) =>
 const stored = (home: string) =>
   Effect.promise(async () => JSON.parse(await readFile(join(home, "mcp-auth.json"), "utf8")) as { servers: Record<string, any> });
 
-/** A core with the tools registry and the plugin, in a home of its own with `servers` in its `mcp.json`. */
-const withCore = <A>(
-  servers: Readonly<Record<string, unknown>>,
-  body: (
-    core: { run: <B, E>(effect: Effect.Effect<B, E, Mcp | ToolRunner | Events>) => Effect.Effect<B, E> },
-    home: string,
-  ) => Effect.Effect<A, unknown, Scope.Scope>,
-) =>
-  Effect.runPromise(
-    Effect.scoped(
-      Effect.gen(function* () {
-        const home = yield* Effect.promise(() => mkdtemp(join(tmpdir(), "lemma-mcp-auth-")));
-        yield* Effect.promise(() => writeFile(join(home, "mcp.json"), JSON.stringify({ mcpServers: servers })));
-        const paths = { home, root: home, userConfig: join(home, "config.jsonc"), projectConfig: join(home, "project.jsonc"), cwd: home };
-        const core = yield* makeCore([registry, mcpServers], { provide: { provides: [Paths], layer: Layer.succeed(Paths, paths) } });
-        return yield* body(core as never, home);
-      }),
-    ),
-  );
-
-const until = (check: (state: McpState) => boolean) =>
-  Effect.gen(function* () {
-    const mcp = yield* Mcp;
-    const events = yield* Events;
-    const found = yield* eventFeed(mcp.state, [events.stream(McpChanged)]).pipe(Stream.filter(check), Stream.runHead);
-    return found._tag === "Some" ? found.value : yield* Effect.die(new Error("the state stream ended"));
-  }).pipe(Effect.timeout("30 seconds"));
-
 const remote = (state: McpState): McpServerStatus => state.servers.find((server) => server.name === "remote")!;
 const is = (check: (server: McpServerStatus) => boolean) => (state: McpState) => remote(state) !== undefined && check(remote(state));
-
-const call = (name: string, input: unknown) =>
-  Effect.flatMap(ToolRunner, (tools) =>
-    tools.execute(new ToolInvocation({ sessionId: "s", toolCallId: "c", name, input, cwd: process.cwd() }), new AbortController().signal),
-  );
 
 /** What a browser does with the sign-in page: approves (the fixture at once), and follows the redirect back. */
 const approve = async (url: string) => {

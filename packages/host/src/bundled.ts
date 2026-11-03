@@ -2,6 +2,7 @@ import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { shellWord } from "@lemma/contracts";
+import type { PluginRow } from "@lemma/contracts";
 import type { Plugin } from "@lemma/core";
 import agentCli from "@lemma/agent-cli";
 import agentLoop from "@lemma/agent-loop";
@@ -47,12 +48,6 @@ import workspaceLocal from "@lemma/workspace-local";
 import workspaceSearchFff from "@lemma/workspace-search-fff";
 import workspaceTidy from "@lemma/workspace-tidy";
 import { buildKind, KINDS } from "./paths.ts";
-
-/**
- * Bundled plugins that start off, each until a row turns it on: what changes behavior not yet measured to help
- * everyone. None now.
- */
-export const optIn: ReadonlySet<string> = new Set<string>();
 
 /** The web app build the transport serves when no `staticDir` is configured. */
 export const webDist = fileURLToPath(new URL("../../../apps/web/dist", import.meta.url));
@@ -197,17 +192,37 @@ export const bundledWeb: readonly string[] = [
   "workspace.tidy",
 ];
 
+/** Plugins no config change may turn off, with the reason clients show. Everything they need is locked with them. */
+export const pinned: Readonly<Record<string, string>> = {
+  "transport.server": "Serves the web app and the CLI; replace it with another transport plugin instead of turning it off",
+};
+
 /**
  * Config the app supplies for bundled plugins (the planner's `defaults`): it
  * stays beneath a file's `config` object key by key, so setting the
- * transport's port does not also unset the web app.
+ * transport's port does not also unset the web app. The transport listens on
+ * the port the profile keeps (`profile.json`), when it keeps one.
  */
-export const appDefaults: Readonly<Record<string, Readonly<Record<string, unknown>>>> = {
-  // On its kind's port (`KINDS`), so an installed Lemma's host and a checkout's listen side by side.
-  "transport.server": { staticDir: webDist, port: KINDS[buildKind].port },
+export const appDefaults = (profilePort?: number): Readonly<Record<string, Readonly<Record<string, unknown>>>> => ({
+  // Else on its kind's port (`KINDS`), so an installed Lemma's host and a checkout's listen side by side.
+  "transport.server": { staticDir: webDist, port: profilePort ?? KINDS[buildKind].port },
   "agent.loop": { cli: cliCommand },
   // How it starts another profile's host: this checkout's `lemma serve --detach`; and the profiles it makes, on ports
   // from the one above its kind's.
   "profiles.switcher": { cli: cliCommand, firstPort: KINDS[buildKind].port + 1 },
   "release.updates": { cli: cliCommand },
+});
+
+/**
+ * `rows` with where this run listens (`lemma serve --port 8080 --host 0.0.0.0`) over the transport's config: for this
+ * run only, and never written to the files.
+ */
+export const withAddress = (
+  rows: Readonly<Record<string, PluginRow>>,
+  address: { readonly port?: number; readonly host?: string },
+): Readonly<Record<string, PluginRow>> => {
+  if (Object.keys(address).length === 0) return rows;
+  const row = rows["transport.server"] ?? {};
+  const config = typeof row.config === "object" && row.config !== null ? row.config : {};
+  return { ...rows, "transport.server": { ...row, config: { ...config, ...address } } };
 };

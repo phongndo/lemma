@@ -3,8 +3,8 @@
 The [profiles](../../../docs/configuration.md#profiles) on the host's machine,
 for clients: the web app manages them and switches between them, the desktop
 app opens one in a window of its own, and `lemma --profile <name>` with
-`--env` reaches one on another machine. Requires `Paths`; serves
-`ProfileChannels` from [`@lemma/profiles`](../contract/src/profiles.ts).
+`--env` reaches one on another machine. Serves `ProfileChannels` from
+[`@lemma/profiles`](../contract/src/profiles.ts).
 
 - **`profiles.list`** names every profile under the home (`Paths.root`), the
   default first, with the name it was given, its home, whether its host runs,
@@ -30,9 +30,8 @@ Settings › Profiles lists them, whether there is one or more, a row each: its
 avatar, which changes its picture; its name and its state; Open; and Manage,
 which renames it in place, stops its host, copies its command or folder, and
 deletes it, after a dialog that says all its data goes with it. New profile, in
-the section's head, makes one. A profile deleted in the
-desktop app also closes its windows and clears what their pages kept
-(`lemmaDesktop.profileRemoved`).
+the section's head, makes one. A profile deleted in the desktop app also closes
+its windows and clears what their pages kept (`lemmaDesktop.profileRemoved`).
 
 The web half joins the settings button's menu (`SettingsMenu` in
 [`@lemma/settings`](../../settings/contract/src/index.ts)) only once there is

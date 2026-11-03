@@ -61,9 +61,6 @@
 /* A span's title, cut short before its close button. */
 .trc-title {
   min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 .trc-end {

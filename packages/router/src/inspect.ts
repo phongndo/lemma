@@ -45,7 +45,7 @@ export interface MatchInfo {
   readonly search?: unknown;
 }
 
-/** The router now. */
+/** What `inspect` returns: the router now, in ids and strings, so a devtools panel or a log reads it alike. */
 export interface RouterSnapshot {
   readonly location: HistoryLocation;
   readonly match: MatchInfo;

@@ -14,6 +14,7 @@
   "dependencies": {
     "@lemma/actions": "workspace:*",
     "@lemma/agent": "workspace:*",
+    "@lemma/contracts": "workspace:*",
     "@lemma/llm": "workspace:*",
     "@lemma/look": "workspace:*",
     "@lemma/settings": "workspace:*",

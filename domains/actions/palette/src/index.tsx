@@ -13,7 +13,7 @@ import type { SessionInfo } from "@lemma/sessions";
 import { Commands } from "@lemma/commands/web";
 import { Dialogs, Layers } from "@lemma/frame";
 import { Client, Interactions, Slots, WebPlugins, defineWebPlugin, Isolated, Highlighted, usePlugin } from "@lemma/web";
-import { Workspace } from "@lemma/workspace/web";
+import { folderName, Workspace } from "@lemma/workspace/web";
 import type { PaletteItem, PalettePage, PaletteSource } from "@lemma/actions";
 import type { DialogsService } from "@lemma/frame";
 import type { InteractionsService, SlotsService } from "@lemma/web";
@@ -33,6 +33,7 @@ import {
   Spinner,
 } from "@lemma/look";
 import type { SearchListRow } from "@lemma/look";
+import { errorMessage } from "@lemma/contracts";
 import { listRows, optionRows } from "./rows.ts";
 import type { Found, Item, Row } from "./rows.ts";
 import styles from "./palette.css?inline";
@@ -78,8 +79,6 @@ const SEARCH_MIN = 2;
 const SEARCH_PAUSE = 200;
 
 const loadRecent = (): string[] => loadStrings(RECENT_KEY);
-
-const basename = (path: string) => path.split(/[\\/]/).filter(Boolean).at(-1) ?? path;
 
 const hostIcon = (command: CommandInfo): Component => {
   switch (command.category) {
@@ -152,9 +151,7 @@ function Palette(props: { deps: Deps }) {
   // The host's questions show here while the palette is open, but a form, which needs its dialog.
   onCleanup(interactions.claim(inPalette));
 
-  const close = () => {
-    dialogs.open(undefined);
-  };
+  const close = () => dialogs.open(undefined);
   const choose = (item: Item) => {
     const next = remember(recent(), item.key);
     setRecent(next);
@@ -178,8 +175,6 @@ function Palette(props: { deps: Deps }) {
     if (outcome !== false && dialogs.current() === DIALOG) close();
   };
 
-  // ---------------------------------------------------------------- items
-
   /**
    * An item that asks for a value first asks here; answering runs it. Dismissed, it goes back to the list, or closes the
    * palette when the item's keys opened it asking (`opening`), as there is no list the person saw to go back to.
@@ -197,8 +192,6 @@ function Palette(props: { deps: Deps }) {
   });
 
   const sources = () => slots.list(PaletteSources);
-
-  // ---------------------------------------------------------------- pages
 
   /**
    * Shows `next` in place of the list, at its current item if it marks one (the theme showing); the list is kept as it
@@ -229,8 +222,6 @@ function Palette(props: { deps: Deps }) {
     else setQuery(next);
     setActive(0);
   };
-
-  // ---------------------------------------------------------------- questions
 
   // Host questions take precedence: a running command is waiting on them.
   const asking = createMemo((): Asking | undefined => {
@@ -265,8 +256,6 @@ function Palette(props: { deps: Deps }) {
     ),
   );
 
-  // ---------------------------------------------------------------- search
-
   const [found, setFound] = createSignal<Found>();
   const plugin = usePlugin();
   createEffect(() => {
@@ -286,7 +275,7 @@ function Palette(props: { deps: Deps }) {
       const answers = searching.map((source) =>
         source.search(typed, { signal: abort.signal }).then(
           (items) => ({ label: source.label, items }),
-          (error: unknown) => ({ label: source.label, items: [], error: error instanceof Error ? error.message : String(error) }),
+          (error: unknown) => ({ label: source.label, items: [], error: errorMessage(error) }),
         ),
       );
       void Promise.all(answers).then((groups) => {
@@ -298,8 +287,6 @@ function Palette(props: { deps: Deps }) {
       abort.abort();
     });
   });
-
-  // ---------------------------------------------------------------- rows
 
   const rows = createMemo((): Row[] => {
     const current = asking();
@@ -313,8 +300,6 @@ function Palette(props: { deps: Deps }) {
   });
 
   const items = createMemo(() => rows().filter((row): row is Extract<Row, { type: "item" }> => row.type === "item"));
-
-  // ---------------------------------------------------------------- keys
 
   const submit = () => {
     const current = asking();
@@ -373,8 +358,6 @@ function Palette(props: { deps: Deps }) {
     disposed = true;
   });
 
-  // ---------------------------------------------------------------- view
-
   const value = () => (asking() === undefined ? query() : filter());
   const placeholder = () => {
     const question = asking()?.question;
@@ -419,7 +402,7 @@ function Palette(props: { deps: Deps }) {
         </Show>
         <Highlighted text={row.item.title} matches={row.matches} />
       </span>
-      <span class="palette-hint">{row.item.detail}</span>
+      <span class="palette-hint tw:truncate">{row.item.detail}</span>
       <Show when={row.item.shortcut}>
         <kbd class="palette-kbd">{row.item.shortcut}</kbd>
       </Show>
@@ -577,7 +560,6 @@ export default defineWebPlugin({
       },
       closeKeys: () => keysFor(ActionIds.palette, CLOSE_KEYS, overridesFrom(webPlugins.list())),
     };
-    // Its own sources go through the slot a plugin adds a source to (files, symbols): they are defaults, not built in.
     const source = (id: string, order: number, value: PaletteSource) => slots.add(PaletteSources, { id, order, ...value });
     source("palette.commands", 0, {
       label: "commands",
@@ -623,7 +605,7 @@ export default defineWebPlugin({
       detail,
       keywords: [
         workspace.projectName(session.cwd),
-        basename(session.cwd),
+        folderName(session.cwd),
         session.id,
         ...(session.pinned === true ? ["pinned"] : []),
         ...(session.archived === true ? ["archived"] : []),
@@ -657,7 +639,7 @@ export default defineWebPlugin({
           key: `project:${path}`,
           title: workspace.projectName(path),
           detail: tildePath(path, client.info()?.home),
-          keywords: [path, basename(path)],
+          keywords: [path, folderName(path)],
           icon: FolderIcon,
           run: () => void threads.newThread(path, { inPlace: true }),
         }));

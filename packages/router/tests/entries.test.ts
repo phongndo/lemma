@@ -43,8 +43,11 @@ describe("an entry store", () => {
     const cyclic: Record<string, unknown> = {};
     cyclic["self"] = cyclic;
     expect(() => store.set("e1", "cyclic", cyclic)).not.toThrow();
-    items.set("router.entries", JSON.stringify({ e1: 3, e2: { ok: true }, e3: [1] }));
+    // What it reads is checked: only state by entry is kept, and an object is no list of entries.
+    items.set("router.entries", JSON.stringify([["e1", 3], ["e2", { ok: true }], ["e3", [1]], "e4", [5, {}]]));
     expect(createEntryStore({ storage }).all()).toEqual({ e2: { ok: true } });
+    items.set("router.entries", JSON.stringify({ e2: { ok: true } }));
+    expect(createEntryStore({ storage }).all()).toEqual({});
   });
 });
 

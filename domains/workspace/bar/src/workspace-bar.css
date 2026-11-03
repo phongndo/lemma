@@ -72,13 +72,6 @@ button.strip-chip:hover:not(:disabled),
   padding: 0 6px;
 }
 
-.branch-name {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  min-width: 0;
-  font-weight: 400;
-}
-
 .branch-menu,
 .project-menu {
   width: 340px;

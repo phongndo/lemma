@@ -5,10 +5,9 @@ The devtools: a dock under the app (`mod+shift+d`) whose tabs are the
 is where things change. Provides `Devtools`
 ([`@lemma/devtools/web`](../contract/src/web/index.ts)). Adds the dock to
 `Docks` ([`@lemma/frame`](../../frame/contract/src/index.ts)), its own panels to
-`DevtoolsPanels`, and `devtools.toggle` (`mod+shift+d`, even while typing or
-with a dialog open) and `event-log.open` (`DevtoolsActionIds.eventLog`: Show
-host events) to `Actions`. Requires `Slots`, `Router`, `Client`, `WebPlugins`,
-and `HostPlugins`. No config.
+`DevtoolsPanels`, and two items to `Actions`: `devtools.toggle` (`mod+shift+d`,
+even while typing or with a dialog open) and `event-log.open`
+(`DevtoolsActionIds.eventLog`: Show host events). No config.
 
 | Panel                 | What it shows                                                                                                                                                                                                                |
 | --------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -27,21 +26,20 @@ Trace panel ([its README](../trace/README.md#the-trace-panel)).
 
 ## Behavior
 
-- **It lasts the tab's life.** Whether it is open, which panel, and its height
-  (drag its top edge, or focus it and press ↑ or ↓, from 160px to 85% of the
-  window; a double-click or Enter puts it back to 320px) are kept in
-  `sessionStorage`.
-- **Keys.** The panels' tabs are one Tab stop (← and →, Home, End). A panel's
-  table selects with ↑ and ↓ and opens a row with Enter, and Escape clears a
-  filter being typed in (`rowKeys` and `clearsOnEscape` in
-  [`@lemma/devtools/web`](../contract/src/web/keys.ts), for any panel's).
-  While the focus is in the dock, "/" and Ctrl/Cmd+F focus the shown panel's
-  filter (its first `.dt-filter` input) rather than the prompt or the thread's
-  find bar.
-- **Subjects.** Besides `devtools.plugins` (see `show`), `devtools.inspectors`
-  takes one, an inspector's id; the other panels take none. A plugin's name in
-  a panel opens it in `devtools.plugins`, whose details link to its row on the
-  Plugins page and, while the Trace panel is there, to its spans.
+- **Kept for the tab's life** (`lemma.devtools` in `sessionStorage`): whether
+  it is open, which panel, and its height. Drag its top edge, or press ↑ or ↓
+  while it has focus, for 160px to 85% of the window. A double-click or Enter
+  resets it to 320px.
+- **Keys.** A panel's table selects with ↑ and ↓ and opens a row with Enter.
+  Escape clears a filter being typed in. Any panel gets these by drawing its
+  table and filter with `SelectableTable` and `FilterField`, or with `rowKeys`
+  and `clearsOnEscape` on its own markup
+  ([`@lemma/devtools/web`](../contract/src/web/controls.tsx)). A click on a
+  button or link in a row is that control's, not the row's. While focus is in
+  the dock, "/" and Ctrl/Cmd+F focus the panel's filter, its first
+  `.dt-filter` input.
+- **Subjects.** `devtools.plugins` takes a plugin's id (see `show`), and
+  `devtools.inspectors` an inspector's id. The other panels take none.
 - **Host events.** A model's and a tool's streamed output are hidden until
   **Deltas** is on.
 

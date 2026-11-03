@@ -1,7 +1,6 @@
-import { For, Index, Match, Show, Switch, createEffect, createMemo, createSignal, onCleanup } from "solid-js";
+import { For, Index, Match, Show, Switch, createMemo, createSignal } from "solid-js";
 import { SignInPaste } from "@lemma/credentials/web";
 import { Settings } from "@lemma/settings";
-import { PromptCommands } from "@lemma/threads";
 import { McpChannels } from "@lemma/mcp";
 import type { Exposure, McpAuthStatus, McpServerChange, McpServerConfig, McpServerStatus, McpState, McpToolInfo } from "@lemma/mcp";
 import { Client, Notify, Slots, defineWebPlugin, usePlugin } from "@lemma/web";
@@ -26,6 +25,11 @@ import {
   Toggle,
   XIcon,
 } from "@lemma/look";
+import { errorMessage } from "@lemma/contracts";
+import { plural } from "@lemma/web/format";
+import { createNow } from "@lemma/web/now";
+import { addMcpCommand } from "./command.ts";
+import { EXPOSURES, LABELS, TOOL_EXPOSURES } from "./exposures.ts";
 import { draftOf, entryOf, parsePasted, isImageAddress } from "./form.ts";
 import type { Rows, ServerDraft } from "./form.ts";
 import { statusOf } from "./items.ts";
@@ -33,15 +37,6 @@ import type { ServerItem } from "./items.ts";
 import { addIntegrationsPage } from "./page.tsx";
 import styles from "./mcp.css?inline";
 import pageStyles from "./page.css?inline";
-
-const EXPOSURES: readonly { readonly value: Exposure; readonly label: string }[] = [
-  { value: "codemode", label: "Code mode" },
-  { value: "direct", label: "Direct" },
-  { value: "hidden", label: "Hidden" },
-];
-const LABELS = Object.fromEntries(EXPOSURES.map(({ value, label }) => [value, label])) as Readonly<Record<Exposure, string>>;
-/** The exposure the file gives a tool by its name, or none of its own (`default`): a pattern's, the plugin's, or the server's. */
-const TOOL_EXPOSURES = [{ value: "default", label: "Default" }, ...EXPOSURES];
 
 const STATES: Readonly<Record<McpServerStatus["state"], string>> = {
   connected: "Connected",
@@ -60,8 +55,6 @@ const EXAMPLE = `{
   }
 }`;
 
-const count = (n: number, one: string) => `${n} ${one}${n === 1 ? "" : "s"}`;
-
 interface Actions {
   readonly state: () => McpState | undefined;
   readonly reconnect: (server: string) => Promise<void>;
@@ -79,12 +72,42 @@ interface Actions {
  * when it arrived, since the host's may differ; a clock that ticks each second while it shows.
  */
 function Countdown(props: { inMs: number }) {
-  const plugin = usePlugin();
-  const [now, setNow] = createSignal(Date.now());
-  onCleanup(plugin.every(1000, () => setNow(Date.now())));
+  const now = createNow(1000);
   const at = createMemo(() => Date.now() + props.inMs);
   const seconds = () => Math.max(0, Math.ceil((at() - now()) / 1000));
   return <>{seconds() === 0 ? "now" : seconds() < 90 ? `in ${seconds()}s` : `in ${Math.round(seconds() / 60)}m`}</>;
+}
+
+/** What went wrong with a server or its sign-in, as the host says it. */
+function Warning(props: { message: string }) {
+  return (
+    <div class="callout callout-warn mcp-error">
+      <AlertIcon />
+      <span>{props.message}</span>
+    </div>
+  );
+}
+
+/**
+ * A form's saving, as the plugin's action `what`: whether it is under way, and what it failed with, which the form
+ * shows rather than a toast.
+ */
+function createSave(what: string, work: () => Promise<void>) {
+  const plugin = usePlugin();
+  const [error, setError] = createSignal<string>();
+  const [saving, setSaving] = createSignal(false);
+  const save = plugin.action(what, async () => {
+    setError(undefined);
+    setSaving(true);
+    try {
+      await work();
+    } catch (cause) {
+      setError(errorMessage(cause));
+    } finally {
+      setSaving(false);
+    }
+  });
+  return { save, error, saving };
 }
 
 /**
@@ -158,14 +181,7 @@ function SignInSection(props: { server: string; auth: McpAuthStatus; actions: Ac
           </div>
         </Match>
       </Switch>
-      <Show when={props.auth.error}>
-        {(error) => (
-          <div class="callout callout-warn mcp-error">
-            <AlertIcon />
-            <span>{error()}</span>
-          </div>
-        )}
-      </Show>
+      <Show when={props.auth.error}>{(error) => <Warning message={error()} />}</Show>
     </section>
   );
 }
@@ -182,7 +198,7 @@ function ToolRow(props: { server: string; tool: McpToolInfo; actions: Actions })
     <li class="mcp-tool">
       <span class="mcp-tool-info">
         <code class="mcp-tool-name">{props.tool.name}</code>
-        <Show when={props.tool.description}>{(description) => <span class="mcp-tool-description">{description()}</span>}</Show>
+        <Show when={props.tool.description}>{(description) => <span class="mcp-tool-description tw:truncate">{description()}</span>}</Show>
         <Show when={rule()}>
           {(rule) => (
             <span class="mcp-tool-rule">
@@ -315,23 +331,12 @@ function ServerForm(props: {
   cancel: () => void;
   base?: McpServerConfig;
 }) {
-  const plugin = usePlugin();
   const [draft, setDraft] = createSignal(props.draft);
-  const [error, setError] = createSignal<string>();
-  const [saving, setSaving] = createSignal(false);
   const update = (patch: Partial<ServerDraft>) => setDraft((current) => ({ ...current, ...patch }));
-  const save = plugin.action("save server", async () => {
+  const { save, error, saving } = createSave("save server", async () => {
     const made = entryOf(draft(), props.base);
-    if ("error" in made) return setError(made.error);
-    setError(undefined);
-    setSaving(true);
-    try {
-      await props.submit(draft());
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : String(cause));
-    } finally {
-      setSaving(false);
-    }
+    if ("error" in made) throw new Error(made.error);
+    await props.submit(draft());
   });
   return (
     <form
@@ -430,12 +435,9 @@ function ServerForm(props: {
 
 /** Adding a server: by its form, or by pasting another client's JSON. */
 function AddServer(props: { added: (id: string) => void; cancel: () => void; actions: Actions }) {
-  const plugin = usePlugin();
   const [mode, setMode] = createSignal<"form" | "json">("form");
   const [text, setText] = createSignal("");
   const [name, setName] = createSignal("");
-  const [error, setError] = createSignal<string>();
-  const [saving, setSaving] = createSignal(false);
   const parsed = createMemo(() => (text().trim() === "" ? undefined : parsePasted(text(), name().trim())));
   const one = () => {
     const result = parsed();
@@ -450,19 +452,11 @@ function AddServer(props: { added: (id: string) => void; cancel: () => void; act
     return result !== undefined && "error" in result ? result.error : undefined;
   };
   const taken = (server: string) => props.actions.state()?.servers.some((existing) => existing.name === server && existing.sourceKind === "file") === true;
-  const addPasted = plugin.action("add pasted servers", async () => {
+  const paste = createSave("add pasted servers", async () => {
     const found = servers();
     if (found === undefined) return;
-    setSaving(true);
-    setError(undefined);
-    try {
-      for (const server of found) await props.actions.put(server.name, server.entry);
-      props.added(found[0]!.name);
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : String(cause));
-    } finally {
-      setSaving(false);
-    }
+    for (const server of found) await props.actions.put(server.name, server.entry);
+    props.added(found[0]!.name);
   });
   return (
     <div class="mcp-add">
@@ -515,13 +509,13 @@ function AddServer(props: { added: (id: string) => void; cancel: () => void; act
               )}
             </Show>
             <Show when={!one() && problem()}>{(message) => <p class="integration-error">{message()}</p>}</Show>
-            <Show when={error()}>{(message) => <p class="integration-error">{message()}</p>}</Show>
+            <Show when={paste.error()}>{(message) => <p class="integration-error">{message()}</p>}</Show>
             <div class="integration-buttons">
               <button type="button" class="button" onClick={() => props.cancel()}>
                 Cancel
               </button>
-              <button type="button" class="button button-primary" disabled={saving() || servers() === undefined} onClick={addPasted}>
-                {saving() ? "Adding…" : "Add"}
+              <button type="button" class="button button-primary" disabled={paste.saving() || servers() === undefined} onClick={paste.save}>
+                {paste.saving() ? "Adding…" : "Add"}
               </button>
             </div>
           </div>
@@ -575,7 +569,7 @@ function ServerDetail(props: { id: string; close: () => void; actions: Actions }
                   {" "}
                   · retrying <Countdown inMs={server().retryIn!} />
                 </Show>
-                <Show when={server().state === "connected"}> · {count(reached(), "tool")}</Show>
+                <Show when={server().state === "connected"}> · {plural(reached(), "tool")}</Show>
                 <Show when={server().server?.title ?? server().server?.name}>{(title) => <> · {title()}</>}</Show>
               </span>
             </div>
@@ -612,14 +606,7 @@ function ServerDetail(props: { id: string; close: () => void; actions: Actions }
             </div>
           </header>
           <Show when={server().description}>{(description) => <p class="mcp-server-description">{description()}</p>}</Show>
-          <Show when={server().error}>
-            {(error) => (
-              <div class="callout callout-warn mcp-error">
-                <AlertIcon />
-                <span>{error()}</span>
-              </div>
-            )}
-          </Show>
+          <Show when={server().error}>{(error) => <Warning message={error()} />}</Show>
           <Show when={server().stderr !== undefined && server().state === "failed"}>
             <details class="mcp-stderr">
               <summary>What it printed</summary>
@@ -677,7 +664,7 @@ function ServerDetail(props: { id: string; close: () => void; actions: Actions }
               <Show when={server().tools.length > 0}>
                 <div>
                   <button type="button" class="button small mcp-tools-toggle" aria-expanded={toolsOpen()} onClick={() => setToolsOpen(!toolsOpen())}>
-                    {count(server().tools.length, "tool")}
+                    {plural(server().tools.length, "tool")}
                     <ChevronDownIcon />
                   </button>
                 </div>
@@ -748,132 +735,6 @@ export default defineWebPlugin({
       detail: (props) => <ServerDetail {...props} actions={actions} />,
       add: (props) => <AddServer {...props} actions={actions} />,
     });
-
-    // `/mcp …`: each subcommand over the servers as they are now, offered by name with their state. Its failures are
-    // the composer's to report, so it calls the host directly rather than through `actions`, which report too.
-    const reconnect = (server: string) => client.channel.call(McpChannels.reconnect, { server });
-    const configure = (server: string, change: McpServerChange) => client.channel.call(McpChannels.configure, { server, change });
-    // The message `/mcp login` leaves with the page to open, by server: gone once that sign-in is.
-    const signInToasts = new Map<string, number>();
-    createEffect(() => {
-      // Read first, whether any message waits or not, so a later change runs this again.
-      const servers = state()?.servers ?? [];
-      for (const [name, id] of signInToasts) {
-        if (servers.find((server) => server.name === name)?.auth?.state === "signing-in") continue;
-        notify.dismiss(id);
-        signInToasts.delete(name);
-      }
-    });
-    const named = (name: string | undefined) => {
-      const server = state()?.servers.find((candidate) => candidate.name === name);
-      if (server === undefined) throw new Error(name === undefined ? "Name a server" : `No MCP server “${name}”`);
-      return server;
-    };
-    const servers = (which: (server: McpServerStatus) => boolean = () => true) => ({
-      name: "server",
-      values: () => (state()?.servers ?? []).filter(which).map((server) => ({ value: server.name, detail: statusOf(server).text })),
-    });
-    const exposure = (withDefault: boolean) => ({
-      name: "exposure",
-      values: () => (withDefault ? TOOL_EXPOSURES : EXPOSURES).map(({ value }) => ({ value })),
-    });
-    const exposureOf = (value: string | undefined, withDefault: boolean) => {
-      const found = (withDefault ? TOOL_EXPOSURES : EXPOSURES).find((candidate) => candidate.value === value);
-      if (found === undefined) throw new Error(`Choose one of ${(withDefault ? TOOL_EXPOSURES : EXPOSURES).map((candidate) => candidate.value).join(", ")}`);
-      return found.value;
-    };
-    slots.add(PromptCommands, {
-      id: "mcp",
-      order: 50,
-      description: "See and change the MCP servers",
-      icon: HammerIcon,
-      subcommands: [
-        {
-          name: "list",
-          aliases: ["ls"],
-          description: "Each server and its state",
-          run: () => {
-            const all = state()?.servers ?? [];
-            notify.toast({
-              level: "info",
-              message: all.length === 0 ? "No MCP servers yet" : all.map((server) => `${server.name}: ${statusOf(server).text}`).join("\n"),
-            });
-          },
-        },
-        {
-          name: "reconnect",
-          description: "Close a server's connection and connect again",
-          args: [servers((server) => server.enabled)],
-          run: ({ args }) => reconnect(named(args[0]).name),
-        },
-        {
-          name: "login",
-          aliases: ["sign-in"],
-          description: "Sign in to a remote server that asks",
-          args: [servers((server) => server.auth !== undefined)],
-          run: async ({ args }) => {
-            const { name } = named(args[0]);
-            const { url } = await client.channel.call(McpChannels.signIn, { server: name });
-            const previous = signInToasts.get(name);
-            if (previous !== undefined) notify.dismiss(previous);
-            signInToasts.set(
-              name,
-              notify.toast({
-                level: "info",
-                message: `Approve Lemma's access to ${name} in the browser; Lemma finishes on its own. A browser on another device lands on a page that doesn't load: paste its address in Settings › Integrations › ${name}.`,
-                links: [{ url, label: "Open the sign-in page" }],
-              }),
-            );
-          },
-        },
-        {
-          name: "logout",
-          aliases: ["sign-out"],
-          description: "Forget the sign-in to a server",
-          args: [servers((server) => server.auth?.state === "signed-in")],
-          run: ({ args }) => client.channel.call(McpChannels.signOut, { server: named(args[0]).name }),
-        },
-        {
-          name: "enable",
-          aliases: ["on"],
-          description: "Turn a server on",
-          args: [servers((server) => !server.enabled)],
-          run: ({ args }) => configure(named(args[0]).name, { enabled: true }),
-        },
-        {
-          name: "disable",
-          aliases: ["off"],
-          description: "Turn a server off",
-          args: [servers((server) => server.enabled)],
-          run: ({ args }) => configure(named(args[0]).name, { enabled: false }),
-        },
-        {
-          name: "exposure",
-          description: "How a server's tools reach the model",
-          args: [servers(), exposure(false)],
-          run: ({ args }) => configure(named(args[0]).name, { exposure: exposureOf(args[1], false) as Exposure }),
-        },
-        {
-          name: "tool",
-          description: "How one tool reaches the model",
-          args: [
-            servers(),
-            {
-              name: "tool",
-              values: ({ args }) =>
-                (state()?.servers.find((server) => server.name === args[0])?.tools ?? []).map((tool) => ({ value: tool.name, detail: LABELS[tool.exposure] })),
-            },
-            exposure(true),
-          ],
-          run: ({ args }) => {
-            const server = named(args[0]);
-            const tool = server.tools.find((candidate) => candidate.name === args[1]);
-            if (tool === undefined) throw new Error(`${server.name} has no tool “${args[1] ?? ""}”`);
-            const chosen = exposureOf(args[2], true);
-            return configure(server.name, { tools: { [tool.name]: chosen === "default" ? null : (chosen as Exposure) } });
-          },
-        },
-      ],
-    });
+    addMcpCommand(slots, client, notify, state);
   },
 });

@@ -3,7 +3,7 @@ import { homedir } from "node:os";
 import { dirname, isAbsolute, join, relative, sep } from "node:path";
 import { Effect, Schema } from "effect";
 import { definePlugin } from "@lemma/core";
-import { Inspectors } from "@lemma/contracts";
+import { errorMessage, Inspectors } from "@lemma/contracts";
 import { FileSearchError, FileSearchers } from "@lemma/workspace";
 import type { FileEntry, FileKind, FileSearcher, FileSearchOptions, FileSearchResult } from "@lemma/workspace";
 import { FffIndexes } from "@lemma/workspace/fff";
@@ -27,7 +27,6 @@ interface Page<Item> {
   readonly totalMatched: number;
 }
 
-const message = (cause: unknown) => (cause instanceof Error ? cause.message : String(cause));
 const posix = (path: string) => (sep === "/" ? path : path.split(sep).join("/"));
 const isDirectory = async (path: string) => (await kindOf(path)) === "directory";
 
@@ -101,7 +100,7 @@ export const makeFileSearch = (indexes: Pick<Indexes, "use">) =>
               // One more than asked, and room for what is dropped: the scope folder itself, and `?` matches outside it.
               return { limit, result: run(finder, scoped, limit + 2, options.kind), indexing: finder.isScanning() };
             }),
-          catch: (cause) => new FileSearchError({ path, reason: "Unavailable", message: message(cause), cause }),
+          catch: (cause) => new FileSearchError({ path, reason: "Unavailable", message: errorMessage(cause), cause }),
         });
         const { limit, result, indexing } = found;
         if (!result.ok) return yield* new FileSearchError({ path, reason: "Failed", message: result.error });

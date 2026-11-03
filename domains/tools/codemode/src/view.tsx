@@ -20,7 +20,7 @@ function Calls(props: { calls: readonly CodemodeCallRecord[]; omitted?: number |
               </span>
               <span class="codemode-name">{call().name}</span>
               <Show when={call().args}>
-                <span class="codemode-args">{call().args}</span>
+                <span class="codemode-args tw:truncate">{call().args}</span>
               </Show>
               <span class="codemode-time">{call().replayed ? "from before the restart" : duration(call().durationMs)}</span>
             </li>

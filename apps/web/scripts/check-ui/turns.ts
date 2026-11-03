@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { startHost } from "./hosts.ts";
 import { atBlankThread, boot, checkPlugin } from "./shared.ts";
+import type { Channel, Contracts } from "./shared.ts";
 
 /** A plugin of the user's answering two prompts itself, as `/compact` is answered, rather than placing them. */
 const ANSWERS = `import { definePlugin } from "@lemma/core/plain";
@@ -71,17 +72,17 @@ export const turns = async (): Promise<string> => {
   await page.click(".agent-mode-menu .agent-mode-item >> text=Creator");
   await page.waitForSelector(".agent-mode-menu", { state: "detached" });
   await page.evaluate(async () => {
-    const { Settings } = (await import("/src/ui/api.ts" as string)).api.contracts;
-    (await (window as any).lemma.service(Settings)).open(undefined);
+    const { Settings } = (await import("/src/ui/api.ts" as string)).api.contracts as Contracts;
+    (await window.lemma.service(Settings))!.open(undefined);
   });
   // The turn shows running before the host is seen to take the first prompt; a steer sent in between goes once it is,
   // and is not cleared away with the first prompt's text. Held open on purpose, so the check does not depend on timing:
   // another thread's turn takes the one turn that may run, held at a gate until released, so the steer is typed and
   // sent while the first prompt is still waiting to be taken, every run.
   await page.evaluate(async () => {
-    const { Client } = (await import("/src/ui/api.ts" as string)).api.contracts;
-    const { channel } = await (window as any).lemma.service(Client);
-    const { id } = await channel.call("sessions.create", {});
+    const { Client } = (await import("/src/ui/api.ts" as string)).api.contracts as Contracts;
+    const { channel } = (await window.lemma.service(Client))!;
+    const { id } = (await channel.call("sessions.create", {})) as { readonly id: string };
     void channel.call("agent.prompt", { sessionId: id, content: [{ type: "text", text: "ramble gate:slot" }], requestId: "check-slot" }).catch(() => {});
   });
   await host.mock.reached("slot");
@@ -179,8 +180,8 @@ export const turns = async (): Promise<string> => {
   // The row is a part: a plugin's own replaces it, and the default returns when that goes.
   await checkPlugin(page);
   await page.evaluate(async () => {
-    const { ComposerQueuedPart } = (await import("/src/ui/api.ts" as string)).api.contracts;
-    (window as any).removeRow = (window as any).checkSlots.add(ComposerQueuedPart, {
+    const { ComposerQueuedPart } = (await import("/src/ui/api.ts" as string)).api.contracts as Contracts;
+    window.removeRow = window.checkSlots.add(ComposerQueuedPart, {
       id: "check.queued",
       component: (props: { prompt: { requestId: string } }) => {
         const element = document.createElement("li");
@@ -193,7 +194,7 @@ export const turns = async (): Promise<string> => {
   await page
     .waitForSelector(".composer-queue .check-queued", { timeout: 5_000 })
     .catch(() => assert.fail("a plugin's composer.queued part does not render the queue"));
-  await page.evaluate(() => (window as any).removeRow());
+  await page.evaluate(() => window.removeRow!());
   await page.click(".queued:has-text('for later') .queued-remove");
   await page.waitForSelector(".queued:has-text('for later')", { state: "detached" });
   await page.click(".queued:has-text('and after that') .queued-remove");
@@ -247,15 +248,15 @@ export const turns = async (): Promise<string> => {
   await page.keyboard.press("Enter");
   await page.waitForSelector(".assistant.draft", { timeout: 5_000 });
   await page.evaluate(async () => {
-    const { Router } = (await import("/src/ui/api.ts" as string)).api.contracts;
-    (await (window as any).lemma.service(Router)).navigate("/");
+    const { Router } = (await import("/src/ui/api.ts" as string)).api.contracts as Contracts;
+    (await window.lemma.service(Router))!.navigate("/");
   });
   await atBlankThread(page);
   await page.goBack();
   await page.waitForFunction((path) => location.pathname === path, turnPath);
   await page.evaluate(async () => {
-    const { Client } = (await import("/src/ui/api.ts" as string)).api.contracts;
-    await (await (window as any).lemma.service(Client)).restartPlugin("agent.loop", { force: true });
+    const { Client } = (await import("/src/ui/api.ts" as string)).api.contracts as Contracts;
+    await (await window.lemma.service(Client))!.restartPlugin("agent.loop", { force: true });
   });
   host.mock.release();
   await page
@@ -263,8 +264,8 @@ export const turns = async (): Promise<string> => {
     .catch(() => assert.fail("a turn did not finish on screen after its thread was left and the agent restarted"));
   assert.equal(await page.locator(".user-text:text-is('keep going')").count(), 1, "a prompt sent again after the agent restarted was placed twice");
   const reported: string[] = await page.evaluate(async () => {
-    const { Notify } = (await import("/src/ui/api.ts" as string)).api.contracts;
-    return (await (window as any).lemma.service(Notify))
+    const { Notify } = (await import("/src/ui/api.ts" as string)).api.contracts as Contracts;
+    return (await window.lemma.service(Notify))!
       .toasts()
       .filter((toast: { level: string }) => toast.level === "error")
       .map((toast: { message: string }) => toast.message);
@@ -275,25 +276,25 @@ export const turns = async (): Promise<string> => {
   // A send that fails (the connection dropped, say) keeps its request id: sending the same prompt again, even after
   // moving to another thread and back, is a retry the host can recognise. An edit makes it a new prompt.
   await page.evaluate(async () => {
-    const { Client } = (await import("/src/ui/api.ts" as string)).api.contracts;
-    const channel = (await (window as any).lemma.service(Client)).channel;
+    const { Client } = (await import("/src/ui/api.ts" as string)).api.contracts as Contracts;
+    const channel = (await window.lemma.service(Client))!.channel as Channel;
     const call = channel.call;
-    const sent: (string | undefined)[] = ((window as any).sentIds = []);
+    const sent: (string | undefined)[] = (window.sentIds = []);
     channel.call = (target: string | { id: string }, payload?: { requestId?: string }) => {
       if ((typeof target === "string" ? target : target.id) !== "agent.prompt") return call(target, payload);
       sent.push(payload?.requestId);
       return sent.length === 1 || sent.length === 3 ? Promise.reject(new Error("connection lost")) : call(target, payload);
     };
   });
-  const sentIds = () => page.evaluate(() => (window as any).sentIds as (string | undefined)[]);
+  const sentIds = () => page.evaluate(() => window.sentIds!);
   await page.evaluate(async () => {
-    const { Threads } = (await import("/src/ui/api.ts" as string)).api.contracts;
-    void (await (window as any).lemma.service(Threads)).select(undefined);
+    const { Threads } = (await import("/src/ui/api.ts" as string)).api.contracts as Contracts;
+    void (await window.lemma.service(Threads))!.select(undefined);
   });
   await atBlankThread(page);
   await page.fill("textarea", "retry me");
   await page.keyboard.press("Enter");
-  await page.waitForFunction(() => (window as any).sentIds.length === 1);
+  await page.waitForFunction(() => window.sentIds!.length === 1);
   // The refused prompt is back in the composer, in the blank thread it was written in.
   await page.waitForFunction(
     () => location.pathname.startsWith("/threads/") && (document.querySelector("textarea") as HTMLTextAreaElement).value === "retry me",
@@ -307,20 +308,20 @@ export const turns = async (): Promise<string> => {
     retrying,
   );
   await page.keyboard.press("Enter");
-  await page.waitForFunction(() => (window as any).sentIds.length === 2);
+  await page.waitForFunction(() => window.sentIds!.length === 2);
   const [first, retried] = await sentIds();
   assert(first !== undefined && first === retried, `a retried send had another request id: ${first} then ${retried}`);
   await page.waitForSelector(".turn-footer", { timeout: 20_000 });
   // Fails again, and the person changes the prompt before sending it: a new prompt, with a new id.
   await page.fill("textarea", "edit me");
   await page.keyboard.press("Enter");
-  await page.waitForFunction(() => (window as any).sentIds.length === 3);
+  await page.waitForFunction(() => window.sentIds!.length === 3);
   await page.waitForFunction(() => (document.querySelector("textarea") as HTMLTextAreaElement).value === "edit me");
   // Its turn is held after its first words, so it is still running for every press of Escape below.
   host.mock.hold();
   await page.fill("textarea", "edit me, edited");
   await page.keyboard.press("Enter");
-  await page.waitForFunction(() => (window as any).sentIds.length === 4);
+  await page.waitForFunction(() => window.sentIds!.length === 4);
   const [, , refused, edited] = await sentIds();
   assert(refused !== undefined && edited !== undefined && refused !== edited, "an edited prompt was sent with the failed one's request id");
   // Escape in the prompt stops the running turn when pressed twice (`stop`); the first says so, and stops nothing, nor

@@ -136,9 +136,6 @@
 
 .thread-inspector-label {
   min-width: 0;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
 }
 
 /* Its ×, where a browser's is: on the tab shown, under the pointer, and with focus, its room kept so the tabs do not move. Unseen, it still takes focus. */
@@ -375,9 +372,6 @@
 
 .main-title h1 {
   font-size: var(--font-size-base);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
 }
 
 /* Its own width up to a limit, giving way to the title only when the header runs short: a share of the title's
@@ -385,10 +379,7 @@
 .main-project {
   flex: 0 1 auto;
   max-width: 240px;
-  overflow: hidden;
   color: var(--text-3);
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 .main-sep {

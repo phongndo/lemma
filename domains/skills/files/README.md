@@ -4,8 +4,7 @@ Skills from `SKILL.md` files ([`@lemma/skills`](../contract/src/index.ts)).
 Its host half adds the section `skills` to the agent's `PromptSections` (phase
 `body`, order 600, after the project's instructions), handles
 `AgentInputHook`, and serves `skills.list` (`SkillChannels`). Its web half adds
-the source `skills` (`Skills`) to `ComposerCompletions`. Requires `Paths` and
-`Sessions`; the web half, `Client`, `Workspace`, and `Slots`.
+the source `skills` (`Skills`) to `ComposerCompletions`.
 
 | Config    | Default | What it does                                                                                      |
 | --------- | ------- | ------------------------------------------------------------------------------------------------- |
@@ -15,28 +14,21 @@ the source `skills` (`Skills`) to `ComposerCompletions`. Requires `Paths` and
 ## Behavior
 
 - **A skill** is a folder holding `SKILL.md`: frontmatter with `name` and
-  `description`, then the instructions. The name is the folder's when the
-  frontmatter gives none, and is letters, digits, `_`, `-`, and `.`; a folder
-  whose name is none of that is skipped. The frontmatter is read as the flat
-  YAML skills use (a value plain, quoted, continued, or a `>` or `|` block),
-  by `@lemma/contracts/frontmatter`.
-- **Where.** First those a running plugin's package brings
-  (`"resources": { "skills": "./skills" }`, read from plugin status). Then the
-  user's directories: `~/.lemma/skills` (`Paths.home`), `~/.agents/skills`,
-  and `dirs`, in order. Then a project's: `.agents/skills`
-  and `.lemma/skills` in the session's directory and every one above it, from
-  the root down. Where two share a name the later wins, so the nearest
-  project's does. Like `AGENTS.md`, a project's skills need no trust: they are
-  text the model reads, not code. Files are cached by size and mtime, so an
-  edit is read on the next request.
-- **The model is told** every skill's name, description, and file in the
-  system prompt, and to read the file when a task matches. A skill changed
-  or added changes the logged system prompt from the next request.
-- **Naming one.** A prompt with `$name` at the start of a word, for a skill
-  the session has, gets that skill's instructions appended as a text part
-  (`<skill name="…" path="…">…</skill>`), once each, through `AgentInputHook`:
-  the log keeps the prompt as placed, so the request can be rebuilt from it.
-  A skill already carried in the prompt (one sent again) is not added twice.
-- **The `$` menu** lists the thread directory's skills (`skills.list`) by
-  name, fuzzily, with each description; picking one writes `$name`. With no
-  skills it says where to add one.
+  `description`, then the instructions. The name defaults to the folder's. A
+  name of anything but letters, digits, `_`, `-`, and `.` is skipped. The
+  frontmatter is flat YAML: a value plain, quoted, continued, or a `>` or `|`
+  block (`@lemma/contracts/frontmatter`).
+- **Where.** Skills are read in this order, and a later one wins a name:
+  1. a running plugin's package's (`"resources": { "skills": "./skills" }`);
+  2. `~/.lemma/skills` (`Paths.home`), `~/.agents/skills`, then `dirs`;
+  3. `.agents/skills` and `.lemma/skills` in the session's directory and each
+     one above it, from the root down, so the nearest project's wins.
+- **No trust needed.** A project's skills, like `AGENTS.md`, are text the model
+  reads, not code. An edit is read on the next request.
+- **The model is told** every skill's name, description, and file in the system
+  prompt, and to read the file when a task matches.
+- **Naming one.** `$name` at the start of a word appends that skill's
+  instructions to the prompt as a text part (`<skill name="…" path="…">`), once,
+  through `AgentInputHook`. The log keeps the prompt as placed, so the request
+  rebuilds from it. A skill the prompt already carries is not added twice.
+- **The `$` menu** lists the thread directory's skills (`skills.list`).

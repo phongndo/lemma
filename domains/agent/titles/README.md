@@ -3,8 +3,8 @@
 Names threads with the small model (`SmallModel` in `@lemma/llm`, which
 [llm.small-model](../../llm/small-model/README.md) provides): a title of a few
 words for what a thread asks, as T3 Code, Claude Code, Codex, and OpenCode
-name theirs. Requires `Sessions`, `Llm`, and `SmallModel`. No config: turn it
-off and a thread keeps the title its first prompt gives it.
+name theirs. No config: turn it off and a thread keeps the title its first
+prompt gives it.
 
 - **When.** A thread's first turn titles it from its first prompt, cut near
   60 characters (`titleFrom` in `@lemma/agent/kit`), marking the title
@@ -19,12 +19,13 @@ off and a thread keeps the title its first prompt gives it.
   named rather than answered. It is asked on the model `SmallModel` chooses
   for the thread's model, with the thread's session id, so a plugin around
   model calls (`LlmRequestHook`) counts it with the thread.
-- **The answer.** Its first line of text, found past reasoning in `<think>`
-  tags, a code fence, a label line, or in a JSON object's `title`; the quotes
-  or Markdown around the whole of it, its backticks, and a trailing period
-  dropped, names kept as written, and a title past 60 characters cut at a word
-  (`cleanTitle`). The call is capped at 100 output tokens, or 2,000 for a
-  model asked to reason, which OpenAI and Google count with the answer.
+- **The answer** is its first line of text (`cleanTitle`). It is found past
+  reasoning in `<think>` tags, a code fence, a label line, or in a JSON
+  object's `title`. The quotes or Markdown around the whole of it, its
+  backticks, and a trailing period are dropped, and names kept as written. A
+  title past 60 characters is cut at a word. The call is capped at 100 output
+  tokens, or 2,000 for a model asked to reason, which OpenAI and Google count
+  with the answer.
 - **Your title wins.** It is appended as a `title` event, as a rename is, only
   while no title has come after the provisional one: a rename made while it
   was written stays.

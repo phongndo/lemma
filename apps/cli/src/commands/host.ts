@@ -1,5 +1,5 @@
 import { Effect, Stream } from "effect";
-import { appUrl, HostError, kernelOf, parseConfigValue } from "@lemma/contracts";
+import { appUrl, errorMessage, HostError, kernelOf, parseConfigValue } from "@lemma/contracts";
 import type { ConfigScope, PluginChange, RuntimeEvent, WebComposition } from "@lemma/contracts";
 import { callChannel, dropped } from "@lemma/client";
 import { CliChannels } from "@lemma/cli";
@@ -268,7 +268,7 @@ const payloadOf = (text: string | undefined): { readonly payload?: unknown } | C
   try {
     return { payload: JSON.parse(text) };
   } catch (error) {
-    return usage(`The payload must be JSON: ${error instanceof Error ? error.message : String(error)}`);
+    return usage(`The payload must be JSON: ${errorMessage(error)}`);
   }
 };
 

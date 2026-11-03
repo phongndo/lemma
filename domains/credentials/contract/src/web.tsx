@@ -1,5 +1,6 @@
 import { Show, createSignal } from "solid-js";
 import { usePlugin } from "@lemma/web";
+import { errorMessage } from "@lemma/contracts";
 
 /*
  * Signing in as the web app shows it, whichever plugin's sign-in it is (a model provider's, an MCP server's). Handlers
@@ -31,7 +32,7 @@ export function SignInPaste(props: { readonly class?: string; readonly placehold
     try {
       await props.submit(address);
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : String(cause));
+      setError(errorMessage(cause));
     } finally {
       setSending(false);
     }

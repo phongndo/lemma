@@ -10,6 +10,7 @@ import { applySessionsChange, isBlank, Threads, THREADS_CONTRACT, trackTurn, ups
 import type { PromptAnswer } from "@lemma/threads";
 import { PluginsFacts } from "@lemma/settings";
 import { Client, Notify, Router, Slots, defineWebPlugin } from "@lemma/web";
+import { plural } from "@lemma/web/format";
 import { createAttention } from "./attention.ts";
 import { manageBlankThreads } from "./blank.ts";
 import { createDrafts } from "./drafts.ts";
@@ -231,7 +232,7 @@ export default defineWebPlugin({
       label: "Running",
       value: () => {
         const count = running().length;
-        return count === 0 ? "no turns" : `${count} turn${count === 1 ? "" : "s"}`;
+        return count === 0 ? "no turns" : plural(count, "turn");
       },
     });
 

@@ -1,12 +1,11 @@
-import { createHash } from "node:crypto";
-import { readdir, stat } from "node:fs/promises";
+import { stat } from "node:fs/promises";
 import { registerHooks } from "node:module";
-import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { Effect } from "effect";
 import { Diagnostic } from "@lemma/core";
 import type { Plugin } from "@lemma/core";
-import { entriesOf } from "./manifest.ts";
+import { errorMessage } from "@lemma/contracts";
+import { entriesOf, folderVersion } from "./manifest.ts";
 
 /**
  * Local plugins' host halves are `.ts`, `.js`, or `.mjs` files in `<home>/plugins`
@@ -52,25 +51,9 @@ function shareHostPackages(): void {
   });
 }
 
-/** Every source file of a folder plugin, but its dependencies' and hidden ones: what its version is made from. */
-const sourcesOf = async (dir: string): Promise<string[]> => {
-  const found: string[] = [];
-  for (const entry of await readdir(dir, { withFileTypes: true }).catch(() => [])) {
-    if (entry.name === "node_modules" || entry.name.startsWith(".")) continue;
-    const path = join(dir, entry.name);
-    if (entry.isDirectory()) found.push(...(await sourcesOf(path)));
-    else if (/\.(ts|mts|js|mjs|json)$/.test(entry.name)) found.push(path);
-  }
-  return found;
-};
-
 /** A plugin's version: its file's mtime, or, for a folder plugin, every source file's, so an edit to any is a new one. */
-const versionOf = async (file: string, folder: string | undefined): Promise<string> => {
-  if (folder === undefined) return String((await stat(file)).mtimeMs);
-  const hash = createHash("sha256");
-  for (const path of (await sourcesOf(folder)).sort()) hash.update(`${path}:${(await stat(path).catch(() => undefined))?.mtimeMs ?? 0}\n`);
-  return hash.digest("hex").slice(0, 16);
-};
+const versionOf = async (file: string, folder: string | undefined): Promise<string> =>
+  folder === undefined ? String((await stat(file)).mtimeMs) : folderVersion(folder, (name) => /\.(ts|mts|js|mjs|json)$/.test(name));
 
 /**
  * What each file version made, by its versioned URL: a function export runs
@@ -157,7 +140,7 @@ export function loadLocalPlugins(dirs: readonly string[], context: LocalContext)
           diagnostics.push(
             new Diagnostic({
               severity: "error",
-              message: `${file}: cannot load: ${cause instanceof Error ? cause.message : String(cause)}`,
+              message: `${file}: cannot load: ${errorMessage(cause)}`,
               suggestion: "Fix the file or move it out of the plugins directory (`--safe` starts Lemma without plugin files)",
             }),
           );

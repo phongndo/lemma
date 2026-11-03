@@ -23,144 +23,6 @@ const Icon = (props: { children: JSX.Element; class?: string | undefined }) => (
   </svg>
 );
 
-const PlusIcon = (props: GlyphProps) => (
-  <Icon class={props.class}>
-    <path d="M8 3.5v9M3.5 8h9" />
-  </Icon>
-);
-const StopIcon = (props: GlyphProps) => (
-  <Icon class={props.class}>
-    <rect x="4" y="4" width="8" height="8" rx="1.5" fill="currentColor" stroke="none" />
-  </Icon>
-);
-const SendIcon = (props: GlyphProps) => (
-  <Icon class={props.class}>
-    <path d="M8 13V3.5M4 7.5l4-4 4 4" />
-  </Icon>
-);
-const ChevronIcon = (props: GlyphProps) => (
-  <Icon class={props.class}>
-    <path d="M6 4l4 4-4 4" />
-  </Icon>
-);
-const ChevronDownIcon = (props: GlyphProps) => (
-  <Icon class={props.class}>
-    <path d="M4 6l4 4 4-4" />
-  </Icon>
-);
-const CheckIcon = (props: GlyphProps) => (
-  <Icon class={props.class}>
-    <path d="M3.5 8.5l3 3 6-7" />
-  </Icon>
-);
-const XIcon = (props: GlyphProps) => (
-  <Icon class={props.class}>
-    <path d="M4.5 4.5l7 7M11.5 4.5l-7 7" />
-  </Icon>
-);
-const KeyIcon = (props: GlyphProps) => (
-  <Icon class={props.class}>
-    <circle cx="5.5" cy="10.5" r="2.5" />
-    <path d="M7.5 8.5L13 3M11 5l1.5 1.5M9.5 6.5L11 8" />
-  </Icon>
-);
-const PuzzleIcon = (props: GlyphProps) => (
-  <Icon class={props.class}>
-    <path d="M3 5.5h2.5a1.5 1.5 0 113 0H11v2.5a1.5 1.5 0 110 3V13H3z" />
-  </Icon>
-);
-const CopyIcon = (props: GlyphProps) => (
-  <Icon class={props.class}>
-    <rect x="5.5" y="5.5" width="7" height="7" rx="1.5" />
-    <path d="M10.5 5.5V4a1.5 1.5 0 00-1.5-1.5H4A1.5 1.5 0 002.5 4v5A1.5 1.5 0 004 10.5h1.5" />
-  </Icon>
-);
-const CodeIcon = (props: GlyphProps) => (
-  <Icon class={props.class}>
-    <path d="M5.5 4.5L2 8l3.5 3.5M10.5 4.5L14 8l-3.5 3.5" />
-  </Icon>
-);
-const ImageIcon = (props: GlyphProps) => (
-  <Icon class={props.class}>
-    <rect x="2.5" y="3" width="11" height="10" rx="1.5" />
-    <circle cx="6" cy="6.5" r="1" />
-    <path d="M13.5 10.5l-3-3-6 5.5" />
-  </Icon>
-);
-const AlertIcon = (props: GlyphProps) => (
-  <Icon class={props.class}>
-    <path d="M8 2.5l6 10.5H2z" />
-    <path d="M8 6.5v3M8 11.5v.01" />
-  </Icon>
-);
-const SidebarIcon = (props: GlyphProps) => (
-  <Icon class={props.class}>
-    <rect x="2" y="3" width="12" height="10" rx="2" />
-    <path d="M6 3v10" />
-  </Icon>
-);
-const MenuIcon = (props: GlyphProps) => (
-  <Icon class={props.class}>
-    <path d="M2.5 4.5h11M2.5 8h11M2.5 11.5h11" />
-  </Icon>
-);
-/** Lines of a log, each with its marker. */
-const LogIcon = (props: GlyphProps) => (
-  <Icon class={props.class}>
-    <path d="M6 4.5h7M6 8h7M6 11.5h7M3 4.5h.5M3 8h.5M3 11.5h.5" />
-  </Icon>
-);
-
-const RefreshIcon = (props: GlyphProps) => (
-  <Icon class={props.class}>
-    <path d="M13 8a5 5 0 11-1.5-3.5M13 2.5V5h-2.5" />
-  </Icon>
-);
-const ExternalIcon = (props: GlyphProps) => (
-  <Icon class={props.class}>
-    <path d="M9 3h4v4M13 3L7.5 8.5M11 9.5V13H3V5h3.5" />
-  </Icon>
-);
-const FileIcon = (props: GlyphProps) => (
-  <Icon class={props.class}>
-    <path d="M4.5 2.5h4.5l2.5 2.5v7.5a1 1 0 01-1 1h-6a1 1 0 01-1-1v-9a1 1 0 011-1z" />
-    <path d="M9 2.5V5h2.5" />
-  </Icon>
-);
-const FolderIcon = (props: GlyphProps) => (
-  <Icon class={props.class}>
-    <path d="M2.5 4.5a1 1 0 011-1h3l1.5 1.5h4.5a1 1 0 011 1v6a1 1 0 01-1 1h-9a1 1 0 01-1-1z" />
-  </Icon>
-);
-const FolderOpenIcon = (props: GlyphProps) => (
-  <Icon class={props.class}>
-    <path d="M2.5 11.5v-7a1 1 0 011-1h3l1.5 1.5h4a1 1 0 011 1v1" />
-    <path d="M2.5 11.5l1.6-4.2a1 1 0 01.9-.6h8.1a.6.6 0 01.6.8l-1.4 3.7a1 1 0 01-.9.6H3.5a1 1 0 01-1-.3z" />
-  </Icon>
-);
-const FilterIcon = (props: GlyphProps) => (
-  <Icon class={props.class}>
-    <path d="M2.5 4h11M4.5 8h7M6.5 12h3" />
-  </Icon>
-);
-const SearchIcon = (props: GlyphProps) => (
-  <Icon class={props.class}>
-    <circle cx="7" cy="7" r="4.25" />
-    <path d="M10.25 10.25L13.5 13.5" />
-  </Icon>
-);
-const FolderPlusIcon = (props: GlyphProps) => (
-  <Icon class={props.class}>
-    <path d="M2.5 4.5a1 1 0 011-1h3l1.5 1.5h4.5a1 1 0 011 1v6a1 1 0 01-1 1h-9a1 1 0 01-1-1z" />
-    <path d="M8 7.25v3.5M6.25 9h3.5" />
-  </Icon>
-);
-const PenSquareIcon = (props: GlyphProps) => (
-  <Icon class={props.class}>
-    <path d="M13 8.5V12a1.5 1.5 0 01-1.5 1.5h-7A1.5 1.5 0 013 12V4.5A1.5 1.5 0 014.5 3H8" />
-    <path d="M11.5 2.5l2 2L8 10H6V8z" />
-  </Icon>
-);
 /** Lucide's "settings" gear, on its 24px grid. */
 const GearIcon = (props: GlyphProps) => (
   <svg
@@ -179,258 +41,220 @@ const GearIcon = (props: GlyphProps) => (
     <circle cx="12" cy="12" r="3" />
   </svg>
 );
-const GitBranchIcon = (props: GlyphProps) => (
-  <Icon class={props.class}>
-    <circle cx="4.5" cy="3.5" r="1.5" />
-    <circle cx="4.5" cy="12.5" r="1.5" />
-    <circle cx="11.5" cy="5" r="1.5" />
-    <path d="M4.5 5v6M11.5 6.5c0 3-7 2.5-7 4.5" />
-  </Icon>
-);
-const WorktreeIcon = (props: GlyphProps) => (
-  <Icon class={props.class}>
-    <circle cx="4" cy="3.5" r="1.5" />
-    <circle cx="4" cy="12.5" r="1.5" />
-    <circle cx="12" cy="12.5" r="1.5" />
-    <path d="M4 5v6M4 8h5a3 3 0 013 3v0" />
-  </Icon>
-);
-const LaptopIcon = (props: GlyphProps) => (
-  <Icon class={props.class}>
-    <rect x="3" y="3.5" width="10" height="7" rx="1" />
-    <path d="M1.5 12.5h13" />
-  </Icon>
-);
-const StarIcon = (props: GlyphProps) => (
-  <Icon class={props.class}>
-    <path d="M8 2.2l1.75 3.6 3.95.55-2.87 2.77.7 3.93L8 11.2l-3.53 1.85.7-3.93L2.3 6.35l3.95-.55z" fill={props.filled ? "currentColor" : "none"} />
-  </Icon>
-);
-const MoreIcon = (props: GlyphProps) => (
-  <Icon class={props.class}>
-    <circle cx="3.5" cy="8" r="1" fill="currentColor" stroke="none" />
-    <circle cx="8" cy="8" r="1" fill="currentColor" stroke="none" />
-    <circle cx="12.5" cy="8" r="1" fill="currentColor" stroke="none" />
-  </Icon>
-);
-const PinIcon = (props: GlyphProps) => (
-  <Icon class={props.class}>
-    <path d="M6 2.5h4M6.75 2.5v4L4.5 9.25h7L9.25 6.5v-4M8 9.25v4.25" />
-  </Icon>
-);
-/** A question in a circle: something waits on an answer. */
-const QuestionIcon = (props: GlyphProps) => (
-  <Icon class={props.class}>
-    <circle cx="8" cy="8" r="5.75" />
-    <path d="M6.4 6.5a1.7 1.7 0 113 1.1c-.6.5-1.4.8-1.4 1.8" />
-    <circle cx="8" cy="11.25" r=".6" fill="currentColor" stroke="none" />
-  </Icon>
-);
-/** A pin struck through: unpin it. */
-const PinOffIcon = (props: GlyphProps) => (
-  <Icon class={props.class}>
-    <path d="M6 2.5h4M6.75 2.5v4L4.5 9.25h7L9.25 6.5v-4M8 9.25v4.25M2.5 2.5l11 11" />
-  </Icon>
-);
-const ArchiveIcon = (props: GlyphProps) => (
-  <Icon class={props.class}>
-    <rect x="2.5" y="3" width="11" height="3" rx=".75" />
-    <path d="M3.5 6v6a1 1 0 001 1h7a1 1 0 001-1V6M6.5 8.5h3" />
-  </Icon>
-);
-const HistoryIcon = (props: GlyphProps) => (
-  <Icon class={props.class}>
-    <path d="M2.8 8a5.2 5.2 0 101.5-3.7M2.5 2.5v2.3h2.3M8 5.2V8l2 1.3" />
-  </Icon>
-);
-const GridIcon = (props: GlyphProps) => (
-  <Icon class={props.class}>
-    <rect x="2.5" y="2.5" width="4.5" height="4.5" rx="1" />
-    <rect x="9" y="2.5" width="4.5" height="4.5" rx="1" />
-    <rect x="2.5" y="9" width="4.5" height="4.5" rx="1" />
-    <rect x="9" y="9" width="4.5" height="4.5" rx="1" />
-  </Icon>
-);
-const TrashIcon = (props: GlyphProps) => (
-  <Icon class={props.class}>
-    <path d="M3 4.5h10M6.5 4.5V3h3v1.5M4.5 4.5l.6 8a1 1 0 001 .9h3.8a1 1 0 001-.9l.6-8" />
-  </Icon>
-);
-const PencilIcon = (props: GlyphProps) => (
-  <Icon class={props.class}>
-    <path d="M10.5 3l2.5 2.5L6 12.5H3.5V10z" />
-  </Icon>
-);
-const BrainIcon = (props: GlyphProps) => (
-  <Icon class={props.class}>
-    <path d="M6 3a2 2 0 00-2 2 2 2 0 00-1 3.5A2 2 0 005 12a2 2 0 003 .5V3.5A2 2 0 006 3zM10 3a2 2 0 012 2 2 2 0 011 3.5 2 2 0 01-2 3.5 2 2 0 01-3 .5" />
-  </Icon>
-);
+
 const Spinner = (props: GlyphProps) => <span class={`spinner ${props.class ?? ""}`} aria-hidden="true" data-motion />;
-const ChatIcon = (props: GlyphProps) => (
-  <Icon class={props.class}>
-    <path d="M3 4.5A1.5 1.5 0 014.5 3h7A1.5 1.5 0 0113 4.5v5a1.5 1.5 0 01-1.5 1.5H7l-3 2.5V11h.5A1.5 1.5 0 013 9.5z" />
-  </Icon>
-);
-const TrajectoryIcon = (props: GlyphProps) => (
-  <Icon class={props.class}>
-    <path d="M2.5 4h4M4.5 8h6M8.5 12h5" />
-    <path d="M2.5 2.5v11" stroke-opacity="0.45" />
-  </Icon>
-);
-const CommandIcon = (props: GlyphProps) => (
-  <Icon class={props.class}>
+
+/** Each stroke icon's shapes, by name, drawn in an `Icon`. */
+const shapes: Readonly<Record<Exclude<IconName, "gear" | "spinner">, (props: GlyphProps) => JSX.Element>> = {
+  plus: () => <path d="M8 3.5v9M3.5 8h9" />,
+  stop: () => <rect x="4" y="4" width="8" height="8" rx="1.5" fill="currentColor" stroke="none" />,
+  send: () => <path d="M8 13V3.5M4 7.5l4-4 4 4" />,
+  chevron: () => <path d="M6 4l4 4-4 4" />,
+  "chevron-down": () => <path d="M4 6l4 4 4-4" />,
+  check: () => <path d="M3.5 8.5l3 3 6-7" />,
+  x: () => <path d="M4.5 4.5l7 7M11.5 4.5l-7 7" />,
+  key: () => (
+    <>
+      <circle cx="5.5" cy="10.5" r="2.5" />
+      <path d="M7.5 8.5L13 3M11 5l1.5 1.5M9.5 6.5L11 8" />
+    </>
+  ),
+  puzzle: () => <path d="M3 5.5h2.5a1.5 1.5 0 113 0H11v2.5a1.5 1.5 0 110 3V13H3z" />,
+  copy: () => (
+    <>
+      <rect x="5.5" y="5.5" width="7" height="7" rx="1.5" />
+      <path d="M10.5 5.5V4a1.5 1.5 0 00-1.5-1.5H4A1.5 1.5 0 002.5 4v5A1.5 1.5 0 004 10.5h1.5" />
+    </>
+  ),
+  code: () => <path d="M5.5 4.5L2 8l3.5 3.5M10.5 4.5L14 8l-3.5 3.5" />,
+  image: () => (
+    <>
+      <rect x="2.5" y="3" width="11" height="10" rx="1.5" />
+      <circle cx="6" cy="6.5" r="1" />
+      <path d="M13.5 10.5l-3-3-6 5.5" />
+    </>
+  ),
+  alert: () => (
+    <>
+      <path d="M8 2.5l6 10.5H2z" />
+      <path d="M8 6.5v3M8 11.5v.01" />
+    </>
+  ),
+  sidebar: () => (
+    <>
+      <rect x="2" y="3" width="12" height="10" rx="2" />
+      <path d="M6 3v10" />
+    </>
+  ),
+  menu: () => <path d="M2.5 4.5h11M2.5 8h11M2.5 11.5h11" />,
+  /** Lines of a log, each with its marker. */
+  log: () => <path d="M6 4.5h7M6 8h7M6 11.5h7M3 4.5h.5M3 8h.5M3 11.5h.5" />,
+  refresh: () => <path d="M13 8a5 5 0 11-1.5-3.5M13 2.5V5h-2.5" />,
+  external: () => <path d="M9 3h4v4M13 3L7.5 8.5M11 9.5V13H3V5h3.5" />,
+  file: () => (
+    <>
+      <path d="M4.5 2.5h4.5l2.5 2.5v7.5a1 1 0 01-1 1h-6a1 1 0 01-1-1v-9a1 1 0 011-1z" />
+      <path d="M9 2.5V5h2.5" />
+    </>
+  ),
+  folder: () => <path d="M2.5 4.5a1 1 0 011-1h3l1.5 1.5h4.5a1 1 0 011 1v6a1 1 0 01-1 1h-9a1 1 0 01-1-1z" />,
+  "folder-open": () => (
+    <>
+      <path d="M2.5 11.5v-7a1 1 0 011-1h3l1.5 1.5h4a1 1 0 011 1v1" />
+      <path d="M2.5 11.5l1.6-4.2a1 1 0 01.9-.6h8.1a.6.6 0 01.6.8l-1.4 3.7a1 1 0 01-.9.6H3.5a1 1 0 01-1-.3z" />
+    </>
+  ),
+  filter: () => <path d="M2.5 4h11M4.5 8h7M6.5 12h3" />,
+  search: () => (
+    <>
+      <circle cx="7" cy="7" r="4.25" />
+      <path d="M10.25 10.25L13.5 13.5" />
+    </>
+  ),
+  "folder-plus": () => (
+    <>
+      <path d="M2.5 4.5a1 1 0 011-1h3l1.5 1.5h4.5a1 1 0 011 1v6a1 1 0 01-1 1h-9a1 1 0 01-1-1z" />
+      <path d="M8 7.25v3.5M6.25 9h3.5" />
+    </>
+  ),
+  "pen-square": () => (
+    <>
+      <path d="M13 8.5V12a1.5 1.5 0 01-1.5 1.5h-7A1.5 1.5 0 013 12V4.5A1.5 1.5 0 014.5 3H8" />
+      <path d="M11.5 2.5l2 2L8 10H6V8z" />
+    </>
+  ),
+  "git-branch": () => (
+    <>
+      <circle cx="4.5" cy="3.5" r="1.5" />
+      <circle cx="4.5" cy="12.5" r="1.5" />
+      <circle cx="11.5" cy="5" r="1.5" />
+      <path d="M4.5 5v6M11.5 6.5c0 3-7 2.5-7 4.5" />
+    </>
+  ),
+  worktree: () => (
+    <>
+      <circle cx="4" cy="3.5" r="1.5" />
+      <circle cx="4" cy="12.5" r="1.5" />
+      <circle cx="12" cy="12.5" r="1.5" />
+      <path d="M4 5v6M4 8h5a3 3 0 013 3v0" />
+    </>
+  ),
+  laptop: () => (
+    <>
+      <rect x="3" y="3.5" width="10" height="7" rx="1" />
+      <path d="M1.5 12.5h13" />
+    </>
+  ),
+  star: (props) => (
+    <path d="M8 2.2l1.75 3.6 3.95.55-2.87 2.77.7 3.93L8 11.2l-3.53 1.85.7-3.93L2.3 6.35l3.95-.55z" fill={props.filled ? "currentColor" : "none"} />
+  ),
+  more: () => (
+    <>
+      <circle cx="3.5" cy="8" r="1" fill="currentColor" stroke="none" />
+      <circle cx="8" cy="8" r="1" fill="currentColor" stroke="none" />
+      <circle cx="12.5" cy="8" r="1" fill="currentColor" stroke="none" />
+    </>
+  ),
+  pin: () => <path d="M6 2.5h4M6.75 2.5v4L4.5 9.25h7L9.25 6.5v-4M8 9.25v4.25" />,
+  /** A pin struck through: unpin it. */
+  "pin-off": () => <path d="M6 2.5h4M6.75 2.5v4L4.5 9.25h7L9.25 6.5v-4M8 9.25v4.25M2.5 2.5l11 11" />,
+  /** A question in a circle: something waits on an answer. */
+  question: () => (
+    <>
+      <circle cx="8" cy="8" r="5.75" />
+      <path d="M6.4 6.5a1.7 1.7 0 113 1.1c-.6.5-1.4.8-1.4 1.8" />
+      <circle cx="8" cy="11.25" r=".6" fill="currentColor" stroke="none" />
+    </>
+  ),
+  archive: () => (
+    <>
+      <rect x="2.5" y="3" width="11" height="3" rx=".75" />
+      <path d="M3.5 6v6a1 1 0 001 1h7a1 1 0 001-1V6M6.5 8.5h3" />
+    </>
+  ),
+  history: () => <path d="M2.8 8a5.2 5.2 0 101.5-3.7M2.5 2.5v2.3h2.3M8 5.2V8l2 1.3" />,
+  grid: () => (
+    <>
+      <rect x="2.5" y="2.5" width="4.5" height="4.5" rx="1" />
+      <rect x="9" y="2.5" width="4.5" height="4.5" rx="1" />
+      <rect x="2.5" y="9" width="4.5" height="4.5" rx="1" />
+      <rect x="9" y="9" width="4.5" height="4.5" rx="1" />
+    </>
+  ),
+  trash: () => <path d="M3 4.5h10M6.5 4.5V3h3v1.5M4.5 4.5l.6 8a1 1 0 001 .9h3.8a1 1 0 001-.9l.6-8" />,
+  pencil: () => <path d="M10.5 3l2.5 2.5L6 12.5H3.5V10z" />,
+  brain: () => (
+    <path d="M6 3a2 2 0 00-2 2 2 2 0 00-1 3.5A2 2 0 005 12a2 2 0 003 .5V3.5A2 2 0 006 3zM10 3a2 2 0 012 2 2 2 0 011 3.5 2 2 0 01-2 3.5 2 2 0 01-3 .5" />
+  ),
+  chat: () => <path d="M3 4.5A1.5 1.5 0 014.5 3h7A1.5 1.5 0 0113 4.5v5a1.5 1.5 0 01-1.5 1.5H7l-3 2.5V11h.5A1.5 1.5 0 013 9.5z" />,
+  trajectory: () => (
+    <>
+      <path d="M2.5 4h4M4.5 8h6M8.5 12h5" />
+      <path d="M2.5 2.5v11" stroke-opacity="0.45" />
+    </>
+  ),
+  command: () => (
     <path d="M6 6V4.5A1.5 1.5 0 104.5 6H6zm0 0h4m-4 0v4m4-4V4.5A1.5 1.5 0 1111.5 6H10zm0 0v4m0 0h1.5a1.5 1.5 0 11-1.5 1.5V10zm0 0H6m0 0v1.5A1.5 1.5 0 114.5 10H6z" />
-  </Icon>
-);
-const TerminalIcon = (props: GlyphProps) => (
-  <Icon class={props.class}>
-    <path d="M3 4.5L6.5 8 3 11.5M8 12h5" />
-  </Icon>
-);
-const HammerIcon = (props: GlyphProps) => (
-  <Icon class={props.class}>
-    <path d="M9.5 2.5l4 4-1.75 1.75-4-4zM8.6 5.4L2.8 11.2a1.4 1.4 0 002 2l5.8-5.8" />
-  </Icon>
-);
-const PlugIcon = (props: GlyphProps) => (
-  <Icon class={props.class}>
-    <path d="M6 1.5v3M10 1.5v3M4 4.5h8v2.5a4 4 0 01-8 0zM8 11v3.5" />
-  </Icon>
-);
-const SlidersIcon = (props: GlyphProps) => (
-  <Icon class={props.class}>
-    <path d="M2.5 4.5h6M11.5 4.5h2M2.5 11.5h2M7.5 11.5h6" />
-    <circle cx="10" cy="4.5" r="1.5" />
-    <circle cx="6" cy="11.5" r="1.5" />
-  </Icon>
-);
-const PaletteIcon = (props: GlyphProps) => (
-  <Icon class={props.class}>
-    <path d="M8 2.5a5.5 5.5 0 000 11c.9 0 1.25-.6 1.25-1.2 0-.8-.75-1.05-.75-1.8 0-.7.55-1.25 1.25-1.25h1.5A2.25 2.25 0 0013.5 7 5.5 4.5 0 008 2.5z" />
-    <circle cx="5.25" cy="7.25" r=".6" fill="currentColor" />
-    <circle cx="7.5" cy="5" r=".6" fill="currentColor" />
-    <circle cx="10.5" cy="5.5" r=".6" fill="currentColor" />
-  </Icon>
-);
-const ArrowLeftIcon = (props: GlyphProps) => (
-  <Icon class={props.class}>
-    <path d="M13 8H3.5M7.5 4L3.5 8l4 4" />
-  </Icon>
-);
-/** An arrow that turns back on itself: a prompt sent into a turn already under way. */
-const RedoIcon = (props: GlyphProps) => (
-  <Icon class={props.class}>
-    <path d="M10 3.5l3 3-3 3M13 6.5H6.5a3.5 3.5 0 000 7H8" />
-  </Icon>
-);
-const UndoIcon = (props: GlyphProps) => (
-  <Icon class={props.class}>
-    <path d="M6 3.5l-3 3 3 3M3 6.5h6.5a3.5 3.5 0 010 7H8" />
-  </Icon>
-);
-/** Two chain links. */
-const LinkIcon = (props: GlyphProps) => (
-  <Icon class={props.class}>
-    <path d="M6.7 9.3a2.9 2.9 0 004.1 0l2-2a2.9 2.9 0 00-4.1-4.1l-.9.9" />
-    <path d="M9.3 6.7a2.9 2.9 0 00-4.1 0l-2 2a2.9 2.9 0 004.1 4.1l.9-.9" />
-  </Icon>
-);
-const SkipIcon = (props: GlyphProps) => (
-  <Icon class={props.class}>
-    <path d="M4 3.5l6 4.5-6 4.5zM12.5 3.5v9" />
-  </Icon>
-);
-/** Corners pointing out: something fills the page. */
-const MaximizeIcon = (props: GlyphProps) => (
-  <Icon class={props.class}>
-    <path d="M9.5 3H13v3.5M13 3L9 7M6.5 13H3V9.5M3 13l4-4" />
-  </Icon>
-);
-/** Corners pointing in: it gives the page back. */
-const MinimizeIcon = (props: GlyphProps) => (
-  <Icon class={props.class}>
-    <path d="M13 7H9.5V3.5M9.5 7L13.5 3M3 9h3.5v3.5M6.5 9l-4 4" />
-  </Icon>
-);
+  ),
+  terminal: () => <path d="M3 4.5L6.5 8 3 11.5M8 12h5" />,
+  hammer: () => <path d="M9.5 2.5l4 4-1.75 1.75-4-4zM8.6 5.4L2.8 11.2a1.4 1.4 0 002 2l5.8-5.8" />,
+  plug: () => <path d="M6 1.5v3M10 1.5v3M4 4.5h8v2.5a4 4 0 01-8 0zM8 11v3.5" />,
+  sliders: () => (
+    <>
+      <path d="M2.5 4.5h6M11.5 4.5h2M2.5 11.5h2M7.5 11.5h6" />
+      <circle cx="10" cy="4.5" r="1.5" />
+      <circle cx="6" cy="11.5" r="1.5" />
+    </>
+  ),
+  palette: () => (
+    <>
+      <path d="M8 2.5a5.5 5.5 0 000 11c.9 0 1.25-.6 1.25-1.2 0-.8-.75-1.05-.75-1.8 0-.7.55-1.25 1.25-1.25h1.5A2.25 2.25 0 0013.5 7 5.5 4.5 0 008 2.5z" />
+      <circle cx="5.25" cy="7.25" r=".6" fill="currentColor" />
+      <circle cx="7.5" cy="5" r=".6" fill="currentColor" />
+      <circle cx="10.5" cy="5.5" r=".6" fill="currentColor" />
+    </>
+  ),
+  "arrow-left": () => <path d="M13 8H3.5M7.5 4L3.5 8l4 4" />,
+  /** An arrow that turns back on itself: a prompt sent into a turn already under way. */
+  redo: () => <path d="M10 3.5l3 3-3 3M13 6.5H6.5a3.5 3.5 0 000 7H8" />,
+  undo: () => <path d="M6 3.5l-3 3 3 3M3 6.5h6.5a3.5 3.5 0 010 7H8" />,
+  /** Two chain links. */
+  link: () => (
+    <>
+      <path d="M6.7 9.3a2.9 2.9 0 004.1 0l2-2a2.9 2.9 0 00-4.1-4.1l-.9.9" />
+      <path d="M9.3 6.7a2.9 2.9 0 00-4.1 0l-2 2a2.9 2.9 0 004.1 4.1l.9-.9" />
+    </>
+  ),
+  skip: () => <path d="M4 3.5l6 4.5-6 4.5zM12.5 3.5v9" />,
+  /** Corners pointing out: something fills the page. */
+  maximize: () => <path d="M9.5 3H13v3.5M13 3L9 7M6.5 13H3V9.5M3 13l4-4" />,
+  /** Corners pointing in: it gives the page back. */
+  minimize: () => <path d="M13 7H9.5V3.5M9.5 7L13.5 3M3 9h3.5v3.5M6.5 9l-4 4" />,
+  /** A small robot's head: an agent, a session working for another. */
+  agent: () => (
+    <>
+      <rect x="3" y="5" width="10" height="8" rx="2" />
+      <path d="M8 2.5V5M6.2 8.5v1M9.8 8.5v1M1.5 9v1.5M14.5 9v1.5" />
+    </>
+  ),
+  /** A bell: what tells the person, notifications. */
+  bell: () => (
+    <>
+      <path d="M4.25 10.75V7.5a3.75 3.75 0 017.5 0v3.25l1 1.5h-9.5z" />
+      <path d="M6.75 13.75a1.4 1.4 0 002.5 0" />
+    </>
+  ),
+};
 
-/** A small robot's head: an agent, a session working for another. */
-const AgentIcon = (props: GlyphProps) => (
-  <Icon class={props.class}>
-    <rect x="3" y="5" width="10" height="8" rx="2" />
-    <path d="M8 2.5V5M6.2 8.5v1M9.8 8.5v1M1.5 9v1.5M14.5 9v1.5" />
-  </Icon>
-);
+/** A stroke icon: its shapes in an `Icon`. */
+const stroke =
+  (draw: (props: GlyphProps) => JSX.Element): Component<GlyphProps> =>
+  (props) => <Icon class={props.class}>{draw(props)}</Icon>;
 
-/** A bell: what tells the person, notifications. */
-const BellIcon = (props: GlyphProps) => (
-  <Icon class={props.class}>
-    <path d="M4.25 10.75V7.5a3.75 3.75 0 017.5 0v3.25l1 1.5h-9.5z" />
-    <path d="M6.75 13.75a1.4 1.4 0 002.5 0" />
-  </Icon>
-);
+const strokes = Object.fromEntries(Object.entries(shapes).map(([name, draw]) => [name, stroke(draw)])) as Record<keyof typeof shapes, Component<GlyphProps>>;
 
 /** The default icons by name. */
-export const icons: Readonly<Record<IconName, Component<GlyphProps>>> = {
-  plus: PlusIcon,
-  stop: StopIcon,
-  send: SendIcon,
-  chevron: ChevronIcon,
-  "chevron-down": ChevronDownIcon,
-  check: CheckIcon,
-  x: XIcon,
-  key: KeyIcon,
-  puzzle: PuzzleIcon,
-  copy: CopyIcon,
-  code: CodeIcon,
-  image: ImageIcon,
-  alert: AlertIcon,
-  sidebar: SidebarIcon,
-  menu: MenuIcon,
-  log: LogIcon,
-  refresh: RefreshIcon,
-  external: ExternalIcon,
-  file: FileIcon,
-  folder: FolderIcon,
-  "folder-open": FolderOpenIcon,
-  filter: FilterIcon,
-  search: SearchIcon,
-  "folder-plus": FolderPlusIcon,
-  "pen-square": PenSquareIcon,
-  gear: GearIcon,
-  "git-branch": GitBranchIcon,
-  worktree: WorktreeIcon,
-  laptop: LaptopIcon,
-  star: StarIcon,
-  more: MoreIcon,
-  pin: PinIcon,
-  "pin-off": PinOffIcon,
-  question: QuestionIcon,
-  archive: ArchiveIcon,
-  history: HistoryIcon,
-  grid: GridIcon,
-  trash: TrashIcon,
-  pencil: PencilIcon,
-  brain: BrainIcon,
-  chat: ChatIcon,
-  trajectory: TrajectoryIcon,
-  command: CommandIcon,
-  terminal: TerminalIcon,
-  hammer: HammerIcon,
-  plug: PlugIcon,
-  sliders: SlidersIcon,
-  palette: PaletteIcon,
-  "arrow-left": ArrowLeftIcon,
-  redo: RedoIcon,
-  undo: UndoIcon,
-  link: LinkIcon,
-  skip: SkipIcon,
-  maximize: MaximizeIcon,
-  minimize: MinimizeIcon,
-  spinner: Spinner,
-  agent: AgentIcon,
-  bell: BellIcon,
-};
+export const icons: Readonly<Record<IconName, Component<GlyphProps>>> = { ...strokes, gear: GearIcon, spinner: Spinner };
 
 /** The default `icon` part. */
 export const DefaultIcon = (props: IconProps) => {

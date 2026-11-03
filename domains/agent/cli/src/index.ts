@@ -13,7 +13,7 @@ type Reader = Context.Service.Shape<typeof Registries>;
 const session = [{ name: "session", description: "A session's id (lemma sessions list)", required: true }] as const;
 
 /** Prompts waiting for a turn: mode, request id, age, and their text on one line. */
-export const formatQueue = (queue: readonly QueuedPrompt[]): string =>
+const formatQueue = (queue: readonly QueuedPrompt[]): string =>
   queue.length === 0
     ? "Nothing queued."
     : table([
@@ -27,7 +27,7 @@ export const formatQueue = (queue: readonly QueuedPrompt[]): string =>
       ]);
 
 /** The agent's commands: run a prompt, and see and steer what is running and queued. */
-export const agentCommands = (registries: Reader, events: Context.Service.Shape<typeof Events>) => [
+const agentCommands = (registries: Reader, events: Context.Service.Shape<typeof Events>) => [
   runCommand(registries, events),
   defineCliCommand({
     path: ["agent", "cancel"],

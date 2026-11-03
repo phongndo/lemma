@@ -82,8 +82,8 @@ function NoticeCard(props: { notice: Notice; title: string; project: string; ope
           <Glyph />
         </span>
         <span class="thread-notice-text">
-          <span class="thread-notice-title">{props.title}</span>
-          <span class="thread-notice-detail">
+          <span class="thread-notice-title tw:truncate">{props.title}</span>
+          <span class="thread-notice-detail tw:truncate">
             <span class="thread-notice-state">{props.notice.label}</span>
             <Show when={props.project}> · {props.project}</Show>
           </span>

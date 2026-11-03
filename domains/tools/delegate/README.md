@@ -3,18 +3,16 @@
 The `delegate` tool: a task handed to an agent, a thread of its own that works
 for this one. Adds it to `Tools`, and a section to the agent's
 `PromptSections` naming the modes offered to agents and the thread's agents
-still at work; requires `Interaction` (to ask first, when configured) and
-`Paths` (where background agents are kept); serves `delegate.stop` (below). It
-reaches the sessions store, the agent, and the modes as a client does, through
-`sessions.*`, `agent.*`, and `modes.list`, so it requires none of them, and a
-reload of any does not restart it. Its web half (`./web`) shows agents in the
-chat, above the composer, and in an agent's thread's header.
+still at work. Serves `delegate.stop` (below). It reaches the sessions store,
+the agent, and the modes as a client does, through `sessions.*`, `agent.*`,
+and `modes.list`. So it requires none of them, and a reload of any does not
+restart it. Its web half (`./web`) shows agents in the chat, above the
+composer, and in an agent's thread's header.
 
 An agent is an ordinary session whose `SessionInfo.parent` names the thread
-and the call that started it (`@lemma/sessions`), so the sidebar lists it under
+and the call that started it (`@lemma/sessions`). So the sidebar lists it under
 that thread ([frame.sidebar](../../frame/sidebar/README.md)), and the person
-can open it, read it whole, and write to it themselves. Its name is its
-thread's title.
+can open it, read it whole, and write to it. Its name is its thread's title.
 
 ## The tool
 
@@ -35,55 +33,55 @@ run at once (`parallel`), `maxDelegations` at each depth.
 | `cwd`        | The agent's directory, relative to the caller's (default: the caller's); one that is not a directory is refused before a session is made                                                                                                                                                                                                                  |
 
 `ended` is the agent's turn's end (`done`, `error`, `cancelled`, `max-steps`),
-`handled`/`refused` when a plugin answered its prompt itself, or
-`running` for a background agent. Anything but `done` and `handled` is an
-error result that still resolves in a script. The result's `details`
-(`DelegateDetails`) name the agent for the views, with its answer's start
-(`preview`).
+`handled`/`refused` when a plugin answered its prompt itself, or `running` for
+a background agent. Anything but `done` and `handled` is an error result that
+still resolves in a script. The result's `details` (`DelegateDetails`) name
+the agent for the views, with its answer's start (`preview`).
 
 - **Run again, nothing twice.** The agent's prompt is sent with the request id
-  `tools.delegate/<call id>`, and the call is `replay: "safe"`: run again after
+  `tools.delegate/<call id>`, and the call is `replay: "safe"`. Run again after
   a restart cut it off, it finds the agent its call started (by
   `SessionInfo.parent`, among the sessions in its directory) and waits on the
   same turn, which `agent.prompt` never places twice. A script's call has an
   id of its own (`<call>/<n>`), so a resumed script finds its agents too.
 - **Depth from its own log.** A thread a person started is at depth 0, its
-  agents at 1, theirs at 2: an agent's first turn logs its depth
+  agents at 1, theirs at 2. An agent's first turn logs its depth
   (`TurnOptions.plugins["tools.delegate"]`), so it counts from its own log,
-  whatever became of the threads above it, and a fork of an agent's thread
-  counts from its copy. An agent at `maxDepth` hands no task on: its requests
-  are not offered the tool (`AgentRequestHook`'s `select` phase, reading the
-  request's branch), and a call that comes all the same (a script's) is
-  refused. A follow-up counts no depth.
+  whatever became of the threads above it. A fork of an agent's thread counts
+  from its copy. A follow-up counts no depth.
+- **At `maxDepth`** an agent hands no task on. Its requests are not offered the
+  tool (`AgentRequestHook`'s `select` phase), and a call that comes all the
+  same (a script's) is refused.
 - **Slots by depth.** `maxDelegations` agents work at once at each depth,
-  counted apart, so an agent waiting on its own agents holds up no one's slot
-  but its own. The slots are shared by every thread on the host, and an agent
-  holds its slot for its whole turn: a long background agent keeps one from
-  every other thread's agents at its depth until it finishes. A waited-on
-  agent is made once its slot is free, so a call stopped while it waits leaves
-  nothing; a background one is made at once, to be named, and its prompt
-  waits. A follow-up takes none: its agent holds one while it works.
-- **Cancelling.** Cancelling a waiting call (the turn calling it is cancelled,
-  or its script ends) cancels the agent's turn. A background agent works on:
-  its row's Stop stops it (below).
+  counted apart, so an agent waiting on its own agents holds up only its own
+  slot. Every thread on the host shares the slots. An agent holds its slot for
+  its whole turn, so a long background agent keeps one from every other
+  thread's agents at its depth. A follow-up takes none: its agent holds one
+  while it works.
+- **Made when its slot is free.** A waited-on agent is made once its slot is
+  free, so a call stopped while it waits leaves nothing. A background one is
+  made at once, to be named, and its prompt waits.
+- **Cancelling.** Cancelling a waiting call (its turn is cancelled, or its
+  script ends) cancels the agent's turn. A background agent works on until its
+  row's Stop stops it (below).
 - **Queued, not refused, when busy.** An agent's prompt that finds a turn
   running in it (a person wrote to it while it waited for a slot) waits for
   that turn to end (`whenBusy: "follow-up"`), so the task still runs.
-- **Refused before it starts.** One the person declines (`confirm`), a mode not
-  offered, a `cwd` not there, or a prompt the agent refuses before placing it
-  (an unknown model): no agent is left behind, as the session made for it,
-  holding nothing since, is deleted. One that holds something by then (a
-  person wrote to it while it waited) stays, and the call names it.
+- **Refused before it starts.** A call the person declines (`confirm`), a mode
+  not offered, a `cwd` not there, or a prompt the agent refuses before placing
+  it (an unknown model) leaves no agent behind: the session made for it is
+  deleted. One that holds something by then (a person wrote to it while it
+  waited) stays, and the call names it.
 
 ## Background agents
 
-A background agent is kept as a file under `<home>/delegate/agents` (the
-thread it reports to, its prompt and options, the call) from its start until
-that thread has heard how it finished. Its waiting is this plugin's work
-(`PluginContext.background`): when its turn ends, a `ModelNotice` from
-`tools.delegate`, its id the call's, tells the thread, which the agent places
-as a `context` event (steering a running turn, or starting one after a turn
-that ran to its end):
+A background agent is kept as a file under `<home>/delegate/agents` from its
+start until the thread it reports to has heard how it finished. The file holds
+that thread, the agent's prompt and options, and the call. Its waiting is this
+plugin's work (`PluginContext.background`). When its turn ends, a
+`ModelNotice` from `tools.delegate`, its id the call's, tells the thread. The
+agent places it as a `context` event, steering a running turn, or starting one
+after a turn that ran to its end:
 
 ```
 <agent_result title="Map callers of rebuildRequest" session="…" ended="done">
@@ -93,32 +91,36 @@ that ran to its end):
 
 An answer longer than a result's default budget (`DEFAULT_MAX_RESULT_CHARS` in
 `@lemma/tools`) keeps its start and its end there, the whole in a temp file the
-model can read, as the call's own result does past the call's budget.
+model can read.
 
-Once the thread logged it (`SessionAppended`), the file goes; until then the
-notice is published again every 15 seconds, since one no agent hears (as
-while one reloads) is lost, and the agent places an id once. A reload or a
-restart waits on each kept agent again, placing its prompt if it never was (one
-whose log has it takes no slot: its turn runs on its own); a thread that heard
-already is not told twice, and one deleted is told nothing. Its agents work on,
-threads of their own. An agent whose own thread is deleted as its turn ends
-still ends, as an error, and its thread is told so; one whose ending cannot be
-read otherwise is kept, and waited on again after a restart.
+- **Until it is heard.** The file goes once the thread logged the notice
+  (`SessionAppended`). Until then the notice is published again every 15
+  seconds, since one no agent hears (as while one reloads) is lost, and the
+  agent places an id once.
+- **After a reload or restart**, the plugin waits on each kept agent again, and
+  places its prompt if it never was. One whose log has it takes no slot: its
+  turn runs on its own. A thread that heard already is not told twice, and one
+  deleted is told nothing.
+- **An agent whose thread is deleted** as its turn ends still ends, as an
+  error, and its thread is told so. One whose ending cannot be read otherwise
+  is kept, and waited on again after a restart.
 
 `delegate.stop { sessionId }` (an agent's row's Stop) stops an agent as it is,
-answering which it did. One waiting for a slot is `dropped`: its prompt never
-placed, its thread deleted unless something was written to it meanwhile, and
-the thread it reports to told it was stopped (`ended="cancelled"`). One whose
-prompt waits behind another turn (a person's, a follow-up's) has it
-`withdrawn` (`agent.withdraw`), so that turn runs on. Any other has its turn
-`cancelled`.
+and answers which way it did:
+
+- `dropped`: it waited for a slot. Its prompt is never placed, and its thread
+  is deleted unless something was written to it meanwhile. The thread it
+  reports to is told it was stopped (`ended="cancelled"`).
+- `withdrawn`: its prompt waited behind another turn (a person's, a
+  follow-up's), and is withdrawn (`agent.withdraw`), so that turn runs on.
+- `cancelled`: its turn is cancelled.
 
 The `tools.delegate.agents` section, in a request that offers the tool, lists
 the modes offered to agents in the thread's directory, and the thread's
-background agents at work, so a turn that compacted its history away still
-knows of them. Written before a request's tools are chosen, it goes once they
-are without the tool (`AgentRequestHook`'s `select` phase), so a mode without
-it (`explore`) is told nothing of agents.
+background agents at work. So a turn that compacted its history away still
+knows of them. It goes once a request's tools are chosen without the tool
+(`AgentRequestHook`'s `select` phase), so a mode without it (`explore`) is told
+nothing of agents.
 
 ## Config
 
@@ -131,26 +133,22 @@ it (`explore`) is told nothing of agents.
 ## In the web app
 
 An agent shows as its picture (its session id's identicon, the look's
-`AvatarPart`) with a dot for what it is doing, its name, how it is doing
-(Queued, Working, Needs input, Finished, Failed, Stopped), a line of what it
-said, its time, and a chevron; pressing it opens the agent's thread. Queued
-is an agent whose prompt waits for a slot: a waited-on call's before it has
-one, or a background agent whose log holds no more than its call made (the
-result's `details.emptyAt`).
+`AvatarPart`), its name, and its state: Queued, Working, Needs input,
+Finished, Failed, or Stopped. Pressing it opens the agent's thread. Queued
+means its prompt waits for a slot. A background agent is queued while its log
+holds no more than its call made (the result's `details.emptyAt`).
 
-- **In the chat.** A delegating call shows its agent where the turn's displays
-  go, after its folded work, kept current while it works (`ToolView.live`);
-  several in a row show as one line, "3 agents · 2 working", which opens to
-  each (`ToolView.displays`), a script's too. A finished background agent's
-  notice shows as the agent, finished, failed, or stopped
-  (`ContextViews`), where its thread heard it. An agent at work, or a
-  background one queued, has Stop (`delegate.stop`, or `agent.cancel` with no
-  host half to serve it).
-- **Above the composer**, while the thread's agents work: their pictures, each
-  opening its agent, and how long they have worked ("Waiting on 2 agents"
-  once the thread itself is idle).
-- **An agent's thread's header** names the thread it works for, before its
-  title, one press going back.
+- **In the chat**, a delegating call shows its agent where the turn's displays
+  go, kept current while it works (`ToolView.live`). Several in a row show as
+  one line ("3 agents · 2 working") that opens to each (`ToolView.displays`).
+- **A finished background agent's notice** shows as the agent where its thread
+  heard it (`ContextViews`).
+- **Stop** shows on an agent at work, or a queued background one. It calls
+  `delegate.stop`, or `agent.cancel` with no host half to serve it.
+- **Above the composer**, while the thread's agents work: their pictures, and
+  how long they have worked ("Waiting on 2 agents" once the thread is idle).
+- **An agent's thread's header** names the thread it works for, and goes back
+  to it.
 
 ## Rationale
 

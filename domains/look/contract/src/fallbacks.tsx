@@ -1,5 +1,6 @@
 import { For, Show, createSignal } from "solid-js";
 import type { ConfigField } from "@lemma/contracts";
+import { errorMessage } from "@lemma/contracts";
 import { configEdit, configText } from "./config.ts";
 import type { ConfigFormProps, IconName, IconProps, PopoverProps, SearchFieldProps, SegmentedProps, ToggleProps } from "./parts.tsx";
 
@@ -120,7 +121,7 @@ export function ConfigFormFallback(props: ConfigFormProps) {
       input.reportValidity();
     };
     if ("error" in edit) refuse(edit.error);
-    else props.onSave({ [field.key]: edit.value }).catch((error: unknown) => refuse(error instanceof Error ? error.message : String(error)));
+    else props.onSave({ [field.key]: edit.value }).catch((error: unknown) => refuse(errorMessage(error)));
   };
   return (
     <div>

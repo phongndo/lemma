@@ -1,4 +1,4 @@
-import { For, Match, Show, Switch, createSignal, onCleanup } from "solid-js";
+import { For, Match, Show, Switch, createSignal } from "solid-js";
 import type { Accessor } from "solid-js";
 import { asksAnswer } from "@lemma/llm";
 import type { ProviderInfo, SignIn, SignInStep } from "@lemma/llm";
@@ -6,6 +6,7 @@ import { copyText } from "@lemma/web/clipboard";
 import { browserPlace, SignInPaste } from "@lemma/credentials/web";
 import { providerBrand, timeLeft, ProviderLogo } from "@lemma/llm/web";
 import { usePlugin } from "@lemma/web";
+import { createNow } from "@lemma/web/now";
 import { CopyButton, Dialog, ExternalIcon, Spinner } from "@lemma/look";
 
 const hostOf = (url: string) => {
@@ -167,8 +168,7 @@ function Choice(props: { step: Step<"choice">; answer: (value: string) => void }
 /** The one-time code to enter on the provider's site, how long it lasts, and the page to enter it on. */
 function DeviceCode(props: { step: Step<"code"> }) {
   const plugin = usePlugin();
-  const [now, setNow] = createSignal(Date.now());
-  onCleanup(plugin.every(1000, () => setNow(Date.now())));
+  const now = createNow(1000);
   // Counted from when this page first showed the code, on its own clock: the host's may differ. A page that opened late
   // shows more time than is left, never less; the host ends the sign-in when the code expires.
   const deadline = props.step.expiresIn === undefined ? undefined : Date.now() + props.step.expiresIn * 1000;

@@ -1,8 +1,9 @@
 import { Cause, Clock, Effect, Exit } from "effect";
 import { assert, Verify } from "@lemma/core";
+import { causeMessage } from "@lemma/contracts";
 import { TurnEnded } from "../../agent.ts";
 import type { AgentError } from "../../agent.ts";
-import { causeMessage, closedCore } from "../errors.ts";
+import { closedCore } from "../errors.ts";
 import type { Ended } from "../turn.ts";
 import type { Turn } from "./context.ts";
 import { unansweredCalls } from "./log.ts";

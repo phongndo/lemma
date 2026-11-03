@@ -6,6 +6,7 @@ import { searchLog, SessionError } from "@lemma/sessions";
 import type { Contribution, SessionEvent, SessionInfo, SessionSearchMatch } from "@lemma/sessions";
 import { errorCode, syncDirectory, syncParents, unsupportedSync } from "@lemma/contracts/fs";
 import type { FileHandle, FileSystem } from "@lemma/contracts/fs";
+import { errorMessage } from "@lemma/contracts";
 import { decodeRecord, encodeLine, FORMAT_VERSION } from "./format.ts";
 import type { Header, Line, Marks } from "./format.ts";
 
@@ -13,7 +14,7 @@ export const io = (sessionId: string | undefined, message: string) => (cause: un
   new SessionError({
     ...(sessionId === undefined ? {} : { sessionId }),
     reason: "Io",
-    message: `${message}: ${cause instanceof Error ? cause.message : String(cause)}`,
+    message: `${message}: ${errorMessage(cause)}`,
     cause,
   });
 

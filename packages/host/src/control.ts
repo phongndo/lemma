@@ -1,4 +1,4 @@
-import { Deferred, Effect, Result, Schema, SchemaIssue, Semaphore } from "effect";
+import { Deferred, Effect, Semaphore } from "effect";
 import type { Scope } from "effect";
 import { describeReload, Notice, PluginsChanged, WebChanged } from "@lemma/contracts";
 import type { ChangeReport, CompositionChange, ConfigScope, FaultRecord, PluginChange, WebComposition } from "@lemma/contracts";
@@ -102,29 +102,6 @@ export const describe = (report: ReloadReport): string => {
     report.faults.length ? `${report.faults.length} dispose fault(s)` : "",
   ].filter(Boolean);
   return parts.length ? parts.join("; ") : "nothing changed";
-};
-
-/** Decodes the configs of `ids` as the loader will, so a deferred change is refused before it is applied. */
-const checkConfigs = (next: Loaded, ids: Iterable<string>): Effect.Effect<void, ReloadError> => {
-  const diagnostics: Diagnostic[] = [];
-  for (const id of ids) {
-    const plugin = next.known.find((entry) => entry.plugin.id === id)?.plugin;
-    const entry = next.resolved.composition.plugins[id];
-    if (plugin?.config === undefined || entry === undefined) continue;
-    const decoded = Schema.decodeUnknownResult(plugin.config)(entry.config ?? {});
-    if (Result.isSuccess(decoded)) continue;
-    const issue = SchemaIssue.makeFormatterStandardSchemaV1()(decoded.failure.issue).issues[0];
-    const at = issue?.path?.filter((segment): segment is string | number => typeof segment === "string" || typeof segment === "number") ?? [];
-    diagnostics.push(
-      new Diagnostic({
-        severity: "error",
-        pluginId: id,
-        path: ["config", ...at],
-        message: `Invalid config for "${id}"${at.length ? ` at ${at.join(".")}` : ""}: ${issue?.message ?? "does not match its schema"}`,
-      }),
-    );
-  }
-  return diagnostics.length ? Effect.fail(new ReloadError({ diagnostics })) : Effect.void;
 };
 
 /**
@@ -334,6 +311,26 @@ export const makeHostChanges = (options: ChangesOptions): Effect.Effect<HostChan
     const deferred: ChangeReport = { started: [], restarted: [], stopped: [], unchanged: [], failed: [], interrupted: 0, faults: [], deferred: true };
 
     /**
+     * Applies `next` now, unless it restarts the plugin whose work asks for it
+     * (`deferral`): then `later` re-reads and applies it once that work is
+     * over (`applyLater`). Either way it is checked now, as `affected` plans
+     * it, so a change the loader would refuse is refused at once.
+     */
+    const applyOrDefer = (
+      loader: Loader,
+      next: Loaded,
+      later: Effect.Effect<void, ReloadError | CoreClosed>,
+      failure: string,
+      undo?: Effect.Effect<string | undefined>,
+    ) =>
+      Effect.gen(function* () {
+        const after = yield* deferral(yield* affected(loader, next));
+        if (after === undefined) return yield* apply(loader, next);
+        yield* applyLater(loader, after, later, failure, undo);
+        return deferred;
+      });
+
+    /**
      * Writes rows into a config file and applies the result, now or once the
      * work asking for it is over (`applyLater`), checked as the loader will
      * check it; a change the host rejects is undone in the file.
@@ -344,20 +341,11 @@ export const makeHostChanges = (options: ChangesOptions): Effect.Effect<HostChan
         const update = yield* options.updateConfig(path, rows, scope).pipe(Effect.mapError(rejected));
         seenConfig.set(path, update.text);
         const undo = putBack(path, update);
-        // The written rows are read back like any other change.
-        const decided = Effect.gen(function* () {
-          const next = yield* load;
-          const touched = yield* affected(loader, next);
-          // A change that restarts the plugin asking for it (the transport serving the call, or one whose channel call
-          // or command asks) applies once that work is over.
-          const after = yield* deferral(touched);
-          if (after === undefined) return yield* apply(loader, next);
-          yield* checkConfigs(next, touched);
-          const change = Effect.flatMap(reloadNow(loader, "configure", Object.keys(rows)), (report) => log(`applied a config change: ${describe(report)}`));
-          const undone = Effect.map(undo, (left) => (left.length ? left.map((diagnostic) => diagnostic.message).join("; ") : `${path} was put back`));
-          yield* applyLater(loader, after, change, "The config change could not be applied", undone);
-          return deferred;
-        });
+        // The written rows are read back like any other change. One that restarts the plugin asking for it (the
+        // transport serving the call, or one whose channel call or command asks) applies once that work is over.
+        const change = Effect.flatMap(reloadNow(loader, "configure", Object.keys(rows)), (report) => log(`applied a config change: ${describe(report)}`));
+        const undone = Effect.map(undo, (left) => (left.length ? left.map((diagnostic) => diagnostic.message).join("; ") : `${path} was put back`));
+        const decided = Effect.flatMap(load, (next) => applyOrDefer(loader, next, change, "The config change could not be applied", undone));
         return yield* decided.pipe(
           Effect.catch((error) => Effect.flatMap(undo, (left) => Effect.fail(new ReloadError({ diagnostics: [...error.diagnostics, ...left] })))),
         );
@@ -381,18 +369,16 @@ export const makeHostChanges = (options: ChangesOptions): Effect.Effect<HostChan
 
     const reload = withLoader((loader) =>
       reloading.withPermits(1)(
-        Effect.gen(function* () {
-          const next = yield* load;
-          // One that restarts the plugin asking for it (`commands.host` running `host.reload`, or `commands.registry` serving that
-          // run), or the transport serving the request, is checked now and applied once that work is over.
-          const touched = yield* affected(loader, next);
-          const after = yield* deferral(touched);
-          if (after === undefined) return yield* apply(loader, next);
-          yield* checkConfigs(next, touched);
-          const change = Effect.flatMap(reloadNow(loader, "reload"), (report) => log(`reloaded: ${describe(report)}`));
-          yield* applyLater(loader, after, change, "The reload could not be applied; the running composition is unchanged");
-          return deferred;
-        }).pipe(recorded("reload")),
+        // One that restarts the plugin asking for it (`commands.host` running `host.reload`, or `commands.registry` serving that
+        // run), or the transport serving the request, is checked now and applied once that work is over.
+        Effect.flatMap(load, (next) =>
+          applyOrDefer(
+            loader,
+            next,
+            Effect.flatMap(reloadNow(loader, "reload"), (report) => log(`reloaded: ${describe(report)}`)),
+            "The reload could not be applied; the running composition is unchanged",
+          ),
+        ).pipe(recorded("reload")),
       ),
     );
 

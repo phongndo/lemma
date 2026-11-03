@@ -7,9 +7,10 @@ dist/
 __pycache__/
 *.pyc
 
-# Nix
+# Nix and direnv
 /result
 /result-*
+.direnv/
 
 # Editors and operating systems
 .DS_Store

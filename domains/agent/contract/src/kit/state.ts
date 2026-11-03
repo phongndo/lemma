@@ -5,6 +5,7 @@ import { AssistantMessage } from "@lemma/llm";
 import { TurnEndReason } from "@lemma/sessions";
 import { errorCode, readJsonFile, removeFile, writeFileAtomic } from "@lemma/contracts/fs";
 import type { FileSystem } from "@lemma/contracts/fs";
+import { errorMessage } from "@lemma/contracts";
 
 /*
  * What the agent keeps on disk beside the session log, per session, under
@@ -67,7 +68,7 @@ const livePath = (files: StateFiles, sessionId: string) => join(stateDir(files),
 const attempt = (what: string, write: () => Promise<unknown>): Effect.Effect<void, StateWriteError> =>
   Effect.tryPromise({
     try: write,
-    catch: (cause) => new StateWriteError({ message: `could not ${what}: ${cause instanceof Error ? cause.message : String(cause)}`, cause }),
+    catch: (cause) => new StateWriteError({ message: `could not ${what}: ${errorMessage(cause)}`, cause }),
   }).pipe(Effect.asVoid);
 
 /** A write that fails (a full disk) costs durability, not the turn: it is logged, and the next write tries again. */
@@ -95,8 +96,7 @@ export const nextInstance = (files: StateFiles): Effect.Effect<number, StateRead
   Effect.gen(function* () {
     const text = yield* Effect.tryPromise({
       try: () => files.fs.readFile(instancePath(files), "utf8").catch((cause) => (errorCode(cause) === "ENOENT" ? undefined : Promise.reject(cause))),
-      catch: (cause) =>
-        new StateReadError({ message: `could not read ${instancePath(files)}: ${cause instanceof Error ? cause.message : String(cause)}`, cause }),
+      catch: (cause) => new StateReadError({ message: `could not read ${instancePath(files)}: ${errorMessage(cause)}`, cause }),
     });
     const last = text === undefined ? undefined : Option.getOrUndefined(decodeInstance(text))?.instance;
     const instance = Math.max(FIRST_INSTANCE, (last ?? 0) + 1);
@@ -116,7 +116,7 @@ export const readJournals = (files: StateFiles): Effect.Effect<ReadonlyMap<strin
     const read = <A>(what: string, run: () => Promise<A>) =>
       Effect.tryPromise({
         try: run,
-        catch: (cause) => new StateReadError({ message: `could not read ${what}: ${cause instanceof Error ? cause.message : String(cause)}`, cause }),
+        catch: (cause) => new StateReadError({ message: `could not read ${what}: ${errorMessage(cause)}`, cause }),
       });
     const missing = (cause: unknown) => (errorCode(cause) === "ENOENT" ? undefined : Promise.reject(cause));
     const names = (yield* read(stateDir(files), () => files.fs.readdir(stateDir(files)).catch(missing))) ?? [];

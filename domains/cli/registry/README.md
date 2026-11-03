@@ -12,24 +12,23 @@ clients as the channels `CliChannels` declares (`cli.commands`, `cli.run`,
 
 ## Behavior
 
-- **An invocation outlives its stream.** `cli.run` starts one and sends
-  `started` with its id, then what the command prints, then its `result`.
-  When the stream ends early (a dropped connection), the command runs on;
-  the client opens `cli.run` again with `resume: { invocation, received }`
-  and gets what it missed, then the rest, so nothing is shown twice and the
-  command never runs twice. One left without a reader for `resumeGraceMs` is
-  interrupted, as Ctrl+C would; `cli.cancel` interrupts one at once. A
-  client that fell further behind than `bufferLimit` gets `Expired`.
-- **Within its plugin's lifetime.** A command runs as work with the
-  contribution that added it (`Registries.run`), and stops at once, ending
-  `Withdrawn`, when that plugin stops or reloads, rather than hold up its
-  stop. This plugin's own reload ends every invocation the same way.
-- **Questions.** A command runs with `InteractionOrigin` set to the client's
-  `origin`, so its questions reach that client.
-- **Errors.** An unknown path is `UnknownCommand` (with the path meant, when a
-  typo is close), input its spec rejects `Usage`, a dismissed question
-  `Cancelled`; any other failure keeps its code (`asHostError`).
-- **Checks** run concurrently, each for at most 10 seconds; one that fails or
+- **An invocation outlives its stream.** `cli.run` sends `started` with the
+  invocation's id, then the command's output, then its `result`. A command whose
+  stream ends early (a dropped connection) runs on. Open `cli.run` again with
+  `resume: { invocation, received }` to get what was missed, then the rest, so
+  nothing shows or runs twice.
+- **Limits.** An invocation left without a reader for `resumeGraceMs` is
+  interrupted, as Ctrl+C would. `cli.cancel` interrupts one at once. A client
+  further behind than `bufferLimit` gets `Expired`.
+- **Within its plugin's lifetime.** A command runs with the contribution that
+  added it (`Registries.run`). It ends `Withdrawn` at once when that plugin, or
+  this one, stops or reloads, rather than hold up the stop.
+- **Questions** reach the client that ran the command (`InteractionOrigin` is
+  its `origin`).
+- **Errors.** An unknown path is `UnknownCommand`, naming a close match. Input
+  its spec rejects is `Usage`. A dismissed question is `Cancelled`. Any other
+  failure keeps its code (`asHostError`).
+- **Checks** run concurrently, each for at most 10 seconds. One that fails or
   throws reports `fail` with why.
-- **Inspector.** `cli.commands` lists every command and the invocations
-  running now.
+- **Inspector.** `cli.commands` lists every command and the invocations running
+  now.

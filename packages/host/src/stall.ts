@@ -2,13 +2,14 @@ import { realpathSync } from "node:fs";
 import { Context, Exit, Option } from "effect";
 import type { Tracer } from "effect";
 import { Worker } from "node:worker_threads";
+import { errorMessage } from "@lemma/contracts";
 import type { CodeOwner } from "./stall-owners.ts";
 
 /*
  * Telling that the host's event loop is blocked, and by whose code. A plugin stuck in synchronous work (a loop that
  * never yields, a huge `JSON.parse`) stops every session, the transport, and its own supervision with it: nothing that
  * runs on the loop can notice. A worker thread can: the loop bumps a counter in shared memory every `TICK_MS`, and the
- * worker, on a loop of its own, sees when the counter has not moved for `thresholdMs`. It then reads the blocked
+ * worker, on a loop of its own, sees when the counter has not moved for `THRESHOLD_MS`. It then reads the blocked
  * thread's stack a few times through the inspector, and names the plugin whose code most of them were in, from where
  * each plugin's code lives (`CodeOwner`).
  *
@@ -31,8 +32,6 @@ export interface Stall {
 }
 
 export interface StallOptions {
-  /** How long the loop may be blocked before it is a stall (default 1,000 ms). */
-  readonly thresholdMs?: number;
   /** Where each plugin's code lives now: asked as the loop runs, and sent to the worker when it returns another array. */
   readonly owners: () => readonly CodeOwner[];
   /** Hears a stall once the loop runs again. */
@@ -49,7 +48,8 @@ export interface StallWatch {
 
 /** How often the loop bumps its counter, and the worker looks at it. */
 export const TICK_MS = 100;
-export const DEFAULT_THRESHOLD_MS = 1_000;
+/** How long the loop may be blocked before it is a stall. */
+export const THRESHOLD_MS = 1_000;
 /** How many times the worker reads a stall's stack, and how long it waits between reads. */
 export const SNAPSHOTS = 5;
 export const SNAPSHOT_GAP_MS = 20;
@@ -84,18 +84,17 @@ export interface StallWorkerData {
  * undefined where a worker cannot start.
  */
 export function watchStalls(options: StallOptions): StallWatch | undefined {
-  const thresholdMs = options.thresholdMs ?? DEFAULT_THRESHOLD_MS;
   const shared = new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT * 2);
   const counters = new Int32Array(shared);
   const debuggable = process.features.inspector;
   // Loaded only where the runtime has one: where it has none, importing `node:inspector` throws.
   const inspector = debuggable ? (process.getBuiltinModule("node:inspector") as typeof import("node:inspector")) : undefined;
-  const data: StallWorkerData = { shared, thresholdMs, tickMs: TICK_MS, snapshots: SNAPSHOTS, gapMs: SNAPSHOT_GAP_MS, inspectable: debuggable };
+  const data: StallWorkerData = { shared, thresholdMs: THRESHOLD_MS, tickMs: TICK_MS, snapshots: SNAPSHOTS, gapMs: SNAPSHOT_GAP_MS, inspectable: debuggable };
   let worker: Worker;
   try {
     worker = new Worker(new URL("./stall-worker.ts", import.meta.url), { workerData: data });
   } catch (error) {
-    console.error(`lemma: cannot watch for a blocked event loop: ${error instanceof Error ? error.message : String(error)}`);
+    console.error(`lemma: cannot watch for a blocked event loop: ${errorMessage(error)}`);
     return undefined;
   }
   let sent: readonly CodeOwner[] | undefined;

@@ -3,6 +3,7 @@ import { ComposerCompletions, findCommandLine, findTrigger } from "@lemma/thread
 import type { ComposerCompletion, ComposerCompletionAnswer, ComposerSuggestion, TriggerMatch } from "@lemma/threads";
 import type { SlotItem, SlotsService } from "@lemma/web";
 import { wrapStep } from "@lemma/web/keys";
+import { errorMessage } from "@lemma/contracts";
 
 /** What one completion source has for the word: its suggestions and note, or why it has none. */
 export interface CompletionGroup {
@@ -30,7 +31,7 @@ const settled = (answer: ComposerCompletionAnswer): Omit<CompletionGroup, "sourc
 const failed = (error: unknown): Omit<CompletionGroup, "source"> => ({
   suggestions: [],
   loading: false,
-  error: error instanceof Error ? error.message : String(error),
+  error: errorMessage(error),
 });
 
 /**

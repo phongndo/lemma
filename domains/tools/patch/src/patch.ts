@@ -4,7 +4,7 @@ import { dirname } from "node:path";
 import { Schema } from "effect";
 import type { Tool } from "@lemma/tools";
 import { unifiedPatch } from "@lemma/tools/diff";
-import { fsMessage, realPath, replaceFile, resolveToCwd, text, throwIfAborted, withFileLocks } from "@lemma/tools/files";
+import { fsMessage, realPath, replaceFile, resolveToCwd, text, throwIfAborted, withFileQueues } from "@lemma/tools/files";
 import { deriveNewContents, parsePatch } from "@lemma/tools/patch";
 import type { PatchHunk } from "@lemma/tools/patch";
 
@@ -328,7 +328,7 @@ export const patchTool: Tool<PatchInput> = {
       resolveToCwd(hunk.path, cwd),
       ...(hunk.kind === "update" && hunk.movePath !== undefined ? [resolveToCwd(hunk.movePath, cwd)] : []),
     ]);
-    return withFileLocks(paths, async () => {
+    return withFileQueues(paths, async () => {
       // Checked between steps rather than rejecting from a listener, so the locks are held until the writes settle.
       throwIfAborted(signal);
       const resolved = await resolvePatch(hunks, cwd);

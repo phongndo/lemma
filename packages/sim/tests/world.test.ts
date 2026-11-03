@@ -3,6 +3,7 @@ import { emptyUsage } from "@lemma/llm";
 import type { Message } from "@lemma/llm";
 import { ACTIONS, Checker, digestOf, malformed, transcriptProblems, World } from "../src/index.ts";
 import type { EventData, SessionEvent } from "@lemma/sessions";
+import { errorMessage } from "@lemma/contracts";
 import { saveWorldFailure } from "../src/artifacts.ts";
 
 /*
@@ -150,10 +151,9 @@ describe("the harness simulation", () => {
           await world.run();
         } catch (error) {
           saveWorldFailure(world, ticks, error);
-          throw new Error(
-            `${error instanceof Error ? error.message : String(error)}\n${world.describe()}\nreplay: pnpm --filter @lemma/sim sim --seed ${seed} --ticks ${ticks} --dump`,
-            { cause: error },
-          );
+          throw new Error(`${errorMessage(error)}\n${world.describe()}\nreplay: pnpm --filter @lemma/sim sim --seed ${seed} --ticks ${ticks} --dump`, {
+            cause: error,
+          });
         }
         for (const [what, count] of world.coverage()) reached.set(what, (reached.get(what) ?? 0) + count);
       }

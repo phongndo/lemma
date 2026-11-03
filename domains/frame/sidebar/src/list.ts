@@ -17,15 +17,6 @@ export const shortAge = (at: number, now: number): string => {
   return age === undefined ? "now" : `${age.count}${age.unit}`;
 };
 
-/** How long a turn has run, shortly: `12s`, `3m`, `1h 5m`. */
-export const runTime = (since: number, now: number): string => {
-  const seconds = Math.max(0, Math.floor((now - since) / 1000));
-  if (seconds < 60) return `${seconds}s`;
-  const minutes = Math.floor(seconds / 60);
-  if (minutes < 60) return `${minutes}m`;
-  return `${Math.floor(minutes / 60)}h ${minutes % 60}m`;
-};
-
 /** What orders the list beyond when each thread was made, kept by id. */
 export interface Marks {
   /** When threads were archived and unarchived here. */

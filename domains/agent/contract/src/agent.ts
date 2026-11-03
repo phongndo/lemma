@@ -534,27 +534,18 @@ const sessionField = { sessionId: Schema.String };
 export const AgentChannels = {
   /**
    * `Agent.prompt` for a client: answers when the turn that places the prompt
-   * ends. Calling again with the same `requestId` waits for the turn that
-   * placed the prompt, or places it if it never was (unless it was retracted:
-   * see `AgentError`), and never places it twice. So the call is
-   * `repeatable`: when the agent reloads while it waits,
-   * as it does whenever its configuration or a plugin it requires changes, the
-   * host makes it again on the replacement, where a prompt it took stays
-   * taken, its turn resuming. A client whose connection drops calls again with
-   * the same id. So every call names one, new for each prompt
-   * (`PromptOptions.requestId`): a retry without it would place the prompt
-   * again.
+   * ends. Every call names a `requestId`, new for each prompt, so it is placed
+   * once (`PromptOptions.requestId`). So the call is `repeatable`: when the
+   * agent reloads while it waits, the host makes it again on the replacement,
+   * and a client whose connection drops calls again with the same id. A retry
+   * of a prompt a plugin handled or refused answers the same while the agent
+   * runs.
    *
-   * Fails as `Agent.prompt` does: `Busy`, `NoModel`, `Session`, `Hook`,
-   * `Io` or `Retracted` (see `AgentError`), each
-   * with the session as its subject; `Withdrawn` (its subject `agent.prompt`)
+   * Fails as `Agent.prompt` does, and `Withdrawn` (its subject `agent.prompt`)
    * only when no agent answers once the change that stopped it has finished,
-   * as when the agent is turned off. A client that clears
-   * its input once the prompt is taken reads that from `agent.activity`,
-   * opened first: the `requestId` in a `turn-started` or a `queue-changed`; or
-   * its message on the session's `sessions.log`. A prompt a plugin handled or
-   * refused (`AgentInputHook`) is answered at once, with no turn and nothing
-   * logged; a retry of it answers the same while the agent runs.
+   * as when the agent is turned off. A client that clears its input once the
+   * prompt is taken reads that from `agent.activity`, opened first: the
+   * `requestId` in a `turn-started` or a `queue-changed`.
    */
   prompt: defineChannel({
     kind: "call",
@@ -646,7 +637,7 @@ export const AgentChannels = {
    * `tool-output`): a client that shows some sessions hears every session's
    * turns and queue here, and reads the output of those it shows from
    * `agent.output`, one stream each, rather than every session's. With no
-   * payload, as before there was one, it sends it all.
+   * payload, it sends it all.
    */
   activity: defineChannel({
     kind: "stream",

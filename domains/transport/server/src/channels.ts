@@ -3,7 +3,19 @@ import { RpcGroup, RpcMiddleware } from "effect/rpc";
 import type { Rpc } from "effect/rpc";
 import { Admitted } from "@lemma/core";
 import type { Contribution, Registries } from "@lemma/core";
-import { answering, Channels, elementsOf, HostError, mapChunks, resultOf, RuntimeRpcs, wireCodec, withChannel, withdrawnFrom } from "@lemma/contracts";
+import {
+  answering,
+  causeMessage,
+  Channels,
+  elementsOf,
+  HostError,
+  mapChunks,
+  resultOf,
+  RuntimeRpcs,
+  wireCodec,
+  withChannel,
+  withdrawnFrom,
+} from "@lemma/contracts";
 import type { Channel, ChannelInfo, ChannelStream } from "@lemma/contracts";
 import { isTagged, toHostError } from "./errors.ts";
 import { Replies } from "./replies.ts";
@@ -29,11 +41,6 @@ export const channelInfo = ({ item, pluginId }: Contribution<Channel>): ChannelI
 export const listChannels = (registries: Reader): Effect.Effect<ChannelInfo[]> =>
   Effect.map(registries.items(Channels), (items) => answers(items).map(channelInfo));
 
-const reason = (cause: Cause.Cause<unknown>): string => {
-  const error = Cause.squash(cause);
-  return error instanceof Error ? error.message : String(error);
-};
-
 /**
  * Runs one step of a request on its own: what its schema or handler throws
  * becomes this request's `HostError`, never the connection's, while
@@ -48,14 +55,18 @@ const contained = <A, E>(step: () => Effect.Effect<A, E>, error: (cause: Cause.C
 const decode = (channel: Channel, payload: unknown) =>
   contained(
     () => Schema.decodeUnknownEffect(wireCodec(channel.payload))(payload === undefined ? null : payload),
-    (cause) => new HostError({ code: "InvalidPayload", subject: channel.id, message: `Invalid payload for "${channel.id}": ${reason(cause)}` }),
+    (cause) => new HostError({ code: "InvalidPayload", subject: channel.id, message: `Invalid payload for "${channel.id}": ${causeMessage(cause)}` }),
   );
 
 const encode = (channel: Channel, value: unknown) =>
   contained(
     () => Schema.encodeUnknownEffect(wireCodec(channel.success))(value),
     (cause) =>
-      new HostError({ code: "Failed", subject: channel.id, message: `"${channel.id}" produced a value its success schema cannot send: ${reason(cause)}` }),
+      new HostError({
+        code: "Failed",
+        subject: channel.id,
+        message: `"${channel.id}" produced a value its success schema cannot send: ${causeMessage(cause)}`,
+      }),
   );
 
 /**
@@ -69,7 +80,7 @@ const failed = (id: string, cause: Cause.Cause<unknown>): HostError => {
     const { code, message, subject } = toHostError(failure.value);
     return new HostError({ code, message, subject: subject ?? id });
   }
-  return new HostError({ code: "Failed", subject: id, message: reason(cause) });
+  return new HostError({ code: "Failed", subject: id, message: causeMessage(cause) });
 };
 
 /**

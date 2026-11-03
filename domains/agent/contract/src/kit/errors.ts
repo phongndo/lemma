@@ -17,9 +17,3 @@ export const isCoreClosed = (error: unknown, depth = 0): boolean =>
 /** The turn failed because the core is shutting down. */
 export const closedCore = (cause: Cause.Cause<unknown>): boolean =>
   cause.reasons.some((reason) => (Cause.isFailReason(reason) && isCoreClosed(reason.error)) || (Cause.isDieReason(reason) && isCoreClosed(reason.defect)));
-
-/** What a turn that failed says of why: its failure's message. */
-export const causeMessage = (cause: Cause.Cause<unknown>): string => {
-  const error = Cause.squash(cause);
-  return error instanceof Error ? error.message : typeof error === "object" && error !== null && "message" in error ? String(error.message) : String(error);
-};

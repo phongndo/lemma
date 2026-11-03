@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { startHost } from "./hosts.ts";
 import { boot, drawn } from "./shared.ts";
+import type { Contracts } from "./shared.ts";
 
 // 10: the prompt rail.
 export const rail = async (): Promise<string> => {
@@ -9,8 +10,8 @@ export const rail = async (): Promise<string> => {
   // 10. The prompt rail: a tick per prompt; the card for the one pointed at is level with it, and a click goes there.
   // Each answered at length, so the chat scrolls through them.
   await page.evaluate(async () => {
-    const { Settings } = (await import("/src/ui/api.ts" as string)).api.contracts;
-    (await (window as any).lemma.service(Settings)).open(undefined);
+    const { Settings } = (await import("/src/ui/api.ts" as string)).api.contracts as Contracts;
+    (await window.lemma.service(Settings))!.open(undefined);
   });
   for (const [index, prompt] of ["first prompt at length", "second prompt at length", "third prompt at length"].entries()) {
     await page.fill("textarea", prompt);

@@ -6,14 +6,15 @@ import { planComposition } from "@lemma/composition";
 import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { appDefaults, bundled as shipped, bundledCode, bundledWeb, cliCommand, webDist } from "../src/bundled.ts";
+import { appDefaults, bundled as shipped, bundledCode, bundledWeb, cliCommand, pinned, webDist, withAddress } from "../src/bundled.ts";
 import { KINDS } from "../src/paths.ts";
 import { runtimeCapabilities } from "../src/runtime.ts";
 import { domainPlugins } from "../../../scripts/plugins.ts";
 
 const plugin = (id: string) => definePlugin({ id, config: Schema.Record(Schema.String, Schema.Unknown), layer: Layer.empty });
 const bundled = [plugin("agent.loop"), plugin("transport.server"), plugin("tools.registry")];
-const entries = (rows: Readonly<Record<string, PluginRow>> = {}) => planComposition({ bundled, local: [], rows, defaults: appDefaults }).composition.plugins;
+const entries = (rows: Readonly<Record<string, PluginRow>> = {}, profilePort?: number) =>
+  planComposition({ bundled, local: [], rows, defaults: appDefaults(profilePort) }).composition.plugins;
 
 describe("bundled", () => {
   test("every bundled plugin runs on what the host provides itself, and none provides any of it", () => {
@@ -21,8 +22,8 @@ describe("bundled", () => {
       bundled: shipped,
       local: [],
       rows: {},
-      pinned: ["transport.server"],
-      defaults: appDefaults,
+      pinned: Object.keys(pinned),
+      defaults: appDefaults(),
       provided: runtimeCapabilities,
     });
     expect(planned.diagnostics).toEqual([]);
@@ -66,6 +67,17 @@ describe("appDefaults", () => {
       config: { staticDir: webDist, port: KINDS.checkout.port },
       enabled: false,
     });
+  });
+
+  test("serves on the profile's port, beneath a row's, and on --port and --host over both, for this run only", () => {
+    expect(entries({}, 9000)["transport.server"]).toEqual({ config: { staticDir: webDist, port: 9000 } });
+    const rows = { "transport.server": { enabled: true, config: { port: 8000, staticDir: "/srv/ui" } } };
+    expect(entries(rows, 9000)["transport.server"]).toEqual({ enabled: true, config: { staticDir: "/srv/ui", port: 8000 } });
+    expect(entries(withAddress(rows, { port: 7000, host: "0.0.0.0" }), 9000)["transport.server"]).toEqual({
+      enabled: true,
+      config: { staticDir: "/srv/ui", port: 7000, host: "0.0.0.0" },
+    });
+    expect(withAddress(rows, {})).toBe(rows);
   });
 
   test("names the CLI so the agent's shell runs it on the host's Node.js, with none on PATH", () => {

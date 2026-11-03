@@ -1,20 +1,35 @@
-import { createSignal } from "solid-js";
-import { CONFIRM_DELETE, TrashIcon } from "@lemma/look";
+import { Show, createSignal } from "solid-js";
+import { CheckIcon, CONFIRM_DELETE, Icon, TrashIcon } from "@lemma/look";
 import type { ConfirmDeleteProps, MenuItemProps } from "@lemma/look";
 
-/** `MenuItemPart`: a `.menu-item` row, `.menu-danger` when it destroys. */
+/**
+ * `MenuItemPart`: a `.menu-item` row, `.menu-danger` when it destroys. Its icon, or its checkmark when it is a choice,
+ * goes in a `.menu-check` before the label, and its hint in a `.menu-hint` after it.
+ */
 export function MenuItem(props: MenuItemProps) {
   return (
     <button
       class="menu-item"
       classList={{ "menu-danger": props.danger === true }}
-      role="menuitem"
+      role={props.checked === undefined ? "menuitem" : "menuitemradio"}
+      aria-checked={props.checked}
+      data-tip={props.tip}
       onClick={() => {
         props.close();
         props.run();
       }}
     >
+      <Show when={props.checked !== undefined || props.icon !== undefined}>
+        <span class="menu-check">
+          <Show when={props.checked} fallback={<Show when={props.icon}>{(name) => <Icon name={name()} />}</Show>}>
+            <CheckIcon />
+          </Show>
+        </span>
+      </Show>
       <span class="menu-label">{props.label}</span>
+      <Show when={props.hint}>
+        <span class="menu-hint">{props.hint}</span>
+      </Show>
     </button>
   );
 }

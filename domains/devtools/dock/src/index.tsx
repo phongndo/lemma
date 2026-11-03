@@ -201,7 +201,6 @@ export default defineWebPlugin({
       snapshot: () => Object.fromEntries(panels().flatMap((item) => (item.snapshot === undefined ? [] : [[item.id, item.snapshot()]]))),
     };
 
-    // Its own panels go through the slot a plugin's would.
     const panelsMade = [
       ...routePanels(router, slots, devtools),
       hostEventsPanel(client, router, open, plugin.onCleanup),

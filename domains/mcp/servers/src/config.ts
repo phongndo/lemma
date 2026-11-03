@@ -1,12 +1,13 @@
-import { readFile, realpath, stat } from "node:fs/promises";
+import { realpath, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { Schema } from "effect";
-import { writeFileAtomic } from "@lemma/contracts/fs";
+import { Predicate, Schema } from "effect";
+import { errorMessage } from "@lemma/contracts";
+import { errorCode, writeFileAtomic } from "@lemma/contracts/fs";
 import { McpServerConfig, SERVER_NAME } from "@lemma/mcp";
 import type { Exposure, McpServer, McpServerChange } from "@lemma/mcp";
 import { normalize } from "./form.ts";
-import { isObject } from "./values.ts";
+import { readJsonObject } from "./json.ts";
 
 /**
  * A server as the plugin runs it: its entry, merged, and where it came from: the file, or a plugin (with the server as
@@ -30,11 +31,10 @@ export interface ServersFile {
 
 const decodeEntry = Schema.decodeUnknownResult(McpServerConfig);
 
-/** pi's names for exposures it has and this plugin runs as code mode: `deferred` loads by search, which code mode's `searchTools` does. */
 /** One entry of `mcpServers`, decoded; anything another client keeps beside it (`alwaysAllow`, say) is ignored. */
 export function decodeServer(name: string, raw: unknown): { readonly config: McpServerConfig } | { readonly error: string } {
   if (!SERVER_NAME.test(name)) return { error: `"${name}" is not a server name: use letters, digits, _, and -` };
-  if (!isObject(raw)) return { error: "An entry is an object" };
+  if (!Predicate.isObject(raw)) return { error: "An entry is an object" };
   if (raw["type"] === "sse") return { error: "The SSE transport is not supported: a server that has it usually offers Streamable HTTP too, often at /mcp" };
   const decoded = decodeEntry(normalize(raw), { errors: "all", onExcessProperty: "ignore" });
   if (decoded._tag === "Failure") return { error: `Invalid entry: ${decoded.failure.message}` };
@@ -47,22 +47,13 @@ export function decodeServer(name: string, raw: unknown): { readonly config: Mcp
 
 /** Reads `mcpServers` from the file; a missing file has none. */
 export async function readServersFile(path: string): Promise<ServersFile> {
-  let text: string;
+  let servers: unknown;
   try {
-    text = await readFile(path, "utf8");
+    servers = (await readJsonObject(path))["mcpServers"] ?? {};
   } catch (cause) {
-    if ((cause as NodeJS.ErrnoException).code === "ENOENT") return { path, entries: new Map() };
-    return { path, entries: new Map(), error: `Could not read the file: ${(cause as Error).message}` };
+    return { path, entries: new Map(), error: errorMessage(cause) };
   }
-  let json: unknown;
-  try {
-    json = text.trim() === "" ? {} : JSON.parse(text);
-  } catch (cause) {
-    return { path, entries: new Map(), error: `The file is not valid JSON: ${(cause as Error).message}` };
-  }
-  if (!isObject(json)) return { path, entries: new Map(), error: 'The file is a JSON object with an "mcpServers" object' };
-  const servers = json["mcpServers"] ?? {};
-  if (!isObject(servers)) return { path, entries: new Map(), error: '"mcpServers" is an object of servers by name' };
+  if (!Predicate.isObject(servers)) return { path, entries: new Map(), error: '"mcpServers" is an object of servers by name' };
   return { path, entries: new Map(Object.entries(servers).map(([name, raw]) => [name, decodeServer(name, raw)])) };
 }
 
@@ -236,7 +227,7 @@ export const connectionKey = (config: McpServerConfig): string =>
  */
 export async function writeChange(path: string, name: string, change: McpServerChange, base: McpServerConfig = {}): Promise<void> {
   await updateServers(path, (servers) => {
-    const entry: Record<string, unknown> = isObject(servers[name]) ? { ...servers[name] } : {};
+    const entry: Record<string, unknown> = Predicate.isObject(servers[name]) ? { ...servers[name] } : {};
     if (change.enabled !== undefined) {
       delete entry["disabled"];
       if (change.enabled === (base.enabled ?? true)) delete entry["enabled"];
@@ -247,7 +238,7 @@ export async function writeChange(path: string, name: string, change: McpServerC
       else entry["exposure"] = change.exposure;
     }
     if (change.tools !== undefined) {
-      const tools: Record<string, unknown> = isObject(entry["toolExposure"]) ? { ...entry["toolExposure"] } : {};
+      const tools: Record<string, unknown> = Predicate.isObject(entry["toolExposure"]) ? { ...entry["toolExposure"] } : {};
       for (const [tool, exposure] of Object.entries(change.tools)) {
         if (exposure === null) delete tools[tool];
         else tools[tool] = exposure;
@@ -271,7 +262,9 @@ export async function writeEntry(path: string, name: string, entry: McpServerCon
       return;
     }
     const known = new Set(Object.keys(McpServerConfig.fields));
-    const kept = isObject(servers[name]) ? Object.fromEntries(Object.entries(servers[name]).filter(([key]) => !known.has(key) && key !== "disabled")) : {};
+    const kept = Predicate.isObject(servers[name])
+      ? Object.fromEntries(Object.entries(servers[name]).filter(([key]) => !known.has(key) && key !== "disabled"))
+      : {};
     servers[name] = { ...kept, ...entry };
   });
 }
@@ -280,27 +273,20 @@ export async function writeEntry(path: string, name: string, entry: McpServerCon
 async function updateServers(path: string, change: (servers: Record<string, unknown>) => void): Promise<void> {
   // Through a link (one home-manager keeps, say) rather than over it.
   const target = await realpath(path).catch(() => path);
-  let json: Record<string, unknown> = {};
-  try {
-    const text = await readFile(target, "utf8");
-    const parsed: unknown = text.trim() === "" ? {} : JSON.parse(text);
-    if (!isObject(parsed)) throw new Error('the file is not a JSON object with an "mcpServers" object');
-    json = parsed;
-  } catch (cause) {
-    if ((cause as NodeJS.ErrnoException).code !== "ENOENT") throw new Error(`Could not update ${path}: ${(cause as Error).message}`);
-  }
-  const servers = isObject(json["mcpServers"]) ? { ...json["mcpServers"] } : {};
+  const json = await readJsonObject(target).catch((cause: unknown) => {
+    throw new Error(`Could not update ${path}: ${errorMessage(cause)}`, { cause });
+  });
+  const servers = Predicate.isObject(json["mcpServers"]) ? { ...json["mcpServers"] } : {};
   change(servers);
-  json = { ...json, mcpServers: servers };
   // As an editor leaves it: the mode the file has (0644 for a new one), and a folder it makes as mkdir makes one.
   const mode = await stat(target).then(
     (info) => info.mode & 0o777,
     () => 0o644,
   );
   try {
-    await writeFileAtomic(target, `${JSON.stringify(json, null, 2)}\n`, { mode, dirMode: 0o777 });
+    await writeFileAtomic(target, `${JSON.stringify({ ...json, mcpServers: servers }, null, 2)}\n`, { mode, dirMode: 0o777 });
   } catch (cause) {
-    const code = (cause as NodeJS.ErrnoException).code;
+    const code = errorCode(cause);
     if (target !== path && (code === "EROFS" || code === "EACCES" || code === "EPERM"))
       throw new Error(`${path} links to ${target}, which cannot be written: change it where it is managed`, { cause });
     throw cause;

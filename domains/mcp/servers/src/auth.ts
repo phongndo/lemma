@@ -1,5 +1,4 @@
 import { randomBytes } from "node:crypto";
-import { readFile } from "node:fs/promises";
 import type {
   AuthProvider,
   OAuthClientMetadata,
@@ -10,7 +9,10 @@ import type {
 } from "@modelcontextprotocol/client";
 import { writeFileAtomic } from "@lemma/contracts/fs";
 import type { McpOAuthConfig } from "@lemma/mcp";
-import { isObject } from "./values.ts";
+import { Predicate } from "effect";
+import { errorMessage } from "@lemma/contracts";
+import { readJsonObject } from "./json.ts";
+import { serial } from "./serial.ts";
 import { loadedSdk, loadSdk } from "./sdk.ts";
 import type { Sdk } from "./sdk.ts";
 
@@ -34,29 +36,21 @@ export class SignInStore {
   private servers: Record<string, StoredSignIn> = {};
   /** Why the file could not be read: it is never written over then. */
   private problem: string | undefined;
-  private queue: Promise<void> = Promise.resolve();
+  private readonly queue = serial();
 
   constructor(path: string) {
     this.path = path;
   }
 
   async load(): Promise<void> {
-    let text: string;
     try {
-      text = await readFile(this.path, "utf8");
-    } catch (cause) {
-      if ((cause as NodeJS.ErrnoException).code !== "ENOENT") this.problem = `Could not read ${this.path}: ${(cause as Error).message}`;
-      return;
-    }
-    try {
-      const json: unknown = text.trim() === "" ? {} : JSON.parse(text);
-      const servers = isObject(json) ? json["servers"] : undefined;
-      if (servers !== undefined && !isObject(servers)) throw new Error('"servers" is not an object');
+      const servers = (await readJsonObject(this.path))["servers"] ?? {};
+      if (!Predicate.isObject(servers)) throw new Error('"servers" is not an object');
       this.servers = Object.fromEntries(
-        Object.entries(servers ?? {}).filter((entry): entry is [string, StoredSignIn] => isObject(entry[1]) && typeof entry[1]["url"] === "string"),
+        Object.entries(servers).filter((entry): entry is [string, StoredSignIn] => Predicate.isObject(entry[1]) && typeof entry[1]["url"] === "string"),
       );
     } catch (cause) {
-      this.problem = `${this.path} is not valid: ${(cause as Error).message}. Fix or remove it to sign in again`;
+      this.problem = `Fix or remove ${this.path} to sign in again: ${errorMessage(cause)}`;
     }
   }
 
@@ -72,14 +66,10 @@ export class SignInStore {
     if (value === undefined) delete this.servers[name];
     else this.servers[name] = value;
     const json = `${JSON.stringify({ servers: this.servers }, null, 2)}\n`;
-    const run = this.queue.then(() => this.write(json));
-    this.queue = run.catch(() => {});
-    return run;
-  }
-
-  private async write(json: string): Promise<void> {
     // The user's alone: the file 0600, a folder it makes 0700.
-    await writeFileAtomic(this.path, json);
+    return this.queue(async () => {
+      await writeFileAtomic(this.path, json);
+    });
   }
 }
 
@@ -97,7 +87,7 @@ export class NeedsSignIn extends Error {
  */
 export class RenewalFailed extends Error {
   constructor(cause: unknown) {
-    super(`Could not renew the sign-in: ${cause instanceof Error ? cause.message : String(cause)}`, { cause });
+    super(`Could not renew the sign-in: ${errorMessage(cause)}`, { cause });
     this.name = "RenewalFailed";
   }
 }

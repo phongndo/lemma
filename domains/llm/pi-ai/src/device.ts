@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { errorCode } from "@lemma/contracts/fs";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -30,7 +31,7 @@ export function deviceId(home: string): string {
     // Exclusive: when two processes race, both keep the ID the first one wrote.
     return create("wx");
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+    if (errorCode(error) !== "EEXIST") throw error;
     // Written meanwhile, or holding something that is not an ID, which a new one replaces.
     return stored() ?? create("w");
   }

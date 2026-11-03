@@ -37,9 +37,6 @@
   padding-left: 4px;
   color: var(--text-3);
   font-size: var(--font-size-sm);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 /* Shortcuts sit on the background as plain text, not in key caps. */

@@ -4,7 +4,7 @@ import { basename, dirname, join } from "node:path";
 import { Effect, Stream } from "effect";
 import type { Context } from "effect";
 import { definePlugin, Events, Registries } from "@lemma/core";
-import { Channels, Paths } from "@lemma/contracts";
+import { Channels, errorMessage, Paths } from "@lemma/contracts";
 import { PromptSections } from "@lemma/agent";
 import { Mcp, MCP_CONTRACT, McpChanged, McpError, McpServers, serveMcp } from "@lemma/mcp";
 import { ToolNamespaces, Tools } from "@lemma/tools";
@@ -22,8 +22,7 @@ const section = (servers: readonly { readonly name: string; readonly description
     ...servers.map(({ name, description }) => `- ${name}${description === undefined ? "" : `: ${description}`}`),
   ].join("\n");
 
-const toMcpError = (cause: unknown) =>
-  cause instanceof McpError ? cause : new McpError({ reason: "Failed", message: cause instanceof Error ? cause.message : String(cause), cause });
+const toMcpError = (cause: unknown) => (cause instanceof McpError ? cause : new McpError({ reason: "Failed", message: errorMessage(cause), cause }));
 
 /**
  * Connects the MCP servers in `<home>/mcp.json`, and those plugins add (`McpServers`), and adds their tools to the

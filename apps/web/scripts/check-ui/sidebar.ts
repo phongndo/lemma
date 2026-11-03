@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { startHost } from "./hosts.ts";
 import { atBlankThread, boot, checkPlugin, expose, showView } from "./shared.ts";
+import type { Contracts } from "./shared.ts";
 
 // 7: the threads down the sidebar: archived, blank, in the background, drafts, pinned and moved, waiting, searched, and in a project added.
 export const sidebar = async (): Promise<string> => {
@@ -24,15 +25,15 @@ export const sidebar = async (): Promise<string> => {
   const archive = (archived: boolean) =>
     page.evaluate(
       async ({ id, archived }) => {
-        const { Threads } = (await import("/src/ui/api.ts" as string)).api.contracts;
-        await (await (window as any).lemma.service(Threads)).mark(id, { archived });
+        const { Threads } = (await import("/src/ui/api.ts" as string)).api.contracts as Contracts;
+        await (await window.lemma.service(Threads))!.mark(id, { archived });
       },
       { id: seeded, archived },
     );
   await archive(true);
   await page.evaluate(async () => {
-    const { Threads } = (await import("/src/ui/api.ts" as string)).api.contracts;
-    void (await (window as any).lemma.service(Threads)).select(undefined);
+    const { Threads } = (await import("/src/ui/api.ts" as string)).api.contracts as Contracts;
+    void (await window.lemma.service(Threads))!.select(undefined);
   });
   await page.click(".archived-head");
   await page.click(`[data-section=archived] [data-session-row][href="/threads/${seeded}"]`);
@@ -44,8 +45,8 @@ export const sidebar = async (): Promise<string> => {
   const archivedRow = `.archived-row:has(a[href="/threads/${seeded}"])`;
   const openArchived = () =>
     page.evaluate(async () => {
-      const { Settings } = (await import("/src/ui/api.ts" as string)).api.contracts;
-      (await (window as any).lemma.service(Settings)).open("archived");
+      const { Settings } = (await import("/src/ui/api.ts" as string)).api.contracts as Contracts;
+      (await window.lemma.service(Settings))!.open("archived");
     });
   await openArchived();
   await page.click(`${archivedRow} .archived-title`);
@@ -60,8 +61,8 @@ export const sidebar = async (): Promise<string> => {
     .catch(() => assert.fail("a thread unarchived from Settings › Archived is still listed there"));
   await archive(false);
   await page.evaluate(async (id) => {
-    const { Threads } = (await import("/src/ui/api.ts" as string)).api.contracts;
-    void (await (window as any).lemma.service(Threads)).select(id);
+    const { Threads } = (await import("/src/ui/api.ts" as string)).api.contracts as Contracts;
+    void (await window.lemma.service(Threads))!.select(id);
   }, seeded);
   await page.waitForFunction((id) => location.pathname === `/threads/${id}`, seeded);
   await page.waitForSelector(".turn");
@@ -117,12 +118,12 @@ export const sidebar = async (): Promise<string> => {
   await atBlankThread(page);
   const blankId = new URL(page.url()).pathname.split("/")[2]!;
   assert.equal(await page.locator(`.thread-list [href="/threads/${blankId}"]`).count(), 0, "a thread with nothing sent is listed");
-  await page.evaluate(() => (window as any).blankThreads.newThread());
+  await page.evaluate(() => window.blankThreads!.newThread());
   assert.equal(new URL(page.url()).pathname.split("/")[2], blankId, "a second new thread was made beside an empty one");
   await page.click(`.thread-list a[href="${thread}"]`);
   await page.waitForFunction((path) => `${location.pathname}${location.search}` === path, thread, { timeout: 5_000 });
   await page
-    .waitForFunction((id) => !(window as any).blankThreads.list().some((session: any) => session.id === id), blankId, { timeout: 5_000 })
+    .waitForFunction((id) => !window.blankThreads!.list().some((session) => session.id === id), blankId, { timeout: 5_000 })
     .catch(() => assert.fail("an empty new thread, left, stays"));
   // One with a tab in its pane is kept: left, it stays, marked kept on the host so its sweep passes it over.
   await page.keyboard.press("ControlOrMeta+Shift+KeyO");
@@ -133,14 +134,14 @@ export const sidebar = async (): Promise<string> => {
   await page.click(`.thread-list a[href="${thread}"]`);
   await page.waitForFunction((path) => `${location.pathname}${location.search}` === path, thread, { timeout: 5_000 });
   await page
-    .waitForFunction((id) => (window as any).blankThreads.list().find((session: any) => session.id === id)?.kept === true, paneId, { timeout: 5_000 })
+    .waitForFunction((id) => window.blankThreads!.list().find((session) => session.id === id)?.kept === true, paneId, { timeout: 5_000 })
     .catch(async () =>
       assert.fail(
-        `a blank thread with a pane tab is not kept: ${JSON.stringify(await page.evaluate((id) => (window as any).blankThreads.list().find((session: any) => session.id === id), paneId))}`,
+        `a blank thread with a pane tab is not kept: ${JSON.stringify(await page.evaluate((id) => window.blankThreads!.list().find((session) => session.id === id), paneId))}`,
       ),
     );
-  await page.evaluate((id) => (window as any).blankThreads.remove(id), paneId);
-  const threadIds = () => page.evaluate(() => ((window as any).blankThreads.list() as { id: string }[]).map((session) => session.id));
+  await page.evaluate((id) => window.blankThreads!.remove(id), paneId);
+  const threadIds = () => page.evaluate(() => window.blankThreads!.list().map((session) => session.id));
   // ⌘Enter runs the prompt in a new thread in the background: it is listed, and the thread shown stays.
   await page.click(`.thread-list a[href="${thread}"]`);
   await page.waitForFunction((path) => `${location.pathname}${location.search}` === path, thread, { timeout: 5_000 });
@@ -150,7 +151,7 @@ export const sidebar = async (): Promise<string> => {
   host.mock.hold();
   await page.keyboard.press("ControlOrMeta+Enter");
   const background: string = await page
-    .waitForFunction((known) => (window as any).blankThreads.list().find((session: any) => !known.includes(session.id))?.id, known, { timeout: 5_000 })
+    .waitForFunction((known) => window.blankThreads!.list().find((session) => !known.includes(session.id))?.id, known, { timeout: 5_000 })
     .then((handle) => handle.jsonValue() as Promise<string>)
     .catch(async () => assert.fail(`⌘Enter started no thread; ${JSON.stringify(await threadIds())}`));
   await page.waitForSelector(`.thread-list a[href="/threads/${background}"]`);
@@ -189,14 +190,14 @@ export const sidebar = async (): Promise<string> => {
   await page.focus("textarea");
   // In the prompt it is the text field's: no binding takes it (one would at once, before any move lands).
   await page.evaluate(() => {
-    (window as any).taken = undefined;
+    window.taken = undefined;
     // The arrow's own keydown, after the modifiers' (Alt, then Shift, each a keydown of its own).
     window.addEventListener("keydown", (event) => {
-      if (event.key === "ArrowDown") (window as any).taken = event.defaultPrevented;
+      if (event.key === "ArrowDown") window.taken = event.defaultPrevented;
     });
   });
   await page.keyboard.press("Alt+Shift+ArrowDown");
-  assert.equal(await page.evaluate(() => (window as any).taken), false, "Alt+Shift+↓ in the prompt was taken from it");
+  assert.equal(await page.evaluate(() => window.taken), false, "Alt+Shift+↓ in the prompt was taken from it");
   await page.locator("textarea").blur();
   await page.keyboard.press("Alt+Shift+ArrowDown");
   await atBackground("Alt+Shift+↓");
@@ -223,13 +224,13 @@ export const sidebar = async (): Promise<string> => {
   await atBackground("Go forward");
   await page.keyboard.press("ControlOrMeta+Alt+KeyA");
   await page
-    .waitForFunction((id) => (window as any).blankThreads.list().find((session: any) => session.id === id)?.archived === true, background, { timeout: 5_000 })
+    .waitForFunction((id) => window.blankThreads!.list().find((session) => session.id === id)?.archived === true, background, { timeout: 5_000 })
     .catch(() => assert.fail("⌘⌥A did not archive the thread shown"));
   await page.goBack();
   await atBackground("back after archiving");
   await page.keyboard.press("ControlOrMeta+Alt+KeyA");
   await page
-    .waitForFunction((id) => (window as any).blankThreads.list().find((session: any) => session.id === id)?.archived !== true, background, { timeout: 5_000 })
+    .waitForFunction((id) => window.blankThreads!.list().find((session) => session.id === id)?.archived !== true, background, { timeout: 5_000 })
     .catch(() => assert.fail("⌘⌥A did not unarchive the archived thread shown"));
   await page.click(`.thread-list a[href="${thread}"]`);
   await atThread("a click");
@@ -266,7 +267,7 @@ export const sidebar = async (): Promise<string> => {
   await page.waitForSelector(draftRow, { state: "detached", timeout: 5_000 }).catch(() => assert.fail("a discarded draft is still listed"));
   await expose(page, "Threads");
   await page
-    .waitForFunction((id) => !(window as any).services.Threads.list().some((session: any) => session.id === id), draftId, { timeout: 5_000 })
+    .waitForFunction((id) => !window.services!.Threads.list().some((session) => session.id === id), draftId, { timeout: 5_000 })
     .catch(() => assert.fail("a discarded draft's thread is still there"));
   // Pinned from under the pointer, a thread goes to the top. Dragged down past the first of the others, it goes there,
   // unpinned, and keeps that place across a reload.
@@ -314,9 +315,7 @@ export const sidebar = async (): Promise<string> => {
         const rows = [...document.querySelectorAll(".thread-section.sorted li:not([data-section=archived]) [data-session-row]")].map(
           (row) => new URL(row.getAttribute("href")!, "http://x").pathname.split("/")[2],
         );
-        return (
-          rows.indexOf(id) === rows.indexOf(next) + 1 && (window as any).services.Threads.list().find((session: any) => session.id === id)?.pinned !== true
-        );
+        return rows.indexOf(id) === rows.indexOf(next) + 1 && window.services!.Threads.list().find((session) => session.id === id)?.pinned !== true;
       },
       { id: pinning, next },
       { timeout: 5_000 },
@@ -339,8 +338,8 @@ export const sidebar = async (): Promise<string> => {
   // A thread a plugin says waits on the person shows it where its time goes.
   await checkPlugin(page);
   await page.evaluate(async (id) => {
-    const { ThreadWaits } = (await import("/src/ui/api.ts" as string)).api.contracts;
-    (window as any).removeWait = (window as any).checkSlots.add(ThreadWaits, {
+    const { ThreadWaits } = (await import("/src/ui/api.ts" as string)).api.contracts as Contracts;
+    window.removeWait = window.checkSlots.add(ThreadWaits, {
       id: "check.wait",
       waiting: (sessionId: string) => (sessionId === id ? "Needs input" : undefined),
     });
@@ -348,7 +347,7 @@ export const sidebar = async (): Promise<string> => {
   await page
     .waitForSelector(`${rowOf(pinning)} .thread-state[data-state=waiting]:has-text('Needs input')`, { timeout: 5_000 })
     .catch(() => assert.fail("a thread waiting on the person does not say so"));
-  await page.evaluate(() => (window as any).removeWait());
+  await page.evaluate(() => window.removeWait!());
   // Search floats: the head's button opens the palette's threads, whose search finds what was said in them too.
   await page.click(".sidebar-head [aria-label='Search threads']");
   await page
@@ -365,8 +364,8 @@ export const sidebar = async (): Promise<string> => {
   await page.waitForSelector(".palette input", { state: "detached" });
   // Adding a project: Tab goes into the highlighted folder, and Enter then opens that folder, not the one above it.
   await page.evaluate(async () => {
-    const { Dialogs } = (await import("/src/ui/api.ts" as string)).api.contracts;
-    (await (window as any).lemma.service(Dialogs)).open("add-project");
+    const { Dialogs } = (await import("/src/ui/api.ts" as string)).api.contracts as Contracts;
+    (await window.lemma.service(Dialogs))!.open("add-project");
   });
   const folderPath = () => page.inputValue("[aria-label='Folder path']");
   await page.waitForFunction(() => (document.querySelector("[aria-label='Folder path']") as HTMLInputElement | null)?.value === "~/");
@@ -380,7 +379,7 @@ export const sidebar = async (): Promise<string> => {
     .catch(async () => assert.fail(`Enter in a folder gone into left the picker at ${await folderPath()}`));
   await atBlankThread(page);
   assert.equal(
-    await page.evaluate(() => (window as any).blankThreads.active().cwd.replace(/\/$/, "")),
+    await page.evaluate(() => window.blankThreads!.active()!.cwd.replace(/\/$/, "")),
     host.projects.lemma,
     "Enter in a folder gone into opened another",
   );

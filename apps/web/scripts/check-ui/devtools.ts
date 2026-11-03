@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { startHost } from "./hosts.ts";
 import { atBlankThread, boot, drawn } from "./shared.ts";
+import type { Contracts } from "./shared.ts";
 
 // 8: the devtools.
 export const devtools = async (): Promise<string> => {
@@ -8,8 +9,8 @@ export const devtools = async (): Promise<string> => {
 
   // 8. The devtools: docked under the app, each panel shows the app as it runs, and every panel's data reads as JSON.
   await page.evaluate(async () => {
-    const { Settings } = (await import("/src/ui/api.ts" as string)).api.contracts;
-    (await (window as any).lemma.service(Settings)).open(undefined);
+    const { Settings } = (await import("/src/ui/api.ts" as string)).api.contracts as Contracts;
+    (await window.lemma.service(Settings))!.open(undefined);
   });
   await page.keyboard.press("ControlOrMeta+Shift+d");
   await page.waitForSelector(".devtools");
@@ -22,14 +23,14 @@ export const devtools = async (): Promise<string> => {
       return tab !== undefined && document.elementFromPoint(tab.x + tab.width / 2, tab.y + tab.height / 2)?.closest(".devtools") !== null;
     });
   const firstThread: string = await page.evaluate(async () => {
-    const { Threads } = (await import("/src/ui/api.ts" as string)).api.contracts;
-    return (await (window as any).lemma.service(Threads)).list()[0].id;
+    const { Threads } = (await import("/src/ui/api.ts" as string)).api.contracts as Contracts;
+    return (await window.lemma.service(Threads))!.list()[0]!.id;
   });
   const sections = ["general", "appearance", "keyboard", "providers", "plugins", "projects", "archived"].map((section) => `/settings/${section}`);
   for (const path of ["/", `/threads/${firstThread}`, `/threads/${firstThread}/trajectory`, ...sections, "/nowhere"]) {
     await page.evaluate(async (path) => {
-      const { Router } = (await import("/src/ui/api.ts" as string)).api.contracts;
-      (await (window as any).lemma.service(Router)).navigate(path);
+      const { Router } = (await import("/src/ui/api.ts" as string)).api.contracts as Contracts;
+      (await window.lemma.service(Router))!.navigate(path);
     }, path);
     // The new-thread page goes on to a blank thread; a thread's address naming a view opens it in the thread's pane, and
     // then names the thread.
@@ -48,8 +49,8 @@ export const devtools = async (): Promise<string> => {
   assert(await dockOnTop(), "the devtools are hidden after a reload");
   // The walk ended at an address nothing shows; back to a new thread.
   await page.evaluate(async () => {
-    const { Router } = (await import("/src/ui/api.ts" as string)).api.contracts;
-    (await (window as any).lemma.service(Router)).navigate("/");
+    const { Router } = (await import("/src/ui/api.ts" as string)).api.contracts as Contracts;
+    (await window.lemma.service(Router))!.navigate("/");
   });
   await atBlankThread(page);
   assert((await appHeight()) < 900 - 100, "the app did not make room for the devtools");
@@ -71,9 +72,9 @@ export const devtools = async (): Promise<string> => {
     .catch(() => assert.fail("the Host events panel does not follow the agent's activity"));
   // Pinning a thread has its sessions.changes report it, naming the session.
   const pinned: string = await page.evaluate(async () => {
-    const { Threads } = (await import("/src/ui/api.ts" as string)).api.contracts;
-    const threads = await (window as any).lemma.service(Threads);
-    const id = threads.list()[0].id;
+    const { Threads } = (await import("/src/ui/api.ts" as string)).api.contracts as Contracts;
+    const threads = (await window.lemma.service(Threads))!;
+    const id = threads.list()[0]!.id;
     await threads.mark(id, { pinned: true });
     await threads.mark(id, { pinned: false });
     return id;
@@ -159,8 +160,8 @@ export const devtools = async (): Promise<string> => {
   await page.fill("[aria-label='Filter plugins']", "");
   await page.click("[aria-label='Plugins toolbar'] button:text-is('Web app')");
   const snapshot = await page.evaluate(async () => {
-    const { Devtools } = (await import("/src/ui/api.ts" as string)).api.contracts;
-    return JSON.parse(JSON.stringify((await (window as any).lemma.service(Devtools)).snapshot()));
+    const { Devtools } = (await import("/src/ui/api.ts" as string)).api.contracts as Contracts;
+    return JSON.parse(JSON.stringify((await window.lemma.service(Devtools))!.snapshot()));
   });
   assert.deepEqual(Object.keys(snapshot).sort(), [
     "devtools.channels",
@@ -173,7 +174,7 @@ export const devtools = async (): Promise<string> => {
     "devtools.routes",
   ]);
   assert(
-    snapshot["devtools.routes"].routes.some((route: any) => route.id === "thread" && route.entries[0] === "thread-view"),
+    snapshot["devtools.routes"].routes.some((route: { id: string; entries: string[] }) => route.id === "thread" && route.entries[0] === "thread-view"),
     "the routes snapshot does not say who shows a thread",
   );
   await page.keyboard.press("ControlOrMeta+Shift+d");

@@ -1,7 +1,7 @@
 import { Cause, Effect, Stream } from "effect";
 import type { Context } from "effect";
 import { awaitable, definePlugin, Events, PluginContext, Registries } from "@lemma/core";
-import { changesSince, Channels, Inspectors, InteractionError, Paths, withContribution } from "@lemma/contracts";
+import { changesSince, Channels, errorMessage, Inspectors, InteractionError, Paths, withContribution } from "@lemma/contracts";
 import { CommandError, CommandRunner, Commands, COMMANDS_CONTRACT, CommandsChanged, serveCommands } from "@lemma/commands";
 import type { Command, CommandInfo } from "@lemma/commands";
 
@@ -9,8 +9,6 @@ type Service = Context.Service.Shape<typeof CommandRunner>;
 
 const byCategoryThenTitle = (a: CommandInfo, b: CommandInfo): number =>
   (a.category ?? "").localeCompare(b.category ?? "") || a.title.localeCompare(b.title) || a.id.localeCompare(b.id);
-
-const message = (cause: unknown): string => (cause instanceof Error ? cause.message : typeof cause === "string" ? cause : String(cause));
 
 /** What clients see of each command: its `CommandInfo` fields, never whatever else a plugin put on it. */
 const infoOf = (items: readonly { readonly item: Command; readonly pluginId: string }[]): CommandInfo[] =>
@@ -70,7 +68,7 @@ const makeRegistry: Effect.Effect<Service, never, Events | PluginContext | Regis
                 new CommandError({
                   command: id,
                   reason: dismissed ? "Cancelled" : "Failed",
-                  message: dismissed ? `${command.title} was cancelled` : message(error),
+                  message: dismissed ? `${command.title} was cancelled` : errorMessage(error),
                   cause: error,
                 }),
               );

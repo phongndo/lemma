@@ -15,6 +15,14 @@ hooks {
     stash = "git"
     steps = linters
   }
+  // A commit's subject stays within 72 characters, as AGENTS.md asks.
+  ["commit-msg"] {
+    steps {
+      ["subject"] = new Step {
+        check = "awk 'NR == 1 && length($0) > 72 { print \"The commit subject has \" length($0) \" characters; keep it to 72 or fewer.\"; exit 1 }' {{commit_msg_file}}"
+      }
+    }
+  }
   // CI's check and test jobs, before commits leave. It checks the working tree as it is, uncommitted changes
   // included. Without the repository variables git gives a hook: a test's `git init`, `config`, or `commit` in a
   // temporary directory would otherwise write this repository (its config, and a commit on the branch pushed).

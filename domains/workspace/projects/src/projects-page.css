@@ -76,13 +76,6 @@
   gap: 1px;
 }
 
-.project-item-name,
-.project-item-path {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
 .project-item-name {
   font-size: var(--font-size-md);
   font-weight: 500;
@@ -146,11 +139,8 @@
 
 .project-head h2 {
   margin: 0;
-  overflow: hidden;
   font-size: var(--font-size-xl);
   font-weight: 600;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 .project-head-path {
@@ -161,11 +151,8 @@
 }
 
 .project-head-path code {
-  overflow: hidden;
   color: var(--text-2);
   font-size: var(--font-size-sm);
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 .project-head-path .icon-button {

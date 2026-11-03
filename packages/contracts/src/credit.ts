@@ -9,7 +9,7 @@ import type { HandlerStep } from "@lemma/core";
 
 /** A hook handler's part in a result (`HandlerStep`, kept): its plugin, its own time, and what it changed. */
 export const HandlerCredit = Schema.Struct({
-  /** The plugin. */
+  /** The id of the plugin whose handler it is. */
   source: Schema.String,
   /** Its own time, without the rest of the chain, in milliseconds. */
   ms: Schema.Number,

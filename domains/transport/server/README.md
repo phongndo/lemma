@@ -1,6 +1,12 @@
 # transport.server
 
-Serves `RuntimeRpcs` from `@lemma/contracts` with `effect/rpc` on Node's HTTP server, so the web app, the desktop shell, and CLI clients can drive a running host. Requires only what the host provides itself, `Paths` and `HostControl`: each domain serves its own calls and streams as channels, which this serves as they come and go, so a domain's plugin stops, reloads, or is off without the transport restarting or a client losing its connection. Provides nothing; reads `Inspectors` and `Channels` from the core's registries; answers `InteractionHook` for connected clients. Marked `exclusive`: it owns the port, so a reload stops the old instance before starting the new one. The host pins it: it cannot be turned off, only replaced by another transport plugin.
+Serves `RuntimeRpcs` from `@lemma/contracts` with `effect/rpc` on Node's HTTP
+server. The web app, the desktop shell, and CLI clients drive a running host
+through it. It provides nothing. It reads `Inspectors` and `Channels` from the
+core's registries, and answers `InteractionHook` for connected clients. It is
+`exclusive` because it owns the port: a reload stops the old instance before
+starting the new one. The host pins it, so replace it with another transport
+plugin rather than turning it off.
 
 ## Use
 
@@ -18,115 +24,132 @@ Serves `RuntimeRpcs` from `@lemma/contracts` with `effect/rpc` on Node's HTTP se
 | `interactionGraceMs` | `15000`              | How long an open question waits for an answering client to (re)connect before failing `Unavailable`.        |
 | `startupTimeoutMs`   | `60000`              | How long a request held while the host starts (below) waits for its plugins before failing `Unavailable`.   |
 
-Endpoints (token as `Authorization: Bearer <token>` or `?token=`, which browser WebSockets need; otherwise `401`):
+Send the token as `Authorization: Bearer <token>`, or as `?token=`, which
+browser WebSockets need. A request without it gets `401`.
 
-- `GET /rpc` — WebSocket, JSON serialization. One multiplexed connection for UIs.
-- `POST /rpc/http` — streaming HTTP, NDJSON serialization. With `effect/rpc`'s HTTP client, add `HttpClient.filterStatusOk`: otherwise it parses a `401` body as NDJSON and waits forever. Also set the request URL whole (`HttpClientRequest.setUrl`), as `makeHostRpcHttp` in `@lemma/client` does: `RpcClient.layerProtocolHttp` posts to `<url>/`, which is not routed.
-- `GET /api/health` — `{ ok: true, version, protocol }`: `protocol` is `HOST_PROTOCOL`, the version of what it serves on the wire (a host without one speaks 1). A client and a host on different protocols cannot talk: the CLI says so and asks for the host to be restarted.
-- `GET /api/web/<source>/<path>` — a web half or stylesheet the host lists for the web app from the plugin directories (`Web.Composition`); any other path is `404`.
+- `GET /rpc` — WebSocket, JSON serialization. One multiplexed connection for
+  UIs.
+- `POST /rpc/http` — streaming HTTP, NDJSON serialization. With `effect/rpc`'s
+  HTTP client, add `HttpClient.filterStatusOk`, or it parses a `401` body as
+  NDJSON and waits forever. Set the request URL whole
+  (`HttpClientRequest.setUrl`), as `makeHostRpcHttp` in `@lemma/client` does:
+  `RpcClient.layerProtocolHttp` posts to `<url>/`, which is not routed.
+- `GET /api/health` — `{ ok: true, version, protocol }`. `protocol` is
+  `HOST_PROTOCOL`, the version of what it serves on the wire (a host without
+  one speaks 1). A client and a host on different protocols cannot talk: the
+  CLI says so and asks for the host to be restarted.
+- `GET /api/web/<source>/<path>` — a web half or stylesheet the host lists for
+  the web app from the plugin directories (`Web.Composition`). Any other path
+  is `404`.
 
-With `compression` on, `/rpc` accepts `permessage-deflate`, as browsers and Node's `WebSocket` offer it, and the host compresses what it sends of 1 KiB or more at zlib's fastest level: a thread's log, a listing, a finished message. A 10,000-event log of 6.4 MB crosses as 1.1 MB, which opens the thread three times as fast over a 50 Mbit/s link and costs about 30 ms on this machine. What is smaller, a turn's deltas among it, goes as it is. A browser compresses everything it sends once the extension is on, and the host inflates each message: that adds about 25 µs of CPU, both ends together, to a small message's round trip, as a stream's acknowledgements make. Turn it off when every client runs on the host's machine.
+With `compression` on, `/rpc` accepts `permessage-deflate`, which browsers and
+Node's `WebSocket` offer. The host compresses each message of 1 KiB or more at
+zlib's fastest level: a thread's log, a listing, a finished message. A
+10,000-event log of 6.4 MB crosses as 1.1 MB, which opens the thread three
+times as fast over a 50 Mbit/s link, for about 30 ms of CPU. Smaller messages,
+such as a turn's deltas, go as they are. A browser compresses everything it
+sends once the extension is on, which adds about 25 µs to a small message's
+round trip. Turn compression off when every client runs on the host's machine.
 
-Over `/rpc/http`, the host compresses an exchange's replies of 1 KiB or more as the client accepts (`Accept-Encoding`): brotli at quality 4, else gzip at zlib's fastest level, which Node's `fetch`, and so the CLI, asks for. A stream's replies are compressed as they come, each flushed at once. A 7.4 MB log crosses as 1.4 MB, which a CLI reads in 0.32 s rather than 1.26 s over a 50 Mbit/s link with a 20 ms round trip, and in 0.10 s rather than 0.21 s on the host's machine, through `makeHostRpcHttp` (`@lemma/client`), whose reader takes what `fetch` inflates in time linear in its length (Effect's took 0.72 s). Compressing it takes the host about 40 ms more; a 77 KB listing, under a millisecond. A smaller reply goes as it is.
+Over `/rpc/http`, the host compresses replies of 1 KiB or more as the client's
+`Accept-Encoding` allows: brotli at quality 4, else gzip at zlib's fastest
+level. Node's `fetch`, and so the CLI, asks for it. A stream's replies are
+compressed as they come, each flushed at once. A 7.4 MB log crosses as 1.4 MB,
+which the CLI reads in 0.32 s rather than 1.26 s over a 50 Mbit/s link with a
+20 ms round trip. Compressing it costs the host about 40 ms.
 
-The web app's files go as the copy its build compressed beside each (`<file>.br`, `<file>.gz`, which the web app's `vite build` writes) to a client that accepts that encoding: brotli first, which browsers offer over HTTPS, then gzip; a copy older than its file is never sent. So nothing is compressed as it is served, and its first load crosses as 346 kB of brotli, or 410 kB of gzip, rather than 1.28 MB: over a 10 Mbit/s link with a 50 ms round trip, the page shows its composer in 0.62 s rather than 1.37 s. What is under `assets/` is named by its content, so it is cached for a year and never asked about again (`immutable`); anything else (`index.html`) is asked about each time, and answered `304` while its `ETag` or date still holds. A `staticDir` of your own is served the same way, compressed where it has such copies.
+The web app's files are served from the compressed copies its build writes
+beside each (`<file>.br`, `<file>.gz`), brotli first, then gzip, to a client
+that accepts them. A copy older than its file is never sent. So nothing is
+compressed while serving, and the first load crosses as 346 kB of brotli rather
+than 1.28 MB. Files under `assets/` are named by their content, so they are
+cached for a year (`immutable`). Anything else (`index.html`) is revalidated
+each time, and answered `304` while its `ETag` or date holds. A `staticDir` of
+your own is served the same way.
 
-Without a configured `token`, the host's token is the one in `<Paths.home>/token`. The first start creates that file with a random token (mode 0600, in a 0700 home; never starting with `-`, which `--token <token>` would read as an option), complete before it appears and never replacing one another host created at the same moment; later starts read it, so clients on other machines stay valid across host restarts. Surrounding whitespace is ignored; an empty or unreadable file fails the plugin's activation. Delete the file and restart the host to rotate the token. Remote access is described in [docs/remote.md](../../../docs/remote.md).
+Without a configured `token`, the host uses the one in `<Paths.home>/token`.
 
-After listening it writes `<Paths.home>/transport.json` (mode 0600), the entry by which clients find the host (`Discovery` in `@lemma/contracts/discovery`), and removes it on shutdown unless another host has replaced it. It also publishes a `Notice` with the URL (and a tokenized link to the web app when `staticDir` is set).
+- The first start creates the file with a random token, mode 0600 in a 0700
+  home. The token never starts with `-`, which `--token <token>` would read as
+  an option.
+- The file is complete before it appears, and never replaces one another host
+  created at the same moment.
+- Later starts read it, so clients on other machines stay valid across host
+  restarts.
+- Surrounding whitespace is ignored. An empty or unreadable file fails the
+  plugin's activation.
+- To rotate the token, delete the file and restart the host.
 
-The file is written as soon as the transport listens, before the plugins after it have started; the startup gate (below) holds requests for channels and inspectors until they have. Written later, it would make a starting host look absent: the CLI would report that no host runs, and the desktop app would start a second one. The gate, not the file, says when they are served, so it also covers clients that know the address another way (a remote, a reloaded page).
+[docs/remote.md](../../../docs/remote.md) describes remote access.
+
+After listening, it writes `<Paths.home>/transport.json` (mode 0600), the entry
+by which clients find the host (`Discovery` in `@lemma/contracts/discovery`).
+It removes the file on shutdown unless another host has replaced it. It also
+publishes a `Notice` with the URL, and a tokenized link to the web app when
+`staticDir` is set.
+
+It writes the file as soon as it listens, before the plugins after it have
+started. A file written later would make a starting host look absent: the CLI
+would report that no host runs, and the desktop app would start a second one.
+The startup gate (below) holds requests until the plugins are up, which also
+covers clients that know the address another way (a remote, a reloaded page).
 
 ## Behavior
 
-- **Errors.** Domain errors, a channel's and the host control's
-  (`ReloadError`), become `HostError`, whose `code` is the error's `reason`
-  (`NotFound`, `Busy`, …) or its tag, and whose `subject` names the session,
-  provider, plugin, tool, or path. A handler's defect fails only its own
-  request, as a defect carrying its message; the connection and its other
-  requests go on.
-- **RPCs** are the runtime's own, as
-  [`RuntimeRpcs`](../../../packages/contracts/src/rpc.ts) documents: the host's
-  info, plugins, and changes through `HostControl`, its inspectors, the web
-  app's composition, the questions it asks, and the channels. `Host.Inspect`
-  checks a snapshot is JSON before sending it, so one that is not fails that
-  request `Failed`, naming the inspector, rather than as a defect from the
-  protocol.
-- **Startup.** `Channel.List`, `Channel.Call`, `Channel.Open`,
-  `Host.Inspectors`, and `Host.Inspect` wait until the composition is first
-  up (`HostControl.composition` resolves). They answer from registries
-  (`Channels`, `Inspectors`), which show a starting composition's
-  contributions only once it is up, all at once. So a request made as soon as
-  the host was found reaches the channel or inspector of a plugin that starts
-  after the transport, rather than failing `NotFound`. One still waiting after
-  `startupTimeoutMs` fails `Unavailable`, naming the channel or inspector it
-  names. A channel's own error can be `Unavailable` too, so the code alone
-  does not say the host is starting. A restarted transport's gate opens at
-  once. `Host.Info`, `Host.Plugins`, and the host's changes are not held: they
-  wait for the composition through `HostControl`.
-- **Channels.** `Channel.List`, `Channel.Call`, and `Channel.Open` serve
-  whatever host plugins add to
-  [`Channels`](../../../packages/contracts/src/channels.ts), read at each call,
-  so a domain reaches its clients, and a plugin gives its own UI a call or
-  a stream, without a change here. Payloads and results cross as
-  JSON through the channel's own schemas' JSON codecs, inside the request, so a
-  schema or handler that throws fails that request alone (`InvalidPayload`,
-  `Failed`), and a value its codec cannot send fails `Failed` rather than
-  reaching the protocol's serializer. Each call and stream runs as work with
-  the channel answering for its id when it arrives (`Registries.run` in the
-  core), from decoding its payload to encoding what it sends, so the plugin's
-  finalizers wait for it; a request is `NotFound` only when nothing answers,
-  once any change to the composition under way has finished (one made during
-  an exclusive plugin's restart reaches its replacement).
-  When the plugin stops or is replaced, a call in flight finishes on its own
-  instance and is interrupted, `Withdrawn`, only if it outlives the dispose
-  deadline, unless its handler stops at once for the plugin leaving, as one
-  that waits on its plugin does: the transport hands it `left` and a `signal`
-  (`CallLifetime`), and a call that stops for them ends `Withdrawn` too. A
-  call declared `repeatable` is made again instead, on what answers for its
-  id next, a replacement or what the change left (`withChannel` says how,
-  and how these waits end): `Withdrawn` exists only because the host
-  reloads plugins, so the host hides it where repeating is safe. A
-  stream is stopped at once and ends `Withdrawn`, so it never holds its
-  plugin's disposal, and it runs outside its plugin's `Admitted` work: a
-  change it asks for that restarts its own plugin applies at once rather than
-  wait for its client to close it (see `ChangeReport`). A middleware
-  around each `Channel.Open` request (`ChannelLifetime`) does the stopping,
-  because the RPC server sends the next chunk only once the client
-  acknowledged the last (WebSocket) or the response drained (streaming HTTP),
-  and only a wrapper around the whole request can end one blocked there: a
-  client that stopped reading cannot keep a withdrawn stream running. A stream
-  also ends `Withdrawn` when another plugin's channel takes over its id (a
-  lower order), so a client that reopens reaches the one answering now; a call
-  in flight is left to finish. A stream is pulled at its client's pace over
-  either protocol: one chunk ahead of the client over the WebSocket, as far as
-  the connection's buffers allow over HTTP. What it makes while its client
-  acknowledges a chunk goes out together, as the next (`mapChunks` in
-  `@lemma/contracts`): encoded element by element, every element would wait a
-  round trip, and a client across a network would fall behind a turn's deltas
-  and lose what the stream's buffers drop. So a stream costs a message per
-  round trip at most, however fast it runs. Effect's RPC client reads a
-  WebSocket in order, so a client that stops taking a stream's elements stalls
-  its own connection, never the host: the host holds no more for it than its
-  stream's own bounded buffers (`eventFeed`), one chunk on the way.
-- **Replies.** Every request but a stream runs as the transport's own work
-  (`Registries.run` with an item of a registry of its own), from its handler
-  until its reply has left: written to the WebSocket, or, over streaming HTTP,
-  once the response has finished. So a change a request asks for that restarts
-  the transport finds the transport in `Admitted`, and the host applies it once
-  the reply has reached the client (`ChangeReport.deferred`), rather than cut
-  the reply off. Once the transport is leaving, the work stops holding its
-  disposal and its requests go on unheld, cut off with their connections: a
-  request still running then may be waiting on the change replacing the
-  transport (its lock, `Registries.settled`), which would wait on it until the
-  dispose deadline. A stream is never held, or it would hold the transport's
-  disposal for as long as a client reads it.
-- **`Host.Events`.** The runtime's events ([`RuntimeEvent`](../../../packages/contracts/src/rpc.ts)): the kernel events behind them (`Notice`, `PluginsChanged`, `WebChanged`) are observed once, at activation, and copied into every subscriber's drop-oldest buffer (1024 events): a slow client loses old events, never the publisher's time, and lists again what they report. `channels-changed` comes from watching `Channels` itself, whenever a different contribution answers for any id, so a client hears that a channel is back even when no plugin event says so (a scheduled restart publishes none). Each kind has its own observer queue, so order holds within a kind but not across kinds. A subscription opens with `{ type: "subscribed" }`, sent once the subscriber has joined: a client that must see the effects of its own next call (a question a command asks) waits for it. A call's reply is no such sign, since the host handles the calls on one socket concurrently and the RPC client sends a stream request asynchronously. A domain streams its own changes on its channels (`agent.activity`, `sessions.changes`).
-- **Interaction.** A `Host.Events` subscriber says whether it answers questions (`answers`): a web app does, as does a command that can answer them (it asks at its terminal, dismisses them, or was given answers); a client that only watches (`lemma events`, a script's `lemma run`) does not. With at least one answering subscriber, an `InteractionHook` request is held for them and broadcast as an `interaction` event to every subscriber, watchers included, through a per-subscriber queue that never drops, and replayed to clients that subscribe while it is open. The first `Interaction.Answer` wins; `Interaction.Dismiss` fails it `Dismissed`. Once it settles, or the asking fiber is interrupted, every client receives `interaction-closed`. With no answering subscriber the request passes to the next handler (and, with none left, the host's `Interaction` reports `Unavailable`), so a watcher never holds a question nobody will answer. If every answering client leaves and none returns within `interactionGraceMs`, it fails `Unavailable`.
-- **Shutdown** closes the listener and destroys open sockets, including upgraded WebSockets, before any other cleanup: `server.close` and the platform's WebSocket server would each wait for connected clients, so a reload with a UI attached would miss its deadline and leave the port bound.
+- **Errors.** Domain errors become `HostError`. Its `code` is the error's
+  `reason` (`NotFound`, `Busy`, …) or tag, and its `subject` names the session,
+  provider, plugin, tool, or path. A handler's defect fails only its request.
+- **Startup.** Channel and inspector requests wait until the composition is
+  first up, so a request made as soon as the host is found reaches a plugin
+  that starts after the transport. One still waiting after `startupTimeoutMs`
+  fails `Unavailable`, which a channel's own error can be too.
+- **Channels** are read from
+  [`Channels`](../../../packages/contracts/src/channels.ts) at each call, so a
+  plugin serves a call or stream without a change here. Payloads and results
+  cross as JSON inside the request: a bad payload fails `InvalidPayload`, and a
+  throwing handler or a value its codec cannot send fails `Failed`. `Channel`
+  says how a call ends across a reload.
+- **Streams** end `Withdrawn` at once when their plugin stops, or when another
+  channel takes over their id. A middleware (`ChannelLifetime`) ends them,
+  because the RPC server waits for the client's acknowledgement before the next
+  chunk. A stream is pulled at its client's pace and sends what it made
+  meanwhile as one chunk (`mapChunks`), so it costs at most a message per round
+  trip. A client that stops reading stalls only its own connection.
+- **Replies.** A change that restarts the transport is applied once the reply
+  asking for it has left (`ChangeReport.deferred`), since every request but a
+  stream runs as the transport's own work until then.
+- **`Host.Events`** copies `Notice`, `PluginsChanged`, and `WebChanged` into
+  each subscriber's drop-oldest buffer of 1024 events, so a slow client loses
+  old events, never the publisher's time. `channels-changed` comes from
+  watching `Channels`, so a client hears a channel is back even when no plugin
+  event says so. Order holds within a kind, not across kinds.
+- **Interaction.** While a `Host.Events` subscriber `answers` questions, an
+  `InteractionHook` request is broadcast to every subscriber, never dropped,
+  and replayed to clients that subscribe while it is open. The first
+  `Interaction.Answer` wins, `Interaction.Dismiss` fails it `Dismissed`, and
+  every client then receives `interaction-closed`. With no answering
+  subscriber, the request passes to the next handler. If every answering client
+  leaves and none returns within `interactionGraceMs`, it fails `Unavailable`.
+- **Shutdown** destroys open sockets before any other cleanup, because
+  `server.close` would wait for connected clients and a reload with a UI
+  attached would miss its deadline and leave the port bound.
 
 ## Rationale
 
-It requires the runtime only, so no domain is part of it: a change to any other plugin leaves it running, and with it every client's connection. A repeatable call that change cut off is made again here; any other call, and a stream, ends `Withdrawn`, and the client decides whether to make it again on the same connection (`follow` in `@lemma/client` reopens a stream so). Only a change to the transport itself drops the connections: the host answers it first and applies it once the reply has left (`ChangeReport.deferred`). Only the transport knows when it has written a reply, so it is the transport that holds its requests, and with what any plugin has, an item of its own: a plugin's disposal waits for the work run with its items, and the host defers a change by that work (`Admitted`), naming no transport.
+It requires the runtime only (`Paths`, `HostControl`), so no domain is part of
+it. A change to any other plugin leaves it running, and with it every client's
+connection. Only a change to the transport itself drops the connections, and
+the host applies it once the reply asking for it has left. Only the transport
+knows when it has written a reply, so it holds its requests itself, as an item
+of a registry of its own. A plugin's disposal waits for the work run with its
+items, and the host defers a change by that work (`Admitted`), naming no
+transport.
 
-Two protocols share one handler set because their consumers differ: a UI keeps a socket and multiplexes everything; a script wants one HTTP call that returns when done. Authentication is checked per request before routing, so the WebSocket upgrade is covered by the same check, while static assets stay public because they contain no data. Interaction goes through the hook, not an event, because a question nobody can see must fail the operation rather than hang it; the event stream is only the delivery vehicle. The grace period and replay exist so a page reload does not abort a login in progress.
+Two protocols share one handler set because their consumers differ: a UI keeps
+a socket and multiplexes everything, and a script wants one HTTP call that
+returns when done. Authentication is checked per request before routing, so the
+WebSocket upgrade is covered by the same check. Static assets stay public
+because they contain no data. Interaction goes through the hook, not an event,
+because a question nobody can see must fail the operation rather than hang it.
+The grace period and replay exist so a page reload does not abort a login in
+progress.

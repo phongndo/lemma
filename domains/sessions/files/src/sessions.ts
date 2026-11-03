@@ -1,9 +1,9 @@
 import * as path from "node:path";
-import { Clock, Deferred, Duration, Effect, Exit, Option, Result, Schedule, Schema, SchemaIssue, Semaphore } from "effect";
+import { Clock, Deferred, Duration, Effect, Exit, Option, Result, Schedule, Schema, Semaphore } from "effect";
 import type { Context, Scope } from "effect";
-import { assert, Events, PluginContext } from "@lemma/core";
+import { assert, Events, firstIssue, PluginContext } from "@lemma/core";
 import type { CoreClosed } from "@lemma/core";
-import { Notice, Paths, randomId } from "@lemma/contracts";
+import { errorMessage, Notice, Paths, randomId } from "@lemma/contracts";
 import type { IdSource } from "@lemma/contracts";
 import { SessionAppended, SessionChanged, SessionError, SessionEvent, SessionRemoved, branchOf, searchLog, searchWords } from "@lemma/sessions";
 import type { Contribution, SessionInfo, SessionSearchMatch, Sessions } from "@lemma/sessions";
@@ -73,7 +73,6 @@ const decodeEvent = Schema.decodeUnknownResult(SessionEvent, { onExcessProperty:
 /** What `search` finds at most when not told, and how many logs it reads at once. */
 const SEARCH_LIMIT = 20;
 const SEARCH_READS = 8;
-const formatIssues = SchemaIssue.makeFormatterStandardSchemaV1();
 
 /**
  * The event as reading its line back will give it, or why it cannot be written. JSON
@@ -86,11 +85,11 @@ const asRead = (event: SessionEvent): Result.Result<SessionEvent, string> => {
   try {
     json = JSON.parse(JSON.stringify(event));
   } catch (cause) {
-    return Result.fail(cause instanceof Error ? cause.message : String(cause));
+    return Result.fail(errorMessage(cause));
   }
   return Result.mapError(decodeEvent(json), (error) => {
-    const [issue] = formatIssues(error.issue).issues;
-    return issue === undefined ? (error.message.split("\n")[0] ?? error.message) : `${issue.path?.join(".") ?? ""}: ${issue.message}`;
+    const issue = firstIssue(error.issue);
+    return issue === undefined ? (error.message.split("\n")[0] ?? error.message) : `${issue.path.join(".")}: ${issue.message}`;
   });
 };
 
@@ -383,15 +382,18 @@ export const make = ({
         }).pipe(Effect.tapError((error) => (error.cause === CHANGED_ON_DISK ? forget(entry) : Effect.void))),
       );
 
-    const create: Service["create"] = (options) =>
-      Effect.gen(function* () {
-        const cwd = path.resolve(options?.cwd ?? paths.cwd);
-        const createdAt = yield* Clock.currentTimeMillis;
+    /** A new session's header, under an id no session has, and its file. */
+    const newSession = (cwd: string, parent: Header["parent"]) =>
+      Effect.map(Clock.currentTimeMillis, (createdAt) => {
         let id = randomId(ids, SESSION_ID_BYTES);
         while (entries.has(id)) id = randomId(ids, SESSION_ID_BYTES);
-        const parent = options?.parent;
         const header: Header = { type: "session", version: FORMAT_VERSION, id, cwd, createdAt, ...(parent === undefined ? {} : { parent }) };
-        const file = sessionFile(root, cwd, createdAt, id);
+        return { header, id, createdAt, file: sessionFile(root, cwd, createdAt, id) };
+      });
+
+    const create: Service["create"] = (options) =>
+      Effect.gen(function* () {
+        const { header, id, createdAt, file } = yield* newSession(path.resolve(options?.cwd ?? paths.cwd), options?.parent);
         const line = encodeLine(header);
         const bytes = Buffer.byteLength(line);
         // Uninterruptible until the entry holds the writer, so its file is always closed.
@@ -609,13 +611,7 @@ export const make = ({
         const source = yield* opened(sessionId);
         if (!source.byId.has(eventId)) return yield* notFound(sessionId, `Event ${eventId} is not in session ${sessionId}`);
         const branch = pathTo(source.byId, eventId).map((event, index) => ({ ...event, seq: index + 1 }));
-        const cwd = source.marks.cwd ?? source.header.cwd;
-        const createdAt = yield* Clock.currentTimeMillis;
-        let id = randomId(ids, SESSION_ID_BYTES);
-        while (entries.has(id)) id = randomId(ids, SESSION_ID_BYTES);
-        const parent = options?.parent;
-        const header: Header = { type: "session", version: FORMAT_VERSION, id, cwd, createdAt, ...(parent === undefined ? {} : { parent }) };
-        const file = sessionFile(root, cwd, createdAt, id);
+        const { header, id, createdAt, file } = yield* newSession(source.marks.cwd ?? source.header.cwd, options?.parent);
         const text = [header, ...branch].map(encodeLine).join("");
         const written = yield* Effect.tryPromise({
           try: () => writeFileAtomic(file, text, { fs, mode: 0o644, dirMode: 0o755, sync: true, exclusive: true }),

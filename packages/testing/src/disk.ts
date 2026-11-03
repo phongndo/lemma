@@ -512,7 +512,8 @@ function parseFlags(flags: string | number): { write: boolean; create: boolean; 
   }
 }
 
-function errno(code: string, message: string): NodeJS.ErrnoException {
+/** An error as Node's file system throws it: its `code` (`ENOENT`), and a message that starts with it. */
+export function errno(code: string, message: string): NodeJS.ErrnoException {
   return Object.assign(new Error(`${code}: ${message}`), { code });
 }
 

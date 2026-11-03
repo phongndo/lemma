@@ -29,13 +29,6 @@
   color: var(--text);
 }
 
-/* What it offers, on one line, cut to fit. */
-.provider-desc {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
 .provider-connect {
   flex: none;
   min-width: 76px;

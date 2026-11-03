@@ -1577,6 +1577,9 @@ importers:
       '@lemma/actions':
         specifier: workspace:*
         version: link:../../actions/contract
+      '@lemma/contracts':
+        specifier: workspace:*
+        version: link:../../../packages/contracts
       '@lemma/frame':
         specifier: workspace:*
         version: link:../contract
@@ -2819,6 +2822,9 @@ importers:
       '@lemma/agent':
         specifier: workspace:*
         version: link:../../agent/contract
+      '@lemma/contracts':
+        specifier: workspace:*
+        version: link:../../../packages/contracts
       '@lemma/llm':
         specifier: workspace:*
         version: link:../../llm/contract
@@ -2967,6 +2973,9 @@ importers:
       '@lemma/contracts':
         specifier: workspace:*
         version: link:../../../packages/contracts
+      '@lemma/devtools':
+        specifier: workspace:*
+        version: link:../../devtools/contract
       '@lemma/llm':
         specifier: workspace:*
         version: link:../../llm/contract

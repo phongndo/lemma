@@ -3,13 +3,12 @@ import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { Data, Effect } from "effect";
 import { errorCode, writeFileAtomic } from "@lemma/contracts/fs";
+import { errorMessage } from "@lemma/contracts";
 
 /** `<home>/token`: the token the host uses when its config sets none. */
 const tokenPath = (home: string): string => join(home, "token");
 
 class TokenError extends Data.TaggedError("TokenError")<{ readonly message: string }> {}
-
-const reason = (cause: unknown) => (cause instanceof Error ? cause.message : String(cause));
 
 /** The file's token, or undefined when there is no file. */
 const read = async (path: string): Promise<string | undefined> => {
@@ -18,7 +17,7 @@ const read = async (path: string): Promise<string | undefined> => {
     text = await readFile(path, "utf8");
   } catch (cause) {
     if (errorCode(cause) === "ENOENT") return undefined;
-    throw new TokenError({ message: `Cannot read the host's token from ${path}: ${reason(cause)}` });
+    throw new TokenError({ message: `Cannot read the host's token from ${path}: ${errorMessage(cause)}` });
   }
   const token = text.trim();
   if (token === "") throw new TokenError({ message: `${path} is empty; delete it and restart the host to generate a new token` });
@@ -51,12 +50,12 @@ export const loadToken = (home: string): Effect.Effect<string, TokenError> =>
       try {
         created = await writeFileAtomic(path, `${token}\n`, { exclusive: true });
       } catch (cause) {
-        throw new TokenError({ message: `Cannot create the host's token file ${path}: ${reason(cause)}` });
+        throw new TokenError({ message: `Cannot create the host's token file ${path}: ${errorMessage(cause)}` });
       }
       if (created) return token;
       const winner = await read(path);
       if (winner === undefined) throw new TokenError({ message: `${path} disappeared while it was being created; restart the host` });
       return winner;
     },
-    catch: (cause) => (cause instanceof TokenError ? cause : new TokenError({ message: reason(cause) })),
+    catch: (cause) => (cause instanceof TokenError ? cause : new TokenError({ message: errorMessage(cause) })),
   });

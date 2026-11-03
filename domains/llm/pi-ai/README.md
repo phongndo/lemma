@@ -1,8 +1,17 @@
 # llm.pi-ai
 
-Provides `Llm` (`@lemma/llm`) by wrapping [`@earendil-works/pi-ai`](https://github.com/earendil-works/pi), and serves its `llm.*` channels to clients (`LlmChannels`, through `serveLlm` from [the contract](../contract/src/llm.ts), which a replacement uses as well). Requires `Credentials`, `HostControl`, and `Paths`.
+Provides `Llm` (`@lemma/llm`) by wrapping
+[`@earendil-works/pi-ai`](https://github.com/earendil-works/pi), and serves its
+`llm.*` channels to clients (`LlmChannels`, through `serveLlm` from [the
+contract](../contract/src/llm.ts), which a replacement uses as well).
 
-Every pi-ai built-in provider but the legacy OpenAI Codex is registered, with the logins pi-ai offers: OpenAI (API key, or signing in with a ChatGPT plan), Anthropic (API keys only), Google, Vertex, Bedrock, Mistral, Groq, xAI, OpenRouter, GitHub Copilot, OpenCode Zen and Go, and the rest. Auth resolves the way pi does: a credential stored by a login (the Providers page, or `lemma login`) wins, then the provider's environment variables or ambient config (AWS profiles, gcloud ADC).
+Every pi-ai built-in provider but the legacy OpenAI Codex is registered, with
+the logins pi-ai offers: OpenAI (API key, or signing in with a ChatGPT plan),
+Anthropic (API keys only), Google, Vertex, Bedrock, Mistral, Groq, xAI,
+OpenRouter, GitHub Copilot, OpenCode Zen and Go, and the rest. Auth resolves the
+way pi does. A credential stored by a login (the Providers page, or
+`lemma login`) wins. Then come the provider's environment variables or ambient
+config (AWS profiles, gcloud ADC).
 
 ## Config
 
@@ -44,43 +53,167 @@ All fields are optional.
 }
 ```
 
-The web app's Providers page adds and removes these rows for you (through the host's `add`/`remove` config edits, which never read the list back); a key typed there is stored as a login's, and the row reads `<ID>_API_KEY` instead of holding it. A custom provider needs `id` (no `/`), `api`, `baseUrl`, and `models`. `api` is one of pi-ai's wire APIs: `openai-completions`, `openai-responses`, `openai-codex-responses`, `azure-openai-responses`, `anthropic-messages`, `google-generative-ai`, `google-vertex`, `mistral-conversations`, `bedrock-converse-stream`, `pi-messages`. Model defaults follow pi's `models.json`: `name` = `id`, `reasoning: false`, `input: ["text"]`, 128k context, 16,384 output tokens, zero cost (USD per million tokens). `compat` (provider-wide, overridden per model field by field) and `thinkingLevelMap` are passed through to pi-ai unchanged; see pi-ai's "OpenAI Compatibility Settings". A custom provider with the id of a built-in replaces it.
+The web app's Providers page adds and removes these rows for you, through the
+host's `add`/`remove` config edits. A key typed there is stored as a login's,
+and the row reads `<ID>_API_KEY` instead of holding it.
 
-A plugin adds a provider of the same shape to the contract's `Providers` registry (`owner.add(Providers, { id, api, baseUrl, models })`), and it is served while that plugin runs, listed with `from` naming the plugin: a company's gateway, a local server that comes with its own plugin. One whose `api` is not among those above, or whose id a built-in or the user's provider has, is left out with a warning.
+- A custom provider needs `id` (no `/`), `api`, `baseUrl`, and `models`.
+- `api` is one of pi-ai's wire APIs: `openai-completions`, `openai-responses`,
+  `openai-codex-responses`, `azure-openai-responses`, `anthropic-messages`,
+  `google-generative-ai`, `google-vertex`, `mistral-conversations`,
+  `bedrock-converse-stream`, `pi-messages`.
+- Model defaults follow pi's `models.json`: `name` = `id`, `reasoning: false`,
+  `input: ["text"]`, 128k context, 16,384 output tokens, zero cost (USD per
+  million tokens).
+- `compat` (provider-wide, overridden per model field by field) and
+  `thinkingLevelMap` pass to pi-ai unchanged; see pi-ai's "OpenAI Compatibility
+  Settings".
+- A custom provider with the id of a built-in replaces it.
 
-Without an `apiKey`, a custom provider counts as configured and sends a placeholder key, because the OpenAI SDKs refuse an empty one and local servers ignore it. A configured `apiKey.env` that is unset leaves the provider unconfigured until a login stores a key.
+A plugin adds a provider of the same shape to the contract's `Providers`
+registry (`owner.add(Providers, { id, api, baseUrl, models })`): a company's
+gateway, or a local server that comes with its own plugin. It is served while
+that plugin runs, listed with `from` naming the plugin. One whose `api` is not
+among those above, or whose id a built-in or the user's provider has, is left
+out with a warning.
+
+Without an `apiKey`, a custom provider counts as configured and sends a
+placeholder key, because the OpenAI SDKs refuse an empty one and local servers
+ignore it. A configured `apiKey.env` that is unset leaves the provider
+unconfigured until a login stores a key.
 
 ## Behavior
 
-- Model refs are `<provider>/<id>`. An unknown ref fails with `LlmError` `UnknownModel` before any request. `thinkingLevels` come from pi-ai's `getSupportedThinkingLevels`, without pi's `max` (the contract has no equivalent). A request's `thinking` is clamped to the model's supported levels, and `"off"` sends no reasoning option.
-- Azure keeps the provider id `azure-openai-responses`, even though pi-ai names it `azure`: stored credentials, `include`/`exclude`, and saved model refs keep working. Its live catalog uses the upstream name.
-- `stream` runs `LlmRequestHook` around pi-ai's `streamSimple` (the contract's `streamThroughHook`): a handler that hands `next` a changed request fails the stream with `LlmError` `Hook`, naming it, and nothing is sent, as the request is what its caller logged. Interrupting the stream aborts the provider request. The plugin enforces the `StreamEvent` protocol even where pi-ai does not: it adds a `start` event when setup fails before one, emits exactly one `done`/`error`, and rebuilds the final message without pi-only fields such as diagnostics. pi's `pending` and `deferred` stop reasons become `error`. When auth is missing, or a sign-in's refresh fails, the plugin returns an `error` event saying how to connect again (the Providers page, or `lemma login <provider>`). It does not throw.
-- **Failures.** pi-ai asks a failing provider again itself, twice, before a response starts, where its SDK would (a 408, 409, 429, or 5xx, or a lost connection), waiting the delay the provider names (`Retry-After`) up to a minute; pi-ai makes none unless asked, and reads no `Retry-After` without them. What still fails ends with an `error` event carrying `failure` (`LlmFailure`), from pi-ai's classifiers over the provider's wording, as pi reports failures as text: `overflow` when `isContextOverflow` matches; `fatal` for a leading 4xx status other than those (a request at fault, which pi's test, finding a status anywhere in the text, could take for a 5xx) and a request over a per-minute token limit; `transient` for Node's connection errors (`ECONNRESET`, `ETIMEDOUT`, …), which pi's test misses; else `transient`, or `rate-limit` when the text says so, when `isRetryableAssistantError` says asking again can help (with `retryAfterMs` when the provider asked for a longer wait than pi-ai sits out), and `fatal` otherwise (authentication, quota and billing limits). Callers retry the rest (the agent does).
-- **Silent overflow.** A response cut off at its output limit having said nothing, its input filling the context window, ends as an `overflow` failure: some providers cut a request too long to fit instead of refusing it. pi-ai also counts a finished answer whose input exceeds the window, but that one is kept, as a wrong window in a model's metadata would turn good answers into failures.
-- **Stalls.** A response that sends nothing for `streamTimeout` seconds (its first event, or the next) ends at once as a `transient` failure, and its request is aborted: a half-open connection would otherwise hold a turn forever.
-- **Prompt cache.** `cacheRetention` goes to pi-ai, which maps it to each provider's cache lifetime. `long` (Anthropic's hour, where offered) suits turns whose tool calls outlast the short lifetime of about five minutes, at a higher price for writing the cache.
-- **Classifiers.** `classifiers` lists pi-ai's classifier models, which `models` (chat only) leaves out: TypeSafe's Jev (`typesafe/jev-latest`, keyed by `TYPESAFE_API_KEY` or `lemma login typesafe`), and those other providers serve, Jev among them. Jev judges images with the state (its `input` includes `"image"`): pi-ai sends them to TypeSafe as its `assets`, with the header that opts into that experimental input, and through OpenRouter as image parts of the state. `classify` runs pi-ai's `classify` with the provider's auth and Lemma's `User-Agent`; pi-ai answers a provider's failure, missing auth included, as an error result, which it passes on. Their lists are pi-ai's: a live catalog adds chat models only, and never a model pi-ai knows as a classifier.
-- **Image models.** `imageModels` lists pi-ai's image models (OpenRouter's Gemini image models, say), and `generateImages` runs pi-ai's `generateImages` with the provider's auth and Lemma's `User-Agent`, a provider's failure, missing auth included, an error result, as with `classify`.
-- **Sign-ins.** `login(provider, type, options)` runs the provider's pi-ai flow as its `SignIn` (`makeSignIns` from the contract), which `signIns` lists and `answerSignIn` answers, so what it asks reaches every client and waits for the first to answer. pi-ai's link to open is a `browser` step, and the paste prompt that races its local callback the same step taking a paste; once the callback wins, or the address is pasted, the sign-in shows the code being exchanged; a device code is a `code` step, with how long it lasts; progress is a `working` step; a documentation link is the sign-in's `info`. A secret prompt in a login with a key is a `key` step, other secret and text prompts `text` steps, choices `choice` steps; pi-ai's terminal wording (a trailing `:` or `...`) is dropped. A login that fails ends `failed` with its message, one cancelled `cancelled`, and the call fails `LoginFailed` with the provider's message, or `Cancelled`. Once the credential is stored, `login` returns; the catalog refresh, `ModelsChanged`, and the notice to every client (`Signed in to OpenAI as you@example.com`) that follow it run in the plugin's scope, so cancelling the login then cannot report a stored credential as cancelled.
-- **What Lemma adds to pi-ai's logins.**
-  - **Its name.** Logins name the agent Lemma (`agentName`): OpenAI's consent page says Lemma is asking, not pi.
-  - **The way in.** A flow's choice between the browser and a code for a browser elsewhere (Radius's, Codex's) takes the code without asking when the client said its browser is elsewhere (`LoginOptions.browser`): a code works from any browser. A browser said to be on the host's machine may not be (a page reached through an SSH port forward looks local), and its way back would reach nothing, so then, as when unsaid, the person picks.
-  - **A key that works.** A key is checked before it is stored: the provider's model list is asked with it (`keycheck.ts`, for OpenAI-compatible, Anthropic, Gemini, and Mistral APIs at a plain base URL), and without one. A list that answers a request without a key is public and shows nothing of the key, either way. Otherwise a refusal (a 401, or Gemini's 400 for a key that is none) asks for the key again with the provider's reason, and a list it reads says how many models the key lists, as the sign-in's end; anything else (a 403, as a key restricted from listing models can still chat; no list; the network failing) takes the key unchecked.
-  - **Who signed in.** `ProviderInfo.account` and `plan` come from the stored credential (`account.ts`): fields its flow stores (an email), else its tokens' JWT claims (OpenAI's profile email and ChatGPT plan), read without checking a signature, only to show. They are kept in memory from the login, or read once when providers are listed: a refresh keeps the account, a login replaces it, and a logout forgets it.
-  - **A sign-in that stops working.** Each sign-in's refresh is watched (`watchRefresh`): one the provider refused (a 400, 401, or 403, `invalid_grant`, revoked) sets `ProviderInfo.expired` and publishes `ModelsChanged`; a refresh that works, or a new sign-in, clears it. A network failure does not count.
-  - **Its page.** The page the browser lands on after the provider sends it back is Lemma's (`page.ts`): Lemma's mark and the web app's look, light or dark, saying the provider approved and that Lemma finishes signing in (pi-ai answers some callbacks before it has exchanged the code, so the app says how it ended), with **Return to Lemma** where the client named a way back (`LoginOptions.returnTo`: http(s) or `lemma://`; the web app names only the desktop app's, as a new tab of its own would have no host token). It escapes what the callback's URL carries, clears the code from the address bar, and sends no referrer. pi-ai has no hook for this page ([pi#5372](https://github.com/earendil-works/pi/issues/5372)), so Lemma patches one in (`patches/@earendil-works__pi-ai@1.4.0.patch`: `setOAuthPageRenderer` in `utils/oauth-page`, which every callback server's page goes through); the patch is redone, or dropped, on each pi-ai upgrade. The renderer is process-wide: the latest running plugin's shows, and one stopping puts back the one before it.
-- A flow that names the installation (OpenAI's ChatGPT sign-in) gets its device ID from `<home>/device-id`, a UUID made on first use and kept, since the provider expects the same one at every login.
-- **Logins from clients.** `llm.login` runs the login in this plugin's scope, not the call's: a client that reloads or drops its connection mid-login leaves it running, its step waiting for a client to answer, and a second call for the same provider and type joins it, while one of the other type fails `Busy`. `llm.cancel-login` stops it from any client, withdrawing its step; every call waiting on it fails `Cancelled`. A login still running when the plugin stops ends with it, and a client waiting on it gets `Withdrawn` as the plugin starts stopping, not once the login has ended: calling again on the replacement starts another.
-- **What plugins add to a request.** Its headers are the model's own (its provider's `headers`) and Lemma's `User-Agent`, and its `providerOptions` pass on `temperature`, `samplingParams` (merged into an OpenAI-compatible request's body), and `metadata`. When the provider answers with a response it streams, the stream's `provider` event says its status and its request id (`request-id`, `x-request-id`, and the like; not a CDN's trace id); a refusal is the `error` event's.
-- Providers see Lemma, not pi. Model requests send `User-Agent: lemma (<os> <release>; <arch>)` in place of pi-ai's `pi (…)`, unless the model sets its own (GitHub Copilot's models name Copilot Chat, as Copilot requires); the plugin's own catalog requests send it too.
-- Anthropic's subscription OAuth (Claude Pro/Max) is excluded by policy, so Anthropic accepts API keys only. The other OAuth providers stay.
-- pi-ai's `openai-codex` (ChatGPT sign-in through the Codex backend) is left out by default: pi-ai calls it legacy now that `openai` signs in with ChatGPT itself, and two OpenAI sign-ins would only ask which. Its login is not `openai`'s (another OAuth client, a token for `api.openai.com`), so moving over means signing in again.
-- Built-in providers' model lists are live (`liveCatalogs`, default on). On refresh, at startup, every hour, and after a login (which waits for it before announcing itself, so clients listing models then see all of them) or logout, [models.dev](https://models.dev) decides which models are current: pi-ai's lists are generated from it, so a model it no longer lists has been retired and is hidden, even where the provider's own `/models` still names it. Current models pi-ai does not know are added: the ones the provider's OpenAI-style `/models` lists (asked with its key, then without, as OpenCode's refuses keys), or all of models.dev's when it has no such list. An added model is served like a known model on the same wire API; its request settings come from the same model at another built-in provider, else the known model with the nearest id, and its limits, prices, and inputs from models.dev. Without models.dev a provider keeps pi-ai's list. Radius keeps its own dynamic catalog. models.dev is read at most once an hour; catalogs are in memory only. A refresh that changed the models publishes `ModelsChanged`, and so does every login and logout once its refresh is done, models changed or not, since what is configured and available has; clients hear it as `models-changed` on `llm.changes`.
-- OpenAI signed in with ChatGPT lists the plan's models, as the Codex CLI and app do, rather than the API's (o1, gpt-4o, and the rest, which a plan does not serve). They come from `GET https://api.openai.com/v1/models` with the sign-in's token: the models it lists for pickers (`visibility: "list"`) that the API serves, in its order. It hides models newer than the Codex client it is told of, so Lemma asks as a client newer than any. A model pi-ai knows keeps pi-ai's entry; one it does not is served like the known model with the nearest id, named and sized by the list. When the list cannot be read, the one from the last refresh stands; with an API key, or signed out, the API's list returns.
-- On disposal the plugin calls pi-ai's `cleanupSessionResources()`, releasing pooled Codex websockets so the process can exit. This cleanup is process-global in pi-ai.
+- **Model refs** are `<provider>/<id>`. An unknown ref fails with `LlmError`
+  `UnknownModel` before any request. `thinkingLevels` are pi-ai's, without pi's
+  `max`, which the contract has no equivalent of. A request's `thinking` is
+  clamped to the model's levels, and `"off"` sends no reasoning option.
+- **Azure** keeps the provider id `azure-openai-responses`, which pi-ai renamed
+  `azure`, so stored credentials, `include`/`exclude`, and saved model refs keep
+  working.
+- **Streams.** `stream` runs `LlmRequestHook` around pi-ai's `streamSimple` (the
+  contract's `streamThroughHook`). A handler that hands `next` a changed request
+  fails the stream with `LlmError` `Hook`, and nothing is sent, as the request
+  is what its caller logged. Interrupting the stream aborts the provider
+  request. Every stream has a `start` event and exactly one `done` or `error`,
+  even where pi-ai's does not. pi's `pending` and `deferred` stop reasons become
+  `error`. Missing auth, or a sign-in whose refresh fails, is an `error` event
+  saying how to connect again, never a throw.
+- **Retries.** pi-ai asks a failing provider again twice before a response
+  starts, on a 408, 409, 429, 5xx, or lost connection. It waits the delay the
+  provider names (`Retry-After`), up to a minute. Callers retry the rest (the
+  agent does).
+- **Failures.** What still fails ends with an `error` event carrying `failure`
+  (`LlmFailure`), classified from the provider's wording, since pi reports
+  failures as text:
+  - `overflow` when pi-ai's `isContextOverflow` matches;
+  - `fatal` for a leading 4xx status other than those retried, and for a request
+    over a per-minute token limit (pi's test, finding a status anywhere in the
+    text, could take these for a 5xx);
+  - `transient` for Node's connection errors (`ECONNRESET`, `ETIMEDOUT`, …),
+    which pi's test misses;
+  - `transient`, or `rate-limit` when the text says so, when
+    `isRetryableAssistantError` says asking again can help, with `retryAfterMs`
+    when the provider asked for a longer wait than pi-ai sits out;
+  - `fatal` otherwise (authentication, quota and billing limits).
+- **Silent overflow.** A response cut off at its output limit having said
+  nothing, its input filling the context window, is an `overflow`: some
+  providers cut a request too long to fit instead of refusing it. A finished
+  answer whose input exceeds the window is kept, as a wrong window in a model's
+  metadata would turn good answers into failures.
+- **Stalls.** A response that sends nothing for `streamTimeout` seconds fails at
+  once as `transient`, and its request is aborted. A half-open connection would
+  otherwise hold a turn forever.
+- **Prompt cache.** `cacheRetention: "long"` suits turns whose tool calls
+  outlast the short cache lifetime of about five minutes. Writing that cache
+  costs more.
+- **Classifiers and image models.** `classifiers` and `imageModels` are pi-ai's
+  lists, which `models` (chat only) leaves out, and a live catalog never adds
+  to. TypeSafe's Jev (`typesafe/jev-latest`) takes `TYPESAFE_API_KEY` or
+  `lemma login typesafe`. `classify` and `generateImages` answer a provider's
+  failure, missing auth included, as an error result.
+- **Requests.** A model request sends
+  `User-Agent: lemma (<os> <release>; <arch>)` in place of pi-ai's `pi (…)`,
+  unless the model sets its own (Copilot requires its models to name Copilot
+  Chat). Its other headers are its provider's `headers`. `providerOptions` pass
+  on `temperature`, `samplingParams` (merged into an OpenAI-compatible request's
+  body), and `metadata`. The stream's `provider` event carries the response's
+  status and request id.
+
+### Logins
+
+- **Sign-ins.** `login` runs the provider's pi-ai flow as its `SignIn`
+  (`makeSignIns`), so every client sees its steps and the first to answer wins.
+  A login that fails fails `LoginFailed` with the provider's message, and one
+  cancelled fails `Cancelled`. The catalog refresh and the notice that follow a
+  stored credential run in the plugin's scope, so cancelling then cannot report
+  a stored credential as cancelled.
+- **From clients.** `llm.login` runs in the plugin's scope, so a client that
+  reloads or drops mid-login leaves it running. A second call for the same
+  provider and type joins it, and one of the other type fails `Busy`.
+  `llm.cancel-login` stops it from any client, and every call waiting on it
+  fails `Cancelled`. A client waiting when the plugin stops gets `Withdrawn` at
+  once.
+- **The way in.** A flow offering a code for a browser elsewhere takes it
+  without asking when the client said its browser is elsewhere
+  (`LoginOptions.browser`). A browser said to be local may not be (an SSH port
+  forward looks local), so then, as when unsaid, the person picks.
+- **A key that works.** A key is checked against the provider's model list
+  before it is stored (`keycheck.ts`). A refusal (a 401, or Gemini's 400) asks
+  for the key again with the provider's reason. Anything else (a 403, no list, a
+  network failure) takes the key unchecked, as a key restricted from listing
+  models can still chat.
+- **Who signed in.** `ProviderInfo.account` and `plan` come from the stored
+  credential (`account.ts`). Its tokens' JWT claims are read without checking a
+  signature, only to show.
+- **A sign-in that stops working.** A refresh the provider refuses (a 400, 401,
+  or 403, `invalid_grant`) sets `ProviderInfo.expired` and publishes
+  `ModelsChanged` (`watchRefresh`). A refresh that works, or a new sign-in,
+  clears it. A network failure does not count.
+- **Its page.** The page the provider sends the browser back to is Lemma's
+  (`page.ts`), with **Return to Lemma** where the client named a way back
+  (`LoginOptions.returnTo`). pi-ai has no hook for it
+  ([pi#5372](https://github.com/earendil-works/pi/issues/5372)), so
+  `patches/@earendil-works__pi-ai@1.4.0.patch` adds `setOAuthPageRenderer`. Redo
+  or drop the patch on each pi-ai upgrade. The renderer is process-wide: the
+  latest running plugin's shows.
+- **Device ID.** OpenAI's ChatGPT sign-in gets its device ID from
+  `<home>/device-id`, a UUID made on first use and kept, as the provider expects
+  the same one at every login.
+
+### Providers and catalogs
+
+- Anthropic's subscription OAuth (Claude Pro/Max) is excluded by policy, so
+  Anthropic takes API keys only.
+- pi-ai's `openai-codex` is left out by default: pi-ai calls it legacy now that
+  `openai` signs in with ChatGPT. Its login is another OAuth client's, so moving
+  to `openai` means signing in again.
+- **Live catalogs** (`liveCatalogs`) refresh at startup, every hour, and after a
+  login or logout. [models.dev](https://models.dev) decides which models are
+  current, since pi-ai's lists are generated from it: a model it no longer lists
+  is hidden. Current models pi-ai does not know are added from the provider's
+  OpenAI-style `/models`, else from models.dev. An added model takes its request
+  settings from the same model at another built-in provider, else from the known
+  model with the nearest id. Without models.dev a provider keeps pi-ai's list.
+  Catalogs are in memory only.
+- **`ModelsChanged`** (`models-changed` on `llm.changes`) follows a refresh that
+  changed the models, and every login and logout. A login announces itself only
+  once its refresh is done, so clients listing models then see all of them.
+- **ChatGPT plans.** OpenAI signed in with ChatGPT lists the plan's models, as
+  the Codex CLI does, from `GET https://api.openai.com/v1/models` with the
+  sign-in's token. That list hides models newer than the client asking, so Lemma
+  asks as a client newer than any. When it cannot be read, the last refresh's
+  list stands.
+- On disposal it calls pi-ai's process-global `cleanupSessionResources()`, so
+  pooled Codex websockets let the process exit.
 
 ## Testing
 
-`makeLlmPlugin({ providers, authContext, fetch })` replaces the built-in provider list, the environment used for auth, and how live catalogs are fetched. Tests use it to register pi-ai's `fauxProvider`, isolate themselves from the developer's API keys, and keep catalogs offline.
+`makeLlmPlugin({ providers, authContext, fetch })` replaces the built-in
+provider list, the environment used for auth, and how live catalogs are fetched.
+Tests use it to register pi-ai's `fauxProvider`, to keep the developer's API
+keys out, and to keep catalogs offline.
 
-The plugin also runs the `Llm` contract's suite, [`llmConformance`](../../../packages/testing/README.md#conformance-suites), against a `fauxProvider`.
+The plugin also runs the `Llm` contract's suite,
+[`llmConformance`](../../../packages/testing/README.md#conformance-suites),
+against a `fauxProvider`.

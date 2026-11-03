@@ -3,6 +3,7 @@ import type { Context } from "effect";
 import { awaitable, Registry } from "@lemma/core";
 import type { Awaitable, Registries } from "@lemma/core";
 import { HostError } from "./status.ts";
+import { errorMessage } from "./host.ts";
 
 /**
  * A look into a host plugin as it runs (its tools, its running turns): what
@@ -75,7 +76,7 @@ export const inspectorSnapshot = (registries: Context.Service.Shape<typeof Regis
     return snapshotOf(found).pipe(
       Effect.catchCause((cause) => {
         const error = Cause.squash(cause);
-        return Effect.fail(new HostError({ code: "Failed", subject: id, message: error instanceof Error ? error.message : String(error) }));
+        return Effect.fail(new HostError({ code: "Failed", subject: id, message: errorMessage(error) }));
       }),
       Effect.flatMap((snapshot) =>
         snapshot === undefined

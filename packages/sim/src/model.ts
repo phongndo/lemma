@@ -5,7 +5,7 @@ import type { AssistantMessage, LlmFailure, LlmRequest, ModelInfo, StreamEvent, 
 import type { Prng } from "./random.ts";
 
 /** The one model a simulated host offers. */
-export const SIM_MODEL = "sim/model";
+const SIM_MODEL = "sim/model";
 
 /** The model's context window: small, so a few large answers fill it and compaction runs. */
 export const CONTEXT_WINDOW = 200_000;
@@ -131,7 +131,7 @@ export const answerAsSimulated =
   };
 
 /** Text in a few deltas, and now and then calls to the tools offered; never failing. */
-export const answerSimply: Answering = answerAsSimulated(NO_MODEL_FAULTS);
+const answerSimply: Answering = answerAsSimulated(NO_MODEL_FAULTS);
 
 const message = (content: AssistantMessage["content"], stopReason: AssistantMessage["stopReason"], used: Usage, timestamp: number, error?: string) => ({
   role: "assistant" as const,
@@ -202,7 +202,6 @@ export const simModel = (
 ) => {
   const answering = options.answering ?? answerSimply;
   const calls = options.calls ?? [];
-  let asked = 0;
   const offered: ModelInfo = options.contextWindow === undefined ? info : { ...info, contextWindow: options.contextWindow };
   const plugin = definePlugin({
     id: "sim.model",
@@ -215,7 +214,6 @@ export const simModel = (
         Stream.unwrap(
           Effect.sync(() => {
             if (options.keep !== false) calls.push({ host: options.host ?? 0, request, summary: isSummaryRequest(request) });
-            asked++;
             const answer = answering(request, prng);
             for (const kind of answer.kinds) options.count?.(`model ${kind}`);
             const emit = options.emit;
@@ -235,10 +233,5 @@ export const simModel = (
       generateImages: (ref) => Effect.fail(new LlmError({ reason: "UnknownModel", message: `Unknown model ${ref}` })),
     }),
   });
-  return {
-    plugin,
-    calls,
-    /** Requests asked so far, kept or not. */
-    asked: () => asked,
-  };
+  return { plugin, calls };
 };

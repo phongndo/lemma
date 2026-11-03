@@ -1,13 +1,13 @@
-import { For, Show, createEffect, createMemo, createSignal, on } from "solid-js";
+import { Show, createEffect, createMemo, createSignal, on } from "solid-js";
 import type { Accessor } from "solid-js";
 import { ThreadRoute } from "@lemma/sessions";
 import { clockTime } from "@lemma/web/format";
 import { createStickToBottom } from "@lemma/web/scroll";
 import type { ClientService, RouterService } from "@lemma/web";
-import { XIcon } from "@lemma/look";
-import { clearsOnEscape, rowKeys } from "@lemma/devtools/web";
+import { FilterField, SelectableTable } from "@lemma/devtools/web";
 import { HOST_EVENTS, category, describe, sessionOf, streamOf, typeOf } from "./events.tsx";
 import type { Line } from "./events.tsx";
+import { Details } from "./parts.tsx";
 
 /* The Host events panel's view (see `hostEventsPanel`), loaded the first time the devtools draw one of their own panels. */
 
@@ -27,7 +27,7 @@ export function EventLog(props: { client: ClientService; router: RouterService; 
   const [query, setQuery] = createSignal("");
   const [deltas, setDeltas] = createSignal(false);
   const [paused, setPaused] = createSignal<readonly Line[]>();
-  const [selected, setSelected] = createSignal<number>();
+  const [selected, setSelected] = createSignal<string>();
   let scroller!: HTMLDivElement;
   const stick = createStickToBottom(() => scroller);
 
@@ -46,7 +46,7 @@ export function EventLog(props: { client: ClientService; router: RouterService; 
     const since = Date.now() - 10_000;
     return props.lines().filter((line) => line.at >= since).length / 10;
   });
-  const chosen = () => source().find((line) => line.seq === selected());
+  const chosen = () => source().find((line) => String(line.seq) === selected());
   const url = () => `${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/rpc`;
   const state = () => props.client.status().state;
 
@@ -55,17 +55,7 @@ export function EventLog(props: { client: ClientService; router: RouterService; 
   return (
     <div class="dt-scope log-view" aria-label="Host events">
       <div class="dt-toolbar" role="toolbar" aria-label="Host events toolbar">
-        <label class="dt-filter">
-          <input
-            placeholder="Filter: stream, type, session, or text; -word excludes"
-            aria-label="Filter events"
-            autocomplete="off"
-            spellcheck={false}
-            value={query()}
-            onInput={(event) => setQuery(event.currentTarget.value)}
-            onKeyDown={clearsOnEscape(query, () => setQuery(""))}
-          />
-        </label>
+        <FilterField label="Filter events" placeholder="Filter: stream, type, session, or text; -word excludes" value={query()} onInput={setQuery} />
         <span class="dt-sep" />
         <button class="dt-chip" aria-pressed={deltas()} onClick={() => setDeltas(!deltas())}>
           Deltas
@@ -92,92 +82,66 @@ export function EventLog(props: { client: ClientService; router: RouterService; 
       </div>
       <div class="dt-split">
         <div class="dt-main" ref={scroller} onScroll={stick.onScroll} tabindex="-1" role="log" aria-live="off">
-          <table
-            class="dt-table log-table"
-            aria-label="Events"
-            role="grid"
-            tabindex="0"
-            onKeyDown={rowKeys(
-              (key) => setSelected(Number(key)),
-              () => setSelected(undefined),
-            )}
+          <SelectableTable
+            label="Events"
+            class="log-table"
+            columns={[
+              { title: "Time", class: "devtools-log-time" },
+              { title: "Gap", class: "devtools-log-gap dt-num" },
+              { title: "Stream", class: "devtools-log-stream" },
+              { title: "Type", class: "devtools-log-stream" },
+              { title: "Session", class: "devtools-log-session" },
+              { title: "Size", class: "devtools-log-size dt-num" },
+              { title: "Message" },
+            ]}
+            rows={shown()}
+            key={(line) => String(line.seq)}
+            selected={selected()}
+            onSelect={setSelected}
+            onClear={() => setSelected(undefined)}
+            empty={props.lines().length === 0 ? "Waiting for events…" : "No events match"}
           >
-            <thead>
-              <tr>
-                <th class="devtools-log-time">Time</th>
-                <th class="devtools-log-gap dt-num">Gap</th>
-                <th class="devtools-log-stream">Stream</th>
-                <th class="devtools-log-stream">Type</th>
-                <th class="devtools-log-session">Session</th>
-                <th class="devtools-log-size dt-num">Size</th>
-                <th>Message</th>
-              </tr>
-            </thead>
-            <tbody>
-              <For
-                each={shown()}
-                fallback={
-                  <tr>
-                    <td colSpan={7} class="dt-muted">
-                      {props.lines().length === 0 ? "Waiting for events…" : "No events match"}
-                    </td>
-                  </tr>
-                }
-              >
-                {(line, index) => {
-                  const before = () => shown()[index() - 1];
-                  return (
-                    <tr
-                      data-row
-                      data-key={line.seq}
-                      data-selected={selected() === line.seq}
-                      aria-selected={selected() === line.seq}
-                      tabindex="-1"
-                      onClick={() => setSelected(selected() === line.seq ? undefined : line.seq)}
-                    >
-                      <td class="dt-code dt-muted">{clockTime(line.at)}</td>
-                      <td class="dt-code dt-muted dt-num">{before() === undefined ? "" : gap(line.at - before()!.at)}</td>
-                      <td class="dt-code dt-muted">{streamOf(line)}</td>
-                      <td class={`dt-code log-type is-${category(line)}`}>{typeOf(line)}</td>
-                      <td class="dt-code">
-                        <Show when={sessionOf(line)} fallback={<span class="dt-muted">·</span>}>
-                          {(id) => (
-                            <a
-                              href={props.router.href(ThreadRoute, { id: id(), view: "trajectory" })}
-                              data-tip="Open its trajectory"
-                              onClick={(event) => event.stopPropagation()}
-                            >
-                              {id()}
-                            </a>
-                          )}
-                        </Show>
-                      </td>
-                      <td class="dt-code dt-muted dt-num">{line.kind === "event" ? size(line.bytes) : ""}</td>
-                      <td class="dt-code">{describe(line)}</td>
-                    </tr>
-                  );
-                }}
-              </For>
-            </tbody>
-          </table>
+            {(line, index) => {
+              const before = () => shown()[index() - 1];
+              return (
+                <>
+                  <td class="dt-code dt-muted">{clockTime(line.at)}</td>
+                  <td class="dt-code dt-muted dt-num">{before() === undefined ? "" : gap(line.at - before()!.at)}</td>
+                  <td class="dt-code dt-muted">{streamOf(line)}</td>
+                  <td class={`dt-code log-type is-${category(line)}`}>{typeOf(line)}</td>
+                  <td class="dt-code">
+                    <Show when={sessionOf(line)} fallback={<span class="dt-muted">·</span>}>
+                      {(id) => (
+                        <a href={props.router.href(ThreadRoute, { id: id(), view: "trajectory" })} data-tip="Open its trajectory">
+                          {id()}
+                        </a>
+                      )}
+                    </Show>
+                  </td>
+                  <td class="dt-code dt-muted dt-num">{line.kind === "event" ? size(line.bytes) : ""}</td>
+                  <td class="dt-code">{describe(line)}</td>
+                </>
+              );
+            }}
+          </SelectableTable>
         </div>
         <Show when={chosen()} keyed>
           {(line) => (
-            <aside class="dt-details dt-side" aria-label="Event details">
-              <div class="dt-details-title">
-                <strong class={`dt-code log-type is-${category(line)}`}>{typeOf(line)}</strong>
-                <span class="dt-muted dt-code">{streamOf(line)}</span>
-                <span class="dt-muted">{clockTime(line.at)}</span>
-                <button class="dt-close devtools-end" aria-label="Close details" onClick={() => setSelected(undefined)}>
-                  <XIcon />
-                </button>
-              </div>
-              <div class="dt-side-body">
-                <pre class="dt-pre">
-                  {JSON.stringify(line.kind === "event" ? line.event : line.kind === "end" ? { error: line.error } : line.status, null, 2)}
-                </pre>
-              </div>
-            </aside>
+            <Details
+              label="Event details"
+              title={
+                <>
+                  <strong class={`dt-code log-type is-${category(line)}`}>{typeOf(line)}</strong>
+                  <span class="dt-muted dt-code">{streamOf(line)}</span>
+                  <span class="dt-muted">{clockTime(line.at)}</span>
+                </>
+              }
+              onClose={() => setSelected(undefined)}
+            >
+              <pre class="dt-pre">
+                {JSON.stringify(line.kind === "event" ? line.event : line.kind === "end" ? { error: line.error } : line.status, null, 2)}
+              </pre>
+            </Details>
           )}
         </Show>
       </div>
