@@ -114,7 +114,7 @@ export function makeCore<const Plugins extends readonly Plugin[], const Provides
   return Effect.gen(function* () {
     const runtime = yield* makeRuntime(options).pipe(Effect.mapError((error) => (error instanceof PlanError ? error.errors[0] : error)));
     const members = plugins.map((plugin) => {
-      const config = options.configs?.[plugin.id];
+      const config = options.configs !== undefined && Object.hasOwn(options.configs, plugin.id) ? options.configs[plugin.id] : undefined;
       return { plugin, ...(config === undefined ? {} : { config }) };
     });
     yield* runtime.apply(members).pipe(
@@ -143,7 +143,7 @@ export function checkComposition(
   return Result.match(
     plan(
       plugins,
-      (id) => configs[id],
+      (id) => (Object.hasOwn(configs, id) ? configs[id] : undefined),
       options.provided?.map((tag) => tag.key),
     ),
     { onFailure: (errors) => errors, onSuccess: () => [] },

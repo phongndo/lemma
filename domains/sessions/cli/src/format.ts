@@ -301,7 +301,7 @@ export const formatCache = (reports: readonly (CacheReport & { readonly session:
       .sort(([, a], [, b]) => b - a)
       .map(([source, count]) => `${source} ${count}`)
       .join(", ");
-  const total: Record<string, number> = {};
+  const total: Record<string, number> = Object.create(null);
   for (const report of reports) for (const [source, count] of Object.entries(report.changedBy)) total[source] = (total[source] ?? 0) + count;
   const sum = (key: "requests" | "changed" | "input" | "cacheRead") => reports.reduce((all, report) => all + report[key], 0);
   return [

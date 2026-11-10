@@ -1,4 +1,4 @@
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { Data, Effect, Option, Schema } from "effect";
 import { QueuedPrompt } from "../agent.ts";
 import { AssistantMessage } from "@lemma/llm";
@@ -60,10 +60,18 @@ export interface StateFiles {
 }
 
 const stateDir = ({ home }: StateFiles) => join(home, "agent");
-const journalPath = (files: StateFiles, sessionId: string) => join(stateDir(files), `${sessionId}.json`);
+// Session ids belong to the store's contract, so they need not be safe path segments.
+// Dots are escaped too, so a journal's id ending in `.live` cannot collide with live output.
+const stateName = (sessionId: string) => encodeURIComponent(sessionId).replaceAll(".", "%2E");
+/** The current path first, then a safe legacy path, if different. Encoded names never overlap legacy names. */
+const statePaths = (files: StateFiles, sessionId: string, suffix: string): readonly [string, ...string[]] => {
+  const name = stateName(sessionId);
+  const current = join(stateDir(files), ...(name === sessionId ? [] : ["escaped"]), `${name}${suffix}`);
+  if (name === sessionId || basename(`${sessionId}${suffix}`) !== `${sessionId}${suffix}` || sessionId.endsWith(".live")) return [current];
+  return [current, join(stateDir(files), `${sessionId}${suffix}`)];
+};
 /** How many times an agent has started on this state: each instance's queue revisions start from its number. */
 const instancePath = (files: StateFiles) => join(stateDir(files), "instance");
-const livePath = (files: StateFiles, sessionId: string) => join(stateDir(files), `${sessionId}.live.json`);
 
 const attempt = (what: string, write: () => Promise<unknown>): Effect.Effect<void, StateWriteError> =>
   Effect.tryPromise({
@@ -119,19 +127,30 @@ export const readJournals = (files: StateFiles): Effect.Effect<ReadonlyMap<strin
         catch: (cause) => new StateReadError({ message: `could not read ${what}: ${errorMessage(cause)}`, cause }),
       });
     const missing = (cause: unknown) => (errorCode(cause) === "ENOENT" ? undefined : Promise.reject(cause));
-    const names = (yield* read(stateDir(files), () => files.fs.readdir(stateDir(files)).catch(missing))) ?? [];
     const found = new Map<string, Journal>();
-    // In name order, so the sessions are taken up in the same order on every start.
-    for (const name of [...names].sort()) {
-      if (!name.endsWith(".json") || name.endsWith(".live.json")) continue;
-      const sessionId = name.slice(0, -".json".length);
-      const path = join(stateDir(files), name);
-      // Gone since it was listed (removed as its session went idle): nothing to take up.
-      const text = yield* read(path, () => files.fs.readFile(path, "utf8").catch(missing));
-      if (text === undefined) continue;
-      const journal = Option.getOrUndefined(decodeJournal(text));
-      if (journal === undefined) yield* Effect.logWarning(`agent: ignoring unreadable state ${path}`);
-      else found.set(sessionId, journal);
+    // New encoded journals win over legacy files left by an interrupted migration.
+    for (const encoded of [false, true]) {
+      const dir = encoded ? join(stateDir(files), "escaped") : stateDir(files);
+      const names = (yield* read(dir, () => files.fs.readdir(dir).catch(missing))) ?? [];
+      // In name order, so the sessions are taken up in the same order on every start.
+      for (const name of [...names].sort()) {
+        if (!name.endsWith(".json") || name.endsWith(".live.json")) continue;
+        const stem = name.slice(0, -".json".length);
+        let sessionId: string;
+        try {
+          sessionId = encoded ? decodeURIComponent(stem) : stem;
+        } catch {
+          yield* Effect.logWarning(`agent: ignoring state with an invalid filename ${name}`);
+          continue;
+        }
+        const path = join(dir, name);
+        // Gone since it was listed (removed as its session went idle): nothing to take up.
+        const text = yield* read(path, () => files.fs.readFile(path, "utf8").catch(missing));
+        if (text === undefined) continue;
+        const journal = Option.getOrUndefined(decodeJournal(text));
+        if (journal === undefined) yield* Effect.logWarning(`agent: ignoring unreadable state ${path}`);
+        else found.set(sessionId, journal);
+      }
     }
     return found;
   });
@@ -145,22 +164,37 @@ const isEmpty = (journal: Journal) =>
  */
 export const writeJournal = (files: StateFiles, sessionId: string, journal: Journal): Effect.Effect<void, StateWriteError> =>
   attempt(`write the state of session ${sessionId}`, async () => {
-    if (isEmpty(journal)) return removeFile(journalPath(files, sessionId), { sync: true, fs: files.fs });
-    await writeFileAtomic(journalPath(files, sessionId), `${JSON.stringify(journal)}\n`, { sync: true, fs: files.fs });
+    const [path, ...legacy] = statePaths(files, sessionId, ".json");
+    if (isEmpty(journal)) return Promise.all([path, ...legacy].map((file) => removeFile(file, { sync: true, fs: files.fs })));
+    await writeFileAtomic(path, `${JSON.stringify(journal)}\n`, { sync: true, fs: files.fs });
+    await Promise.all(legacy.map((file) => removeFile(file, { sync: true, fs: files.fs })));
   });
 
 export const readLive = (files: StateFiles, sessionId: string): Effect.Effect<LiveFile | undefined> =>
-  Effect.promise(() => readJsonFile(livePath(files, sessionId), LiveFile, files.fs));
+  Effect.promise(async () => {
+    for (const path of statePaths(files, sessionId, ".live.json")) {
+      const live = await readJsonFile(path, LiveFile, files.fs);
+      if (live !== undefined) return live;
+    }
+    return undefined;
+  });
 
 /** The running turn's output so far, unsynced: it is a convenience, which the log does not need. */
 export const writeLive = (files: StateFiles, sessionId: string, live: LiveFile): Effect.Effect<void> =>
-  bestEffort(`write the output of session ${sessionId}`, () => writeFileAtomic(livePath(files, sessionId), JSON.stringify(live), { fs: files.fs }));
+  bestEffort(`write the output of session ${sessionId}`, () =>
+    writeFileAtomic(statePaths(files, sessionId, ".live.json")[0]!, JSON.stringify(live), { fs: files.fs }),
+  );
 
 export const removeLive = (files: StateFiles, sessionId: string): Effect.Effect<void> =>
-  bestEffort(`remove the output of session ${sessionId}`, () => removeFile(livePath(files, sessionId), { fs: files.fs }));
+  bestEffort(`remove the output of session ${sessionId}`, () =>
+    Promise.all(statePaths(files, sessionId, ".live.json").map((path) => removeFile(path, { fs: files.fs }))),
+  );
 
 /** Both files, for a deleted session. */
 export const removeState = (files: StateFiles, sessionId: string): Effect.Effect<void> =>
   bestEffort(`remove the state of session ${sessionId}`, () =>
-    Promise.all([removeFile(journalPath(files, sessionId), { sync: true, fs: files.fs }), removeFile(livePath(files, sessionId), { fs: files.fs })]),
+    Promise.all([
+      ...statePaths(files, sessionId, ".json").map((path) => removeFile(path, { sync: true, fs: files.fs })),
+      ...statePaths(files, sessionId, ".live.json").map((path) => removeFile(path, { fs: files.fs })),
+    ]),
   );

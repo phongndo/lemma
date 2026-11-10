@@ -33,7 +33,7 @@ export interface StoredSignIn {
  */
 export class SignInStore {
   readonly path: string;
-  private servers: Record<string, StoredSignIn> = {};
+  private servers: Record<string, StoredSignIn> = Object.create(null);
   /** Why the file could not be read: it is never written over then. */
   private problem: string | undefined;
   private readonly queue = serial();
@@ -46,8 +46,11 @@ export class SignInStore {
     try {
       const servers = (await readJsonObject(this.path))["servers"] ?? {};
       if (!Predicate.isObject(servers)) throw new Error('"servers" is not an object');
-      this.servers = Object.fromEntries(
-        Object.entries(servers).filter((entry): entry is [string, StoredSignIn] => Predicate.isObject(entry[1]) && typeof entry[1]["url"] === "string"),
+      this.servers = Object.assign(
+        Object.create(null),
+        Object.fromEntries(
+          Object.entries(servers).filter((entry): entry is [string, StoredSignIn] => Predicate.isObject(entry[1]) && typeof entry[1]["url"] === "string"),
+        ),
       );
     } catch (cause) {
       this.problem = `Fix or remove ${this.path} to sign in again: ${errorMessage(cause)}`;

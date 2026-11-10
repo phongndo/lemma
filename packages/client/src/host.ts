@@ -395,17 +395,24 @@ export const connect = async (options: ConnectOptions): Promise<Host> => {
   const unit = <E>(effect: Effect.Effect<unknown, E>) => runPromise(Effect.asVoid(effect));
 
   /** Resolves once a connection newer than `generation` is up; rejects once this is closed. */
-  const connectedAfter = (generation: number) =>
-    new Promise<void>((resolve, reject) => {
-      const listener = (next: ConnectionStatus) => {
-        if (next.state === "closed") reject(new Error("The connection to the host was closed"));
-        else if (next.state === "connected" && next.generation > generation) resolve();
-        else return;
-        statusListeners.delete(listener);
-      };
-      statusListeners.add(listener);
-      listener(status);
-    });
+  const connectedAfter = (generation: number, signal?: AbortSignal) =>
+    runPromise(
+      Effect.callback<void, Error>((resume) => {
+        const listener = (next: ConnectionStatus) => {
+          if (next.state === "closed") {
+            statusListeners.delete(listener);
+            resume(Effect.fail(new Error("The connection to the host was closed")));
+          } else if (next.state === "connected" && next.generation > generation) {
+            statusListeners.delete(listener);
+            resume(Effect.void);
+          }
+        };
+        statusListeners.add(listener);
+        listener(status);
+        return Effect.sync(() => void statusListeners.delete(listener));
+      }),
+      signal,
+    );
   const channel: Host["channel"] = {
     list: () => runPromise(rpc["Channel.List"]()),
     call: async (target: string | ChannelDeclaration, payload?: unknown, options?: CallOptions) => {
@@ -415,7 +422,7 @@ export const connect = async (options: ConnectOptions): Promise<Host> => {
           return await runPromise(callOver(rpc, target, payload), options?.signal);
         } catch (error) {
           if (typeof target === "string" || target.repeatable !== true || !dropped(error) || tooLarge(error) || options?.signal?.aborted === true) throw error;
-          await connectedAfter(generation);
+          await connectedAfter(generation, options?.signal);
         }
       }
     },

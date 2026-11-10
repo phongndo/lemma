@@ -124,7 +124,7 @@ const defaultsOf = (schema: Schema.Codec<any, any>): Record<string, unknown> | u
   return Object.fromEntries(
     Object.entries(fields).flatMap(([key, field]) => {
       const own = emptyDecoded(Schema.Struct({ [key]: field }) as unknown as Schema.Codec<any, any>);
-      return own !== undefined && key in own ? [[key, own[key]]] : [];
+      return own !== undefined && Object.hasOwn(own, key) ? [[key, own[key]]] : [];
     }),
   );
 };
@@ -142,9 +142,9 @@ export function describeConfig(schema: Schema.Codec<any, any>): ConfigField[] {
       ...(description === undefined ? {} : { description }),
       ...classify(property.type),
       // A field an empty config gives a value to may be left out too, whatever the Schema's encoded side says.
-      optional: property.optional || property.key in defaults,
+      optional: property.optional || Object.hasOwn(defaults, property.key),
       ...(secretField ? { secret: true } : {}),
-      ...(property.key in defaults && !secretField ? { default: defaults[property.key] } : {}),
+      ...(Object.hasOwn(defaults, property.key) && !secretField ? { default: defaults[property.key] } : {}),
     };
   });
 }
@@ -159,10 +159,10 @@ export function configValues(schema: Schema.Codec<any, any>, config: unknown, fi
   const encoded = Result.isSuccess(decoded) ? Schema.encodeResult(schema)(decoded.success) : Result.succeed(config);
   const effective =
     Result.isSuccess(encoded) && typeof encoded.success === "object" && encoded.success !== null ? (encoded.success as Record<string, unknown>) : {};
-  const values: Record<string, unknown> = {};
+  const values: Record<string, unknown> = Object.create(null);
   const secretsSet: string[] = [];
   for (const field of fields) {
-    const value = effective[field.key];
+    const value = Object.hasOwn(effective, field.key) ? effective[field.key] : undefined;
     if (value === undefined) continue;
     if (field.secret) secretsSet.push(field.key);
     else if (field.type !== "other") values[field.key] = value;
@@ -219,7 +219,8 @@ export function parseConfigValue(field: ConfigField | undefined, text: string): 
       return { value };
     }
     case "boolean": {
-      const value = BOOLEANS[text.trim().toLowerCase()];
+      const key = text.trim().toLowerCase();
+      const value = Object.hasOwn(BOOLEANS, key) ? BOOLEANS[key] : undefined;
       return value === undefined ? { error: `${field.key} must be true or false` } : { value };
     }
     case "enum":
@@ -262,7 +263,7 @@ const fieldProblem = (field: ConfigField, value: unknown): string | undefined =>
  */
 export function formValues(fields: readonly ConfigField[], given: unknown): { readonly value: Record<string, unknown> } | { readonly error: string } {
   if (typeof given !== "object" || given === null || Array.isArray(given)) return { error: "A form is answered with an object of its fields' values" };
-  const value: Record<string, unknown> = {};
+  const value: Record<string, unknown> = Object.create(null);
   for (const [key, raw] of Object.entries(given)) {
     const field = fields.find((candidate) => candidate.key === key);
     if (field === undefined) return { error: `${key} is not one of its fields (${fields.map((candidate) => candidate.key).join(", ")})` };
@@ -272,6 +273,6 @@ export function formValues(fields: readonly ConfigField[], given: unknown): { re
     if (problem !== undefined) return { error: problem };
     value[key] = read.value;
   }
-  const missing = fields.filter((field) => !field.optional && !(field.key in value));
+  const missing = fields.filter((field) => !field.optional && !Object.hasOwn(value, field.key));
   return missing.length === 0 ? { value } : { error: `It needs ${missing.map((field) => field.key).join(", ")}` };
 }

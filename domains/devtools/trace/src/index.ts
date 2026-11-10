@@ -14,7 +14,7 @@ const BATCH_SIZE = 1000;
  */
 export const redacted = (span: SpanRecord): SpanRecord => {
   let changed = false;
-  const attributes: Record<string, string | number | boolean> = {};
+  const attributes: Record<string, string | number | boolean> = Object.create(null);
   for (const [key, value] of Object.entries(span.attributes)) {
     const hidden = SECRET_KEY.test(key) ? "<redacted>" : typeof value === "string" ? redactText(value) : value;
     if (hidden !== value) changed = true;

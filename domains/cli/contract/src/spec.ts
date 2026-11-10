@@ -201,7 +201,7 @@ const failure = (value: unknown): value is ParseFailure => typeof value === "obj
  */
 export const parseInput = (spec: Pick<CommandSpec, "path" | "args" | "flags">, words: readonly string[]): CliInput | ParseFailure => {
   const flagSpecs = spec.flags ?? {};
-  const flags: Record<string, unknown> = {};
+  const flags: Record<string, unknown> = Object.create(null);
   for (const [name, flag] of Object.entries(flagSpecs)) {
     if (flag.type === "boolean") flags[name] = false;
     else if (flag.multiple === true) flags[name] = [];
@@ -227,7 +227,7 @@ export const parseInput = (spec: Pick<CommandSpec, "path" | "args" | "flags">, w
     }
     if (word.startsWith("--") && word.length > 2) {
       const [name, inline] = splitOnce(word.slice(2), "=");
-      const flag = flagSpecs[name];
+      const flag = Object.hasOwn(flagSpecs, name) ? flagSpecs[name] : undefined;
       if (flag === undefined) return unknown(word);
       if (flag.type === "boolean") {
         if (inline === undefined) flags[name] = true;
@@ -263,7 +263,7 @@ export const parseInput = (spec: Pick<CommandSpec, "path" | "args" | "flags">, w
     }
     positionals.push(word);
   }
-  const args: Record<string, unknown> = {};
+  const args: Record<string, unknown> = Object.create(null);
   const argSpecs = spec.args ?? [];
   for (const [index, arg] of argSpecs.entries()) {
     if (arg.variadic === true) {
@@ -300,7 +300,7 @@ export const inputProblem = (spec: Pick<CommandSpec, "path" | "args" | "flags">,
   const argSpecs = spec.args ?? [];
   for (const key of Object.keys(input.args)) if (!argSpecs.some((arg) => arg.name === key)) return `${name} takes no argument <${key}>`;
   for (const arg of argSpecs) {
-    const value = input.args[arg.name];
+    const value = Object.hasOwn(input.args, arg.name) ? input.args[arg.name] : undefined;
     if (value === undefined) {
       if (arg.required === true) return `${name} needs <${arg.name}>`;
       continue;
@@ -311,7 +311,7 @@ export const inputProblem = (spec: Pick<CommandSpec, "path" | "args" | "flags">,
   const flagSpecs = spec.flags ?? {};
   for (const key of Object.keys(input.flags)) if (!Object.hasOwn(flagSpecs, key)) return `${name} takes no --${key}`;
   for (const [key, flag] of Object.entries(flagSpecs)) {
-    const value = input.flags[key];
+    const value = Object.hasOwn(input.flags, key) ? input.flags[key] : undefined;
     if (value === undefined) continue;
     const one = (item: unknown): boolean => {
       switch (flag.type) {

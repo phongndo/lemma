@@ -238,7 +238,7 @@ export async function writeChange(path: string, name: string, change: McpServerC
       else entry["exposure"] = change.exposure;
     }
     if (change.tools !== undefined) {
-      const tools: Record<string, unknown> = Predicate.isObject(entry["toolExposure"]) ? { ...entry["toolExposure"] } : {};
+      const tools: Record<string, unknown> = Object.assign(Object.create(null), Predicate.isObject(entry["toolExposure"]) ? entry["toolExposure"] : {});
       for (const [tool, exposure] of Object.entries(change.tools)) {
         if (exposure === null) delete tools[tool];
         else tools[tool] = exposure;
@@ -276,7 +276,7 @@ async function updateServers(path: string, change: (servers: Record<string, unkn
   const json = await readJsonObject(target).catch((cause: unknown) => {
     throw new Error(`Could not update ${path}: ${errorMessage(cause)}`, { cause });
   });
-  const servers = Predicate.isObject(json["mcpServers"]) ? { ...json["mcpServers"] } : {};
+  const servers: Record<string, unknown> = Object.assign(Object.create(null), Predicate.isObject(json["mcpServers"]) ? json["mcpServers"] : {});
   change(servers);
   // As an editor leaves it: the mode the file has (0644 for a new one), and a folder it makes as mkdir makes one.
   const mode = await stat(target).then(

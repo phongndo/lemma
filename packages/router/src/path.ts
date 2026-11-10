@@ -64,7 +64,7 @@ export const splitPath = (pathname: string): string[] | undefined => {
 
 /** The pattern's raw params for these segments, and how specific the match was; undefined when it does not match. */
 export const matchPattern = (pattern: Pattern, segments: readonly string[]): { readonly params: RawParams; readonly score: Score } | undefined => {
-  const params: Record<string, string> = {};
+  const params: Record<string, string> = Object.create(null);
   const score: number[] = [];
   let at = 0;
   for (const segment of pattern.segments) {
@@ -119,7 +119,7 @@ export const buildPath = (pattern: Pattern, params: Readonly<Record<string, stri
       parts.push(encodeURIComponent(segment.value));
       continue;
     }
-    const value = params[segment.name];
+    const value = Object.hasOwn(params, segment.name) ? params[segment.name] : undefined;
     if (segment.kind === "param") {
       if (value === undefined || value === "") throw new Error(`Route path "${pattern.source}": "${segment.name}" is required`);
       parts.push(encodeURIComponent(value));

@@ -60,6 +60,22 @@ describe("resolvePaths", () => {
 });
 
 describe("loadComposition", () => {
+  test("keeps rows and their scopes for ids that are object property names", () =>
+    withPaths(async (paths) => {
+      const ids = ["__proto__", "constructor", "toString"];
+      const plugins = Object.fromEntries(ids.map((id) => [id, { enabled: false, config: { value: id } }]));
+      await writeFile(paths.userConfig, JSON.stringify({ plugins }));
+      const loaded = await Effect.runPromise(loadComposition(paths));
+      expect(loaded.diagnostics).toEqual([]);
+      expect(Object.keys(loaded.rows)).toEqual(ids);
+      for (const id of ids) {
+        expect(loaded.rows[id]).toEqual(plugins[id]);
+        expect(loaded.enabledIn[id]).toBe("user");
+        expect(loaded.configIn[id]).toBe("user");
+      }
+      expect(loaded.enabledIn["valueOf"]).toBeUndefined();
+    }));
+
   test("missing files yield no rows, without diagnostics", () =>
     withPaths(async (paths) => {
       const loaded = await Effect.runPromise(loadComposition(paths));

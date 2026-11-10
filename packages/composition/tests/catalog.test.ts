@@ -73,6 +73,20 @@ describe("resolveComposition", () => {
 });
 
 describe("catalog", () => {
+  test("takes scopes and pinned reasons only from their own keys", () => {
+    const known: KnownPlugin[] = ["__proto__", "constructor", "toString"].map((id) => ({
+      plugin: definePlugin({ id, layer: Layer.empty }),
+      source: "user",
+    }));
+    const composition = { plugins: Object.fromEntries(known.map(({ plugin }) => [plugin.id, {}])) };
+    const entries = catalog({ known, composition, resolved: resolveComposition(known, composition), snapshots: [], enabledIn: {}, pinned: {} });
+    for (const entry of entries) {
+      expect(entry.locked).toBeUndefined();
+      expect(entry.scope).toBeUndefined();
+      expect(entry.configScope).toBeUndefined();
+    }
+  });
+
   const snapshot = (id: string, state: PluginSnapshot["state"], extra: Partial<PluginSnapshot> = {}): PluginSnapshot => ({
     id,
     state,
@@ -168,6 +182,24 @@ describe("catalog", () => {
 });
 
 describe("withReplacements", () => {
+  test("turns off a provider whose id is an object property name", () => {
+    for (const id of ["__proto__", "constructor", "toString"]) {
+      const known: KnownPlugin[] = [
+        { plugin: definePlugin({ id, provides: [Llm], layer: Layer.succeed(Llm, "old") }), source: "bundled" },
+        { plugin: definePlugin({ id: "new", provides: [Llm], layer: Layer.succeed(Llm, "new") }), source: "user" },
+      ];
+      const composition = {
+        plugins: Object.fromEntries([
+          [id, {}],
+          ["new", { enabled: false }],
+        ]),
+      };
+      const changes = withReplacements(known, composition, { new: { enabled: true } });
+      expect(Object.hasOwn(changes, id)).toBe(true);
+      expect(changes[id]).toEqual({ enabled: false });
+    }
+  });
+
   test("turning on a provider turns off the enabled provider of the same capability, leaving given rows alone", () => {
     const composition = everyone({ "my-llm": { enabled: false } });
     expect(withReplacements(known, composition, { "my-llm": { enabled: true } })).toEqual({ "my-llm": { enabled: true }, llm: { enabled: false } });

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
-import { createBrowserHistory } from "../src/history.ts";
+import { createBrowserHistory, createMemoryHistory } from "../src/history.ts";
 import { createRouter } from "../src/router.ts";
 
 /** Enough of a window for the browser history: a stack of entries with state, and `popstate`. */
@@ -74,6 +74,19 @@ const fakeWindow = (initial: string, initialState: unknown = null) => {
   };
   return target;
 };
+
+test("a rejected memory-history push preserves the current entry and forward history", () => {
+  const history = createMemoryHistory("/first");
+  history.push("/second");
+  history.go(-1);
+  const before = history.location();
+  expect(() => history.push("http://[")).toThrow();
+  expect(history.location()).toBe(before);
+  history.go(1);
+  expect(history.location().href).toBe("/second");
+  history.push("/third");
+  expect(history.location()).toMatchObject({ href: "/third", index: 2 });
+});
 
 describe("createBrowserHistory", () => {
   test("adopts the first entry, keeping the page's own state", () => {

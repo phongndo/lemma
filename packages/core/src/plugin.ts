@@ -201,7 +201,7 @@ const setupLayer =
   (config: unknown): Layer.Layer<never, unknown, unknown> =>
     Layer.effectContext(
       Effect.gen(function* () {
-        const services: Record<string, unknown> = {};
+        const services: Record<string, unknown> = Object.create(null);
         for (const [name, tag] of named.requires) services[name] = yield* tag;
         const owner = yield* PluginContext;
         // Aborted last if setup fails (its first finalizer), and first once it succeeds (its last): see below.

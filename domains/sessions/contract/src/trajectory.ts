@@ -205,7 +205,7 @@ export interface CacheReport {
 /** `turns`' cache report (`CacheReport`). */
 export function cacheReport(turns: readonly TrajectoryTurn[]): CacheReport {
   const requests = turns.flatMap((turn) => turn.steps.flatMap((step) => (step.request === undefined ? [] : [step.request])));
-  const changedBy: Record<string, number> = {};
+  const changedBy: Record<string, number> = Object.create(null);
   let changed = 0;
   for (const request of requests.slice(1)) {
     const sources = new Set([...request.sections, ...request.tools].filter((part) => part.changed).map((part) => part.source));

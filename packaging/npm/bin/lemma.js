@@ -74,9 +74,10 @@ const fetchRelease = async () => {
   const staging = mkdtempSync(join(data, `.${name}.`));
   try {
     writeFileSync(join(staging, file), archive);
-    if (spawnSync("tar", ["-xzf", file], { cwd: staging, stdio: ["ignore", "ignore", "inherit"] }).status !== 0) fail(`could not unpack ${file}`);
+    if (spawnSync("tar", ["-xzf", file], { cwd: staging, stdio: ["ignore", "ignore", "inherit"] }).status !== 0) throw new Error(`could not unpack ${file}`);
     const unpacked = join(staging, name);
-    if (!existsSync(join(unpacked, "bin", "lemma")) || !existsSync(join(unpacked, "runtime", "bin", "node"))) fail(`${file} holds no Lemma and runtime`);
+    if (!existsSync(join(unpacked, "bin", "lemma")) || !existsSync(join(unpacked, "runtime", "bin", "node")))
+      throw new Error(`${file} holds no Lemma and runtime`);
     const { command, install } = manager();
     // What installed it, which `lemma version` shows and `lemma update` updates it by.
     const recorded = {
@@ -90,7 +91,7 @@ const fetchRelease = async () => {
     };
     writeFileSync(join(unpacked, "install.json"), `${JSON.stringify(recorded, null, 2)}\n`);
     if (spawnSync(join(unpacked, "bin", "lemma"), ["--version", "--text"], { stdio: "ignore" }).status !== 0)
-      fail(
+      throw new Error(
         existsSync("/etc/NIXOS")
           ? `this machine cannot run ${name}: on NixOS, its Node.js needs nix-ld (programs.nix-ld.enable)`
           : `this machine cannot run ${name}`,
@@ -131,7 +132,7 @@ const switchCurrent = () => {
   }
 };
 
-if (!existsSync(join(root, "release.json"))) await fetchRelease();
+if (!existsSync(join(root, "release.json"))) await fetchRelease().catch((error) => fail(error.message));
 switchCurrent();
 
 // The terminal's interrupt reaches the release's process too; a signal sent to this one alone is passed on.

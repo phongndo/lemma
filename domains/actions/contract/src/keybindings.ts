@@ -14,7 +14,7 @@ export const defaultKeys = (keys: string | readonly string[] | undefined): reado
 
 /** The keys that run an action: the user's, else its own. */
 export const keysFor = (id: string, keys: string | readonly string[] | undefined, overrides: KeyOverrides): readonly string[] =>
-  overrides[id] ?? defaultKeys(keys);
+  (Object.hasOwn(overrides, id) ? overrides[id] : undefined) ?? defaultKeys(keys);
 
 const same = (a: readonly string[], b: readonly string[]) => a.length === b.length && a.every((key, i) => key === b[i]);
 
@@ -44,7 +44,7 @@ export const conflicts = (bound: readonly { readonly id: string; readonly keys: 
  * Lines without an `=` are skipped; a later line for the same action wins.
  */
 export const parseBindings = (lines: readonly unknown[]): KeyOverrides => {
-  const overrides: Record<string, readonly string[]> = {};
+  const overrides: Record<string, readonly string[]> = Object.create(null);
   for (const line of lines) {
     if (typeof line !== "string") continue;
     const at = line.indexOf("=");

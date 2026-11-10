@@ -2,6 +2,10 @@ import { describe, expect, it } from "vitest";
 import { parseFrontmatter, unquote } from "../src/frontmatter.ts";
 
 describe("parseFrontmatter", () => {
+  it("keeps a field named __proto__", () => {
+    expect(parseFrontmatter("---\n__proto__: text\n---\nbody")).toEqual({ fields: { ["__proto__"]: "text" }, body: "body" });
+  });
+
   it("reads flat frontmatter: plain, quoted, continued, and block values", () => {
     const { fields, body } = parseFrontmatter(
       [

@@ -23,7 +23,7 @@ export const parseFrontmatter = (text: string): { readonly fields: Readonly<Reco
   const source = text.startsWith("\uFEFF") ? text.slice(1) : text;
   const block = /^---[ \t]*\r?\n([\s\S]*?)\r?\n---[ \t]*(?:\r?\n|$)/.exec(source);
   if (block === null) return { fields: {}, body: source.trim() };
-  const fields: Record<string, string> = {};
+  const fields: Record<string, string> = Object.create(null);
   const lines = block[1]!.split(/\r?\n/);
   for (let at = 0; at < lines.length; at++) {
     const field = /^([A-Za-z_][\w-]*):[ \t]*(.*)$/.exec(lines[at]!);

@@ -22,6 +22,40 @@ const greeter = definePlugin({
 });
 
 describe("a plugin written as a setup", () => {
+  test("uses defaults when no own config row exists for an object property name", async () => {
+    for (const id of ["__proto__", "constructor", "toString"]) {
+      await run(
+        Effect.gen(function* () {
+          const plugin = definePlugin({
+            id,
+            config: { text: "default" },
+            provides: { greeting: Greeting },
+            setup: (_, { config }) => Effect.succeed({ greeting: config.text }),
+          });
+          const core = yield* makeCore([plugin], { configs: {} });
+          expect(yield* core.run(Greeting)).toBe("default");
+        }),
+      );
+    }
+  });
+
+  test("passes a required service under the name __proto__", async () => {
+    await run(
+      Effect.gen(function* () {
+        const plugin = definePlugin({
+          id: "property-service",
+          requires: { ["__proto__"]: Greeting },
+          setup: (services) =>
+            Effect.sync(() => {
+              expect(Object.hasOwn(services, "__proto__")).toBe(true);
+              expect(services["__proto__"]).toBe("Hello");
+            }),
+        });
+        yield* makeCore([greeting, plugin]);
+      }),
+    );
+  });
+
   test("receives what it requires by name and provides what it returns by name", async () => {
     await run(
       Effect.gen(function* () {

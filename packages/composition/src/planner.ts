@@ -110,11 +110,12 @@ export function planComposition(input: PlanInput): Plan {
     byId.set(plugin.id, { plugin, source, ...(shadows ? { shadows } : {}), ...(resources === undefined ? {} : { resources }) });
   }
   const known = [...byId.values()];
-  const { rows } = input;
+  const rows: PlanInput["rows"] = Object.assign(Object.create(null), input.rows);
+  const defaults: NonNullable<PlanInput["defaults"]> = Object.assign(Object.create(null), input.defaults);
 
-  const plugins: Record<string, PluginEntry> = {};
+  const plugins: Record<string, PluginEntry> = Object.create(null);
   for (const { plugin } of known) {
-    const base = input.defaults?.[plugin.id];
+    const base = defaults[plugin.id];
     plugins[plugin.id] = base === undefined ? {} : { config: base };
   }
   for (const { plugin, source } of known) {
@@ -147,7 +148,7 @@ export function planComposition(input: PlanInput): Plan {
       );
       continue;
     }
-    plugins[id] = entryOf(plugins[id]!, row, input.defaults?.[id]);
+    plugins[id] = entryOf(plugins[id]!, row, defaults[id]);
   }
   const composition: Composition = { plugins };
 
