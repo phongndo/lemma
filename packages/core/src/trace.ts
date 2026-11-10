@@ -68,7 +68,7 @@ export function makeSpanCollector(options?: { readonly limit?: number }): SpanCo
   };
   const record = (span: Tracer.NativeSpan, endTime: bigint, exit: Exit.Exit<unknown, unknown>) => {
     if (!span.sampled) return;
-    const attributes: Record<string, string | number | boolean> = {};
+    const attributes: Record<string, string | number | boolean> = Object.create(null);
     for (const [key, value] of span.attributes) {
       if (plain(value)) attributes[key] = value;
       else if (typeof value === "bigint") attributes[key] = Number(value);

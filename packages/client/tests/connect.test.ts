@@ -1,4 +1,4 @@
-import { describe, expect, test } from "vitest";
+import { describe, expect, test, vi } from "vitest";
 import { Layer, Schema } from "effect";
 import { Socket } from "effect/socket";
 import { defineChannel, HostInfo } from "@lemma/contracts";
@@ -223,6 +223,56 @@ const flaky = (call: (n: number) => number | "drop" | "too big") => {
 };
 
 describe("a call cut off by a dropped connection", () => {
+  test("releases its reconnect waiter after each successful retry", async () => {
+    const host = flaky((n) => (n % 2 === 1 ? "drop" : 42));
+    const connected = await connect({ url: "http://host.invalid", backoff: () => 1, webSocket: host.webSocket });
+    try {
+      await statusWhere(connected, (status) => status.state === "connected");
+      // Find the status subscription set through a known public listener, without keeping it subscribed.
+      const listener = () => {};
+      let listenerCount: (() => number) | undefined;
+      const add = Set.prototype.add;
+      const capture = vi.spyOn(Set.prototype, "add").mockImplementation(function (this: Set<unknown>, value: unknown) {
+        if (value === listener) listenerCount = () => this.size;
+        return add.call(this, value);
+      });
+      try {
+        connected.onStatus(listener)();
+      } finally {
+        capture.mockRestore();
+      }
+      expect(listenerCount?.()).toBe(0);
+      for (let i = 0; i < 2; i++) {
+        expect(await connected.channel.call(read, undefined)).toBe(42);
+        expect(listenerCount?.()).toBe(0);
+      }
+    } finally {
+      await connected.close();
+    }
+  });
+
+  test("can be cancelled while waiting for the connection to return", async () => {
+    const host = flaky(() => "drop");
+    const connected = await connect({ url: "http://host.invalid", backoff: () => 1, webSocket: host.webSocket });
+    const controller = new AbortController();
+    let settled = false;
+    try {
+      await statusWhere(connected, (status) => status.state === "connected");
+      host.down = true;
+      const call = connected.channel.call(read, undefined, { signal: controller.signal }).catch((error: unknown) => {
+        settled = true;
+        return error;
+      });
+      await statusWhere(connected, (status) => status.state === "reconnecting");
+      controller.abort();
+      await expect.poll(() => settled).toBe(true);
+      expect(await call).toBeInstanceOf(Error);
+      expect(host.calls).toHaveLength(1);
+    } finally {
+      await connected.close();
+    }
+  });
+
   test("is made again once the connection is back when its declaration is repeatable, with what it sent", async () => {
     const host = flaky((n) => (n === 1 ? "drop" : 42));
     const connected = await connect({ url: "http://host.invalid", backoff: () => 1, webSocket: host.webSocket });

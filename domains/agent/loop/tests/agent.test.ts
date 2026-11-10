@@ -219,6 +219,19 @@ describe("a kept branch", () => {
 });
 
 describe("agent", () => {
+  it("does not remove files outside its state directory for a missing session id containing a path", async () => {
+    const files = [path.join(dir, "auth.json"), path.join(dir, "auth.live.json")];
+    for (const file of files) await fs.writeFile(file, "keep this file");
+    await withAgent({ scripts: [] }, () =>
+      Effect.gen(function* () {
+        const agent = yield* Agent;
+        const error = yield* Effect.flip(agent.prompt("../auth", text("hello")));
+        expect(error.reason).toBe("Session");
+      }),
+    );
+    for (const file of files) expect(await fs.readFile(file, "utf8")).toBe("keep this file");
+  });
+
   it("runs a text-only turn and logs it with timing, title, and usage", async () => {
     await withAgent({ scripts: [reply("Hello there")] }, ({ requests, rec }) =>
       Effect.gen(function* () {

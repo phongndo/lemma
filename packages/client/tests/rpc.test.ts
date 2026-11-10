@@ -254,4 +254,19 @@ describe("makeHostRpcHttp's NDJSON", () => {
     for (let held = 0; held < 16; held++) parser.decode(mib);
     expect(() => parser.decode(mib)).toThrow(RpcSerialization.MaxBufferSizeExceeded);
   });
+
+  test("bounds a complete line too, whether its newline arrives in the same chunk or a later one", () => {
+    const line = JSON.stringify("x".repeat(16 * 1024 * 1024));
+    expect(() => ndjson.makeUnsafe().decode(`${line}\n`)).toThrow(RpcSerialization.MaxBufferSizeExceeded);
+    const parser = ndjson.makeUnsafe();
+    const middle = Math.floor(line.length / 2);
+    parser.decode(line.slice(0, middle));
+    expect(() => parser.decode(`${line.slice(middle)}\n`)).toThrow(RpcSerialization.MaxBufferSizeExceeded);
+  });
+
+  test("allows a chunk larger than the limit when each of its lines fits", () => {
+    const value = "x".repeat(8 * 1024 * 1024);
+    const line = JSON.stringify(value);
+    expect(ndjson.makeUnsafe().decode(`${line}\n${line}\n`)).toEqual([value, value]);
+  });
 });

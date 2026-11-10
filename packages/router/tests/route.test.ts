@@ -52,6 +52,16 @@ describe("defineRoute", () => {
 });
 
 describe("a search described by its defaults", () => {
+  test("keeps keys that are object property names", () => {
+    const keys = ["__proto__", "constructor", "toString"];
+    const defaults = Object.fromEntries(keys.map((key) => [key, "default"]));
+    const route = defineRoute("property-search", { path: "/", search: defaults });
+    expect(Result.getOrThrow(route.decodeSearch({}))).toEqual(defaults);
+    const search = Object.fromEntries(keys.map((key) => [key, "changed"]));
+    expect(route.href({}, search)).toBe("/?__proto__=changed&constructor=changed&toString=changed");
+    expect(Result.getOrThrow(route.decodeSearch(search))).toEqual(search);
+  });
+
   const List = defineRoute("list", { path: "/list/:kind", search: { page: 1, tab: "all", open: false } });
 
   test("types each key as its default and reads the URL's strings", () => {

@@ -1,8 +1,8 @@
-import { chmod, lstat, mkdir, mkdtemp, readFile, symlink, writeFile } from "node:fs/promises";
+import { chmod, lstat, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { decodeServer, definitions, expand, exposureOf, MissingVariable, readServersFile, ruleOf, writeChange } from "../src/config.ts";
+import { decodeServer, definitions, expand, exposureOf, MissingVariable, readServersFile, ruleOf, writeChange, writeEntry } from "../src/config.ts";
 import type { ServersFile } from "../src/config.ts";
 import { inputSchema, toContent, toolNames } from "../src/tools.ts";
 import { Connection } from "../src/connection.ts";
@@ -94,6 +94,21 @@ describe("variables", () => {
 });
 
 describe("writing a change", () => {
+  it("keeps a server and a tool named __proto__", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "lemma-mcp-names-"));
+    const path = join(dir, "mcp.json");
+    try {
+      await writeEntry(path, "__proto__", { command: "server" });
+      expect((await readServersFile(path)).entries.get("__proto__")).toEqual({ config: { command: "server" } });
+      await writeChange(path, "__proto__", { tools: Object.fromEntries([["__proto__", "hidden"]]) });
+      expect((await readServersFile(path)).entries.get("__proto__")).toEqual({
+        config: { command: "server", toolExposure: Object.fromEntries([["__proto__", "hidden"]]) },
+      });
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
   it("keeps the rest of the file, and writes no default", async () => {
     const path = join(await mkdtemp(join(tmpdir(), "lemma-mcp-config-")), "mcp.json");
     await writeFile(path, JSON.stringify({ other: 1, mcpServers: { a: { command: "x", disabled: true, exposure: "direct" } } }));

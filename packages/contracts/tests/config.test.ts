@@ -1,6 +1,20 @@
 import { describe, expect, it } from "vitest";
 import { Effect, Result, Schema, Struct } from "effect";
-import { configValues, describeConfig, migrateConfig, parseConfigValue, secret } from "../src/config.ts";
+import { configValues, describeConfig, formValues, migrateConfig, parseConfigValue, secret } from "../src/config.ts";
+
+it("requires own form values and keeps a value named __proto__", () => {
+  for (const key of ["__proto__", "constructor", "toString"]) {
+    const fields = [{ key, title: key, type: "string" as const, optional: false }];
+    expect(formValues(fields, {})).toEqual({ error: `It needs ${key}` });
+    const given = Object.fromEntries([[key, "value"]]);
+    expect(formValues(fields, given)).toEqual({ value: given });
+  }
+});
+
+it("refuses an object property name as a boolean", () => {
+  const field = { key: "enabled", title: "Enabled", type: "boolean" as const, optional: false };
+  expect(parseConfigValue(field, "__proto__")).toEqual({ error: "enabled must be true or false" });
+});
 
 const Config = Schema.Struct({
   defaultModel: Schema.optional(Schema.String).annotate({ description: "Model for turns that name none" }),

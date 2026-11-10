@@ -3,6 +3,15 @@ import type { PluginStatus } from "@lemma/contracts";
 import { bindingRows, conflicts, formatBindings, KEYMAP_PLUGIN, keysFor, overridesFrom, parseBindings, withOverride } from "../src/keybindings.ts";
 
 describe("keybindings", () => {
+  it("uses defaults and persists overrides for object property names", () => {
+    for (const id of ["__proto__", "constructor", "toString"]) {
+      expect(keysFor(id, "mod+k", {})).toEqual(["mod+k"]);
+      const overrides = parseBindings([`${id} = mod+p`]);
+      expect(formatBindings(overrides)).toEqual([`${id} = mod+p`]);
+      expect(keysFor(id, "mod+k", overrides)).toEqual(["mod+p"]);
+    }
+  });
+
   it("uses the user's keys over an action's own, and an empty list unbinds", () => {
     expect(keysFor("a", "mod+k", {})).toEqual(["mod+k"]);
     expect(keysFor("a", "mod+k", { a: ["mod+p"] })).toEqual(["mod+p"]);

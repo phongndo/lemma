@@ -59,7 +59,7 @@ export default definePlugin({
         ? Effect.succeed({ store: {}, answered: new Set<string>() })
         : sessions.branch(sessionId, { leaf: leafId }).pipe(
             Effect.map((events) => {
-              const store: Record<string, unknown> = {};
+              const store: Record<string, unknown> = Object.create(null);
               const answered = new Set<string>();
               for (const { data } of events) {
                 if (data.type !== "message" || data.message.role !== "toolResult" || data.message.toolName !== "codemode") continue;

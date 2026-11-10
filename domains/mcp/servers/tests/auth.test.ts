@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, stat, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { createServer } from "node:net";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
@@ -17,6 +17,23 @@ import { startOAuthServer } from "./fixtures/oauth.ts";
 import type { OAuthFixture, OAuthOptions } from "./fixtures/oauth.ts";
 
 const fixtures: OAuthFixture[] = [];
+
+it("persists sign-in state for a server named __proto__", async () => {
+  const home = await mkdtemp(join(tmpdir(), "lemma-mcp-auth-"));
+  const path = join(home, "mcp-auth.json");
+  const value = { url: "https://example.com/mcp" };
+  try {
+    const store = new SignInStore(path);
+    await store.load();
+    await store.set("__proto__", value);
+    const reloaded = new SignInStore(path);
+    await reloaded.load();
+    expect(reloaded.get("__proto__", value.url)).toEqual(value);
+  } finally {
+    await rm(home, { recursive: true, force: true });
+  }
+});
+
 afterEach(async () => {
   await Promise.all(fixtures.splice(0).map((fixture) => fixture.close()));
 });

@@ -44,6 +44,19 @@ const messages = (planned: Plan, severity: "error" | "warning") =>
   planned.diagnostics.filter((diagnostic) => diagnostic.severity === severity).map((diagnostic) => diagnostic.message);
 
 describe("planComposition", () => {
+  test("treats object property names as plugin ids, including rows naming no plugin", () => {
+    const ids = ["__proto__", "constructor", "toString"];
+    const bundled = ids.map((id) => definePlugin({ id, config: { value: "default" }, setup: () => Effect.void }));
+    const planned = planComposition({ bundled, local: [], rows: {}, defaults: {} });
+    expect(running(planned)).toEqual(ids);
+    expect(planned.diagnostics).toEqual([]);
+    const off = planComposition({ bundled, local: [], rows: Object.fromEntries(ids.map((id) => [id, { enabled: false }])) });
+    expect(running(off)).toEqual([]);
+    const unknown = planComposition({ bundled: [], local: [], rows: Object.fromEntries(ids.map((id) => [id, { enabled: false }])) });
+    expect(unknown.diagnostics.map((diagnostic) => diagnostic.pluginId)).toEqual(ids);
+    expect(Object.keys(unknown.composition.plugins)).toEqual([]);
+  });
+
   test("runs every known plugin, with app defaults beneath a row's config key by key", () => {
     const defaults = { transport: { staticDir: "/web" }, agent: { cli: "lemma" } };
     const planned = plan({ defaults, rows: { transport: { config: { port: 8000 } }, llm: { config: { model: "big" } } } });

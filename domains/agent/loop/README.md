@@ -291,6 +291,13 @@ prompt. Beside the log, under `<Paths.home>/agent`, the agent keeps per session:
 - `<session>.live.json`: the running turn's model output and tool output so
   far, rewritten at most every 250 ms while it changes, and not synced.
 
+An id needing escaping uses a URL component, including escaped dots, under
+`agent/escaped`. An id containing a path stays in this directory, and an id
+ending in `.live` keeps its journal separate from another session's live output.
+The ids `sessions.files` generates need no escaping and keep their filenames.
+Existing sidecars keep their literal ids; a new journal replaces a safe old
+filename after its write succeeds.
+
 When the agent starts, each journal becomes its session's state as it was: the
 queue, and the turn, _suspended_. Then the agent takes each session up: it
 holds the session and reads its log, once, and checks the queue against it at

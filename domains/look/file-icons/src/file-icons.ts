@@ -269,8 +269,8 @@ const NO_RULES: FileTypeRules = { names: {}, extensions: {} };
  * type `known` rejects, is skipped.
  */
 export const parseFileTypeRules = (lines: readonly string[], known: (type: string) => boolean): FileTypeRules => {
-  const names: Record<string, string> = {};
-  const extensions: Record<string, string> = {};
+  const names: Record<string, string> = Object.create(null);
+  const extensions: Record<string, string> = Object.create(null);
   for (const line of lines) {
     const at = line.indexOf("=");
     if (at === -1) continue;

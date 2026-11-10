@@ -103,6 +103,7 @@ export const ndjson = RpcSerialization.RpcSerialization.of({
         const lines: unknown[] = [];
         let start = 0;
         for (let end = text.indexOf("\n"); end !== -1; start = end + 1, end = text.indexOf("\n", start)) {
+          if (held.length + end - start > MAX_LINE) throw new RpcSerialization.MaxBufferSizeExceeded({ maxBufferSize: MAX_LINE });
           lines.push(...parse(held + text.slice(start, end)));
           held = "";
         }

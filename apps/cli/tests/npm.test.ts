@@ -80,6 +80,15 @@ afterAll(async () => {
 });
 
 describe("lemma-harness", () => {
+  test("removes its staging directory when the downloaded runtime cannot run", async () => {
+    await install("0.2.7");
+    const data = join(dir, "failed-install");
+    const result = await run(["version"], { LEMMA_NPM_DIR: data, EXIT: "1" });
+    expect(result.code).toBe(1);
+    expect(result.err).toContain("cannot run");
+    expect(await readdir(data)).toEqual([]);
+  });
+
   test("fetches its version's release outside node_modules once, then runs it with what it was given, and its exit code", async () => {
     await install("0.2.7");
     const first = await run(["status", "--json"]);

@@ -205,7 +205,7 @@ export function defineWebPlugin<const Requires extends Capabilities = {}, const 
     },
     {
       services: (raw, owner) => {
-        const use: Record<string, unknown> = {};
+        const use: Record<string, unknown> = Object.create(null);
         for (const [name, service] of Object.entries(raw)) {
           if (name === API) continue;
           const key = requires[name]?.key;

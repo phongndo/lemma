@@ -19,6 +19,20 @@ const run: CommandSpec = {
 };
 
 describe("parseInput", () => {
+  test("rejects undeclared options that are object property names", () => {
+    for (const name of ["__proto__", "constructor", "toString"]) {
+      expect(parseInput({ path: ["x"] }, [`--${name}`, "value"])).toEqual({ error: `Unknown option --${name} for "lemma x"` });
+    }
+  });
+
+  test("keeps an argument named __proto__ and treats missing inherited names as absent", () => {
+    for (const name of ["__proto__", "constructor", "toString"]) {
+      const spec = { path: ["x"], args: [{ name, description: "value", required: true }] };
+      expect(parseInput(spec, ["value"])).toEqual({ args: Object.fromEntries([[name, "value"]]), flags: {} });
+      expect(inputProblem(spec, { args: {}, flags: {} })).toBe('"lemma x" needs <' + name + ">");
+    }
+  });
+
   test("takes flags anywhere before --, and the rest positionally", () => {
     expect(parseInput(run, ["s1", "fix", "--follow", "the", "--model=a/b", "test", "--", "--not-a-flag"])).toEqual({
       args: { session: "s1", prompt: ["fix", "the", "test", "--not-a-flag"] },

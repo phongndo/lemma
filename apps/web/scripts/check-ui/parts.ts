@@ -31,7 +31,7 @@ export const parts = async (): Promise<string> => {
   // Model HTML in markdown is made safe to show: no script, image, control, or styling of its own, and links open outside.
   const sanitized = await page.evaluate(async () => {
     const { markdownBlocks } = (await import("/src/ui/api.ts" as string)).api.contracts as Contracts;
-    const source = `<p class="toast" style="position: fixed" id="over" onclick="alert(1)">hi <a href="https://example.com">a link</a></p>\n\n<img src="https://example.com/x.png"><script>alert(1)</script><button>go</button>`;
+    const source = `<p class="toast" style="position: fixed" id="over" onclick="alert(1)">hi <a href="https://example.com">a link</a></p>\n\n<img src="https://example.com/x.png"><script>alert(1)</script><button>go</button><audio src="https://example.com/a.mp3"><source src="https://example.com/a.ogg"></audio><video poster="https://example.com/poster.png"><track src="https://example.com/t.vtt"></video><table background="https://example.com/bg.png"><tr><td>table</td></tr></table>`;
     return markdownBlocks(source)
       .map((block: { kind: string; html?: () => string }) => (block.kind === "html" ? block.html!() : ""))
       .join("");
@@ -41,7 +41,11 @@ export const parts = async (): Promise<string> => {
     /<a href="https:\/\/example\.com" target="_blank" rel="noopener noreferrer">a link<\/a>/,
     `a link in markdown does not open outside: ${sanitized}`,
   );
-  assert.doesNotMatch(sanitized, /<img|<script|<button|class=|style=|id=|onclick/, `model HTML in markdown is not sanitized: ${sanitized}`);
+  assert.doesNotMatch(
+    sanitized,
+    /<img|<script|<button|<audio|<video|<source|<track|class=|style=|id=|onclick|src=|poster=|background=/,
+    `model HTML in markdown is not sanitized: ${sanitized}`,
+  );
   await page.evaluate(async () => {
     const { MarkdownPart } = (await import("/src/ui/api.ts" as string)).api.contracts as Contracts;
     const remove = window.checkSlots.add(MarkdownPart, {

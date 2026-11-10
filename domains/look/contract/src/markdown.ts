@@ -21,10 +21,10 @@ const purify = () => {
   purifier = DOMPurify(window);
   purifier.setConfig({
     USE_PROFILES: { html: true },
-    FORBID_TAGS: ["img", "style", "form", "input", "button", "textarea", "select"],
-    FORBID_ATTR: ["style", "class", "id"],
+    FORBID_TAGS: ["img", "audio", "video", "source", "track", "style", "form", "input", "button", "textarea", "select"],
+    FORBID_ATTR: ["style", "class", "id", "src", "srcset", "poster", "background", "ping"],
   });
-  // No network fetches from model output (images are forbidden above); links open outside the app
+  // No network fetches from model output; links open outside the app
   // and cannot reach back into it.
   purifier.addHook("afterSanitizeAttributes", (node) => {
     if (node.tagName === "A" && node.hasAttribute("href")) {

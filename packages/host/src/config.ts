@@ -1,13 +1,19 @@
 import { readFile, readlink, realpath, stat, unlink } from "node:fs/promises";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { Effect, Predicate, Result, Schema } from "effect";
-import { applyEdits, modify, parse as parseJsonc, printParseErrorCode } from "jsonc-parser";
-import type { ParseError } from "jsonc-parser";
+import { applyEdits, getNodeValue, modify, parseTree, printParseErrorCode } from "jsonc-parser";
+import type { ParseError, ParseOptions } from "jsonc-parser";
 import { ConfigFile, errorMessage } from "@lemma/contracts";
 import { isInside, kindOf, writeFileAtomic } from "@lemma/contracts/fs";
 import type { ConfigScope, PluginChange, PluginRow } from "@lemma/contracts";
 import { Diagnostic, firstIssue } from "@lemma/core";
 import type { PathsService } from "./paths.ts";
+
+/** The tree reader preserves every JSON key; cloning gives configs the ordinary objects the runtime snapshots use. */
+const parseJsonc = (text: string, errors: ParseError[] = [], options?: ParseOptions) => {
+  const tree = parseTree(text, errors, options);
+  return tree === undefined ? undefined : structuredClone(getNodeValue(tree));
+};
 
 interface LoadedComposition {
   /** The `plugins` rows of both files, merged. */
@@ -32,9 +38,9 @@ interface MergedRows {
 
 /** Project rows override user rows by plugin id: `enabled` and `config` are each taken from the project row when present. */
 function mergeRows(files: readonly { readonly scope: ConfigScope; readonly rows: Readonly<Record<string, PluginRow>> }[]): MergedRows {
-  const plugins: Record<string, PluginRow> = {};
-  const enabledIn: Record<string, ConfigScope> = {};
-  const configIn: Record<string, ConfigScope> = {};
+  const plugins: Record<string, PluginRow> = Object.create(null);
+  const enabledIn: Record<string, ConfigScope> = Object.create(null);
+  const configIn: Record<string, ConfigScope> = Object.create(null);
   for (const { scope, rows } of files) {
     for (const [id, row] of Object.entries(rows)) {
       // JSON cannot express undefined, so decoded rows only carry the keys the file wrote.

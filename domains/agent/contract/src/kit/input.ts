@@ -86,16 +86,19 @@ export const makeInputDecisions = (hooks: Context.Service.Shape<typeof Hooks>) =
         );
       const answer = Deferred.makeUnsafe<Decided, AgentError>();
       answers.set(key, answer);
-      for (const oldest of answers.keys()) {
-        if (answers.size <= ANSWERS_KEPT) break;
-        answers.delete(oldest);
-      }
       return decideInput(hooks, sessionId, content, options).pipe(
         Effect.onExit((exit) =>
           Effect.andThen(
             Deferred.done(answer, exit),
             // A decision that failed, or was cut off, is asked again by a retry.
-            Effect.sync(() => (Exit.isFailure(exit) && answers.get(key) === answer ? void answers.delete(key) : undefined)),
+            Effect.sync(() => {
+              if (Exit.isFailure(exit) && answers.get(key) === answer) answers.delete(key);
+              // Pending decisions must stay shared even when completed answers fill the cache.
+              for (const [oldest, decision] of answers) {
+                if (answers.size <= ANSWERS_KEPT) break;
+                if (Deferred.isDoneUnsafe(decision)) answers.delete(oldest);
+              }
+            }),
           ),
         ),
       );

@@ -23,6 +23,16 @@ describe("parsePattern", () => {
 });
 
 describe("matchPattern", () => {
+  test("keeps parameter names that are object property names and requires their own values", () => {
+    for (const name of ["__proto__", "constructor", "toString"]) {
+      const pattern = parsePattern(`/p/:${name}`);
+      const params = Object.fromEntries([[name, "value"]]);
+      expect(matchPattern(pattern, ["p", "value"])?.params).toEqual(params);
+      expect(buildPath(pattern, params)).toBe("/p/value");
+      expect(() => buildPath(pattern, {})).toThrow(/required/);
+    }
+  });
+
   test("matches params, filled and empty optionals, and rests", () => {
     expect(match("/threads/:id", "/threads/abc")?.params).toEqual({ id: "abc" });
     expect(match("/threads/:id/:view?", "/threads/abc")?.params).toEqual({ id: "abc" });

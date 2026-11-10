@@ -165,8 +165,9 @@ export const createMemoryHistory = (initial = "/"): RouterHistory => {
   return {
     location: at,
     push: (url) => {
+      const next = split(url, newKey(), index + 1);
       index++;
-      entries.splice(index, entries.length, split(url, newKey(), index));
+      entries.splice(index, entries.length, next);
       events.emit({ location: at(), action: "push", delta: 1 });
     },
     replace: (url) => {

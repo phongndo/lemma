@@ -143,7 +143,7 @@ export function withReplacements(
   composition: Composition,
   rows: Readonly<Record<string, PluginChange>>,
 ): Record<string, PluginChange> {
-  const result: Record<string, PluginChange> = { ...rows };
+  const result: Record<string, PluginChange> = Object.assign(Object.create(null), rows);
   for (const [id, row] of Object.entries(rows)) {
     if (row.enabled !== true) continue;
     const plugin = known.find((entry) => entry.plugin.id === id)?.plugin;
@@ -176,10 +176,10 @@ export function catalog({
   return known.map(({ plugin, source, shadows, resources }) => {
     const snapshot = running.get(plugin.id);
     const needs = resolved.locked.get(plugin.id);
-    const locked = pinned[plugin.id] ?? (needs === undefined ? undefined : `Needed by ${needs}`);
+    const locked = (Object.hasOwn(pinned, plugin.id) ? pinned[plugin.id] : undefined) ?? (needs === undefined ? undefined : `Needed by ${needs}`);
     const haltedBy = snapshot?.haltedBy ?? resolved.haltedBy.get(plugin.id);
-    const scope = enabledIn[plugin.id];
-    const configScope = configIn[plugin.id];
+    const scope = Object.hasOwn(enabledIn, plugin.id) ? enabledIn[plugin.id] : undefined;
+    const configScope = Object.hasOwn(configIn, plugin.id) ? configIn[plugin.id] : undefined;
     const fields = formOf(plugin);
     const intercepts = hooks.flatMap((hook) =>
       hook.handlers

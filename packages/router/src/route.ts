@@ -109,7 +109,7 @@ const BooleanFromString = Schema.Literals(["true", "false"]).pipe(
 
 /** A search Schema from its defaults (see `SearchDefaults`). */
 export const searchSchema = <const D extends SearchDefaults>(id: string, defaults: D): Schema.Codec<SearchFromDefaults<D>, Encoded> => {
-  const fields: Record<string, Schema.Codec<any, any>> = {};
+  const fields: Record<string, Schema.Codec<any, any>> = Object.create(null);
   for (const [key, value] of Object.entries(defaults)) {
     const schema =
       typeof value === "string"
@@ -198,9 +198,11 @@ export function defineRoute(
     options.search === undefined ? Schema.Struct({}) : Schema.isSchema(options.search) ? options.search : searchSchema(id, options.search as SearchDefaults)
   ) as Schema.Codec<Search, any>;
   checkParams(id, pattern, params);
-  const decodeParams = Schema.decodeUnknownResult(params);
+  const readParams = Schema.decodeUnknownResult(params);
+  const decodeParams = (raw: Encoded) => readParams(Object.assign(Object.create(null), raw));
   const encodeParams = Schema.encodeResult(params);
-  const decodeSearch = Schema.decodeUnknownResult(search);
+  const readSearch = Schema.decodeUnknownResult(search);
+  const decodeSearch = (raw: Encoded) => readSearch(Object.assign(Object.create(null), raw));
   const encodeSearch = Schema.encodeResult(search);
   const defaults = Result.getOrUndefined(decodeSearch({}));
   const encodedDefaults: Encoded = defaults === undefined ? {} : Result.getOrElse(encodeSearch(defaults), () => ({}));
@@ -209,9 +211,9 @@ export function defineRoute(
     const rawParams = encodeParams(values).pipe(Result.getOrThrowWith((error) => new RouteError(id, `params do not encode: ${error.message}`)));
     const full = { ...defaults, ...partial } as Search;
     const rawSearch = encodeSearch(full).pipe(Result.getOrThrowWith((error) => new RouteError(id, `search does not encode: ${error.message}`))) as Encoded;
-    const kept: Record<string, string> = {};
+    const kept: Record<string, string> = Object.create(null);
     for (const [key, value] of Object.entries(rawSearch)) {
-      if (value !== undefined && value !== encodedDefaults[key]) kept[key] = value;
+      if (value !== undefined && value !== (Object.hasOwn(encodedDefaults, key) ? encodedDefaults[key] : undefined)) kept[key] = value;
     }
     let path: string;
     try {
