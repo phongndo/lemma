@@ -12,17 +12,17 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@effect/platform-node": "4.0.5",
+    "@effect/platform-node": "4.1.6",
     "@lemma/contracts": "workspace:*",
     "@lemma/core": "workspace:*",
-    "effect": "4.0.5"
+    "effect": "4.1.6"
   },
   "devDependencies": {
     "@lemma/commands": "workspace:*",
     "@lemma/commands-registry": "workspace:*",
-    "@types/node": "24.19.2",
-    "tsrs": "0.20.0-ts7.1.0-beta",
-    "vitest": "5.0.5"
+    "@types/node": "24.19.4",
+    "tsrs": "7.1.0-beta.tsrs5",
+    "vitest": "5.1.2"
   },
   "lemma": {
     "host": "./src/index.ts"

@@ -345,9 +345,14 @@ export const turnView = (io: TurnIo, json: boolean, sessionId: string, requestId
   /** The step in flight as `agent.view` had it, until the log has started it. */
   let draft: AgentView["draft"];
 
-  const end = () => {
+  /**
+   * The turn has ended, as `by` reports it: the activity's `turn-ended`, the log's `turn-end`, or a log read whole that
+   * holds it. With `--json`, the log's `turn-end` does not end the wait: the activity's `turn-ended` prints, and either
+   * stream may report the end first.
+   */
+  const end = (by: "activity" | "log" | "read") => {
     turnEnded = true;
-    Deferred.doneUnsafe(ended, Effect.void);
+    if (!json || by !== "log") Deferred.doneUnsafe(ended, Effect.void);
   };
 
   /** An answer's blocks (each with its stream index), shown as if streamed: what of them was not yet. A draft's tool call shows once it has arguments. */
@@ -413,7 +418,7 @@ export const turnView = (io: TurnIo, json: boolean, sessionId: string, requestId
       case "turn-ended":
         if (element.turnId !== ours) return true;
         if (json) print(element);
-        end();
+        end("activity");
         return true;
       case "delta": {
         const last = shown.get(element.stepId) ?? 0;
@@ -508,7 +513,7 @@ export const turnView = (io: TurnIo, json: boolean, sessionId: string, requestId
         }
         break;
       case "turn-end":
-        end();
+        end("log");
         break;
     }
   };
@@ -522,14 +527,14 @@ export const turnView = (io: TurnIo, json: boolean, sessionId: string, requestId
         ours = turnId;
         over = true;
         held = [];
-        end();
+        end("read");
       }
     }
     for (const event of events) record(event);
   };
 
   return {
-    /** Resolves once the turn has ended, as either stream reports it. */
+    /** Resolves once the turn has ended, as either stream reports it; with `--json`, as the activity does (`end`). */
     ended: Deferred.await(ended),
     logSeq: () => logSeq,
     streamed: () => streamed,

@@ -36,10 +36,11 @@ export const budgets = {
   heapGrowthBytes: 16 * 1024 * 1024,
   rssGrowthBytes: 64 * 1024 * 1024,
   // Packed UI fixture including Effect and application code, bundled by esbuild:
-  // 435KB / 137KB gzip (596KB / 185KB on Effect 3). These caps allow about 10%
-  // dependency/bundler variation, and fail CI when exceeded.
-  browserBundleBytes: 480_000,
-  browserBundleGzipBytes: 152_000,
+  // 524KB / 170KB gzip on Effect 4.1.6 (467KB / 148KB on 4.0.5, whose Schema did
+  // not import its crypto modules; 596KB / 185KB on Effect 3). These caps allow
+  // about 10% dependency/bundler variation, and fail CI when exceeded.
+  browserBundleBytes: 576_000,
+  browserBundleGzipBytes: 187_000,
   httpP99Ms: 25,
   // The harness (packages/sim/bench/harness.ts, 2026-10-12, same machine): a session's step, in simulated time on a
   // file system in memory, compacting as its context fills, against its estimate (packages/sim/README.md#the-harness-

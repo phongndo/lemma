@@ -52,13 +52,13 @@
     "bench": "node bench/core.ts"
   },
   "dependencies": {
-    "effect": "4.0.5"
+    "effect": "4.1.6"
   },
   "devDependencies": {
-    "@types/node": "24.19.2",
-    "fast-check": "4.10.2",
-    "tsrs": "0.20.0-ts7.1.0-beta",
+    "@types/node": "24.19.4",
+    "fast-check": "4.11.0",
+    "tsrs": "7.1.0-beta.tsrs5",
     "typescript": "7.0.2",
-    "vitest": "5.0.5"
+    "vitest": "5.1.2"
   }
 }

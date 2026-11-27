@@ -174,7 +174,7 @@ unconfigured until a login stores a key.
   (`page.ts`), with **Return to Lemma** where the client named a way back
   (`LoginOptions.returnTo`). pi-ai has no hook for it
   ([pi#5372](https://github.com/earendil-works/pi/issues/5372)), so
-  `patches/@earendil-works__pi-ai@1.4.0.patch` adds `setOAuthPageRenderer`. Redo
+  `patches/@earendil-works__pi-ai@1.6.1.patch` adds `setOAuthPageRenderer`. Redo
   or drop the patch on each pi-ai upgrade. The renderer is process-wide: the
   latest running plugin's shows.
 - **Device ID.** OpenAI's ChatGPT sign-in gets its device ID from
