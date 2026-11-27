@@ -234,18 +234,34 @@ describe("makeHostRpcHttp's NDJSON", () => {
     { _tag: "Exit", requestId: "1", exit: { _tag: "Success", value: "lemma ".repeat(2_000) } },
     { _tag: "Exit", requestId: "2", exit: { _tag: "Success", value: null } },
   ];
-  const bytes = new TextEncoder().encode(`${messages.map((message) => JSON.stringify(message)).join("\n")}\nnot json\n`);
+  const bytes = new TextEncoder().encode(`${messages.map((message) => JSON.stringify(message)).join("\n")}\nnot json\n\n`);
   const read = (size: number) => {
-    const parser = ndjson.makeUnsafe();
+    const errors: unknown[] = [];
+    const parser = ndjson.makeUnsafe({ onDecodeError: (error) => errors.push(error) });
     const lines: unknown[] = [];
     for (let at = 0; at < bytes.length; at += size) lines.push(...(parser.decode(bytes.subarray(at, at + size)) as unknown[]));
-    return lines;
+    return { lines, errors };
   };
 
   test("reads what Effect's does, however the reply is cut into chunks, a character split across two among them", () => {
-    expect(RpcSerialization.ndjson.makeUnsafe().decode(bytes)).toEqual(messages);
-    for (const size of [1, 3, 7, 1024, 16 * 1024, bytes.length]) expect(read(size)).toEqual(messages);
+    const errors: unknown[] = [];
+    expect(RpcSerialization.ndjson.makeUnsafe({ onDecodeError: (error) => errors.push(error) }).decode(bytes)).toEqual(messages);
+    expect(errors).toEqual([expect.any(RpcSerialization.NdjsonDecodeError)]);
+    for (const size of [1, 3, 7, 1024, 16 * 1024, bytes.length]) expect(read(size)).toEqual({ lines: messages, errors });
     expect(ndjson.makeUnsafe().encode(messages[0] as never)).toBe(RpcSerialization.ndjson.makeUnsafe().encode(messages[0] as never));
+  });
+
+  test("skips an empty line, a CRLF one too, as Effect's does", () => {
+    const text = `\r\n\n${JSON.stringify(messages[2])}\r\n`;
+    expect(ndjson.makeUnsafe().decode(text)).toEqual(RpcSerialization.ndjson.makeUnsafe().decode(text));
+    expect(ndjson.makeUnsafe().decode(text)).toEqual([messages[2]]);
+  });
+
+  test("fails a line not JSON, as Effect's does, unless told of it, and reads on after", () => {
+    expect(() => RpcSerialization.ndjson.makeUnsafe().decode(bytes)).toThrow(RpcSerialization.NdjsonDecodeError);
+    const parser = ndjson.makeUnsafe();
+    expect(() => parser.decode(bytes)).toThrow(RpcSerialization.NdjsonDecodeError);
+    expect(parser.decode(`${JSON.stringify(messages[2])}\n`)).toEqual([messages[2]]);
   });
 
   test("fails a line longer than 16 MiB, as Effect's does", () => {

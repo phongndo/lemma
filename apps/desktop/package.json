@@ -16,11 +16,11 @@
     "@lemma/host": "workspace:*",
     "@lemma/profiles": "workspace:*",
     "@lemma/web": "workspace:*",
-    "effect": "4.0.5"
+    "effect": "4.1.6"
   },
   "devDependencies": {
-    "@types/node": "24.19.2",
-    "electron": "44.9.0",
-    "tsrs": "0.20.0-ts7.1.0-beta"
+    "@types/node": "24.19.4",
+    "electron": "45.5.0",
+    "tsrs": "7.1.0-beta.tsrs5"
   }
 }

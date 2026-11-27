@@ -11,7 +11,7 @@
     "check": "tsrs --noEmit"
   },
   "devDependencies": {
-    "@types/node": "24.19.2",
-    "tsrs": "0.20.0-ts7.1.0-beta"
+    "@types/node": "24.19.4",
+    "tsrs": "7.1.0-beta.tsrs5"
   }
 }

@@ -114,7 +114,7 @@ const compressReplies = HttpMiddleware.compression({
   algorithms: ["br", "gzip"],
   levels: { br: 4, gzip: 1 },
   minSize: COMPRESSION.threshold,
-  compressible: (type) => type.startsWith("application/ndjson"),
+  compressible: (type) => type.startsWith(RpcSerialization.ndjson.contentType),
 });
 
 /**

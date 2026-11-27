@@ -80,19 +80,30 @@ export const makeHostRpc = (
 
 const MAX_LINE = 16 * 1024 * 1024;
 /**
- * Effect's NDJSON (a line not JSON skipped, one over `MAX_LINE`, its default, failing the call), read in time linear in
- * a reply: Effect's scans all it holds at each chunk, so a 7.4 MB log in the 16 KB chunks `fetch` inflates took 0.65 s,
- * not 0.2 s. Here a line's start (`held`) is searched no more, and joined once, when its end comes.
+ * Effect's NDJSON (a line not JSON failing the call, or handed to `onDecodeError` when one is given; one over
+ * `MAX_LINE`, its default, failing the call), read in time linear in a reply: Effect's scans all it holds at each
+ * chunk, so a 7.4 MB log in the 16 KB chunks `fetch` inflates took 0.65 s, not 0.2 s. Here a line's start (`held`) is
+ * searched no more, and joined once, when its end comes.
  */
 export const ndjson = RpcSerialization.RpcSerialization.of({
   ...RpcSerialization.ndjson,
-  makeUnsafe: () => {
-    const decoder = new TextDecoder();
+  makeUnsafe: (options) => {
+    let decoder = new TextDecoder();
     let held = "";
-    const parse = (line: string): unknown[] => {
+    const parse = (whole: string): unknown[] => {
+      // A line's `\r` (CRLF) is not part of it, and an empty line is no message, as Effect's.
+      const line = whole.endsWith("\r") ? whole.slice(0, -1) : whole;
+      if (line.length === 0) return [];
       try {
         return [JSON.parse(line)];
-      } catch {
+      } catch (cause) {
+        const error = new RpcSerialization.NdjsonDecodeError({ cause });
+        if (options?.onDecodeError === undefined) {
+          held = "";
+          decoder = new TextDecoder();
+          throw error;
+        }
+        options.onDecodeError(error);
         return [];
       }
     };

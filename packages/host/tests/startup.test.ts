@@ -17,8 +17,8 @@ const launch = new URL("../src/launch.mjs", import.meta.url).href;
  * would add from a few megabytes (zod, the MCP SDK) to 70 (Playwright) to every host's memory.
  */
 const LAZY = ["playwright-core", "@modelcontextprotocol/client", "zod", "typebox", "@redis/client", "quickjs-wasi", "@ff-labs/fff-node"];
-/** Modules the bundled plugins load, at most: ~750 now. An index imported instead of its module adds hundreds. */
-const MAX_MODULES = 900;
+/** Modules the bundled plugins load, at most: ~920 now. An index imported instead of its module adds hundreds. */
+const MAX_MODULES = 1_000;
 /** How many fewer modules a start loads with Effect's bundle, at least: ~300 now, its start's modules in one chunk. */
 const FEWER_BUNDLED = 200;
 

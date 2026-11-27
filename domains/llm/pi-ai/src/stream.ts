@@ -88,6 +88,8 @@ export const streamResponse = (
           ...passedOn(request.providerOptions),
           // Before its body: told to the caller, and logged with the answer.
           onResponse: (response) => {
+            // pi also tells of a response that refused the request, which the contract's `provider` leaves out.
+            if (response.status < 200 || response.status >= 300) return;
             const requestId = requestIdOf(response.headers);
             answer = { type: "provider", status: response.status, ...(requestId === undefined ? {} : { requestId }) };
           },

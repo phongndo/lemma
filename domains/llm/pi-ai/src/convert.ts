@@ -78,7 +78,14 @@ const toUsage = (usage: Pi.Usage): Usage => ({
   cacheWrite: usage.cacheWrite,
   ...(usage.reasoning === undefined ? {} : { reasoning: usage.reasoning }),
   totalTokens: usage.totalTokens,
-  cost: { ...usage.cost },
+  // Rebuilt field by field, so pi-only fields (`totalFromProvider`) stay out.
+  cost: {
+    input: usage.cost.input,
+    output: usage.cost.output,
+    cacheRead: usage.cost.cacheRead,
+    cacheWrite: usage.cost.cacheWrite,
+    total: usage.cost.total,
+  },
 });
 
 /** The contract's context as pi-ai's: `state` is JSON, as a script or tool gave it. */

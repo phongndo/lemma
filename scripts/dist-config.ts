@@ -18,11 +18,11 @@ export const version = (JSON.parse(readFileSync(new URL("../apps/cli/package.jso
  * runtime comes from, pinned by SHA-256. Update the version and the hashes
  * together, from https://nodejs.org/dist/v<version>/SHASUMS256.txt.
  */
-export const nodeVersion = "24.22.0";
+export const nodeVersion = "24.22.3";
 export const targets = {
-  "darwin-arm64": "6a9724d9b50a5f22b4816cded441b5a8d9ddae546191a5e5b7efa5a5e2ee26d5",
-  "linux-arm64": "b7e7991d5407815adfa74a2a9cd4db683552c8ce32ff4a295c22e972849c3f5d",
-  "linux-x64": "28ea0a438de9a13bd7891fd758eee6c7819ee8af5442dfd8d45bd65e56d4228c",
+  "darwin-arm64": "ff6e17d4874b76d272212b908cc020d6e815fba5a6c7eaaa06add725840307fd",
+  "linux-arm64": "261af2af250dfd7e9f25cf151d1b2713a0adf8f10a9ad116c4947f68627affe8",
+  "linux-x64": "061ec3e3062115705b56b51fa9cc330ab50d34b6969387d4e4b1a50c6809acc2",
 } as const;
 export type Target = keyof typeof targets;
 
